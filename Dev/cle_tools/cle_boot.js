@@ -125,28 +125,23 @@ class CLEBridge {
       { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "inspect", fn: () => this.fluidnc.openFluidTouchWebGUI() }
     ]);
 
-    // 2. JOYSTICK MODE Section (Defaults to Design Mode; switching to Manual connects & opens Control Card)
+    // 2. JOYSTICK MODE Section (Defaults to Design Mode; has dedicated Manual Mode button)
     m("JOYSTICK MODE", "", [
       { 
-        id: "cle-r-gp-mode", 
-        label: this.gamepad.mode === "design" ? "Design Mode" : "Manual Mode", 
-        title: this.gamepad.mode === "design" ? "Click to switch to Manual Mode (Connects to device & opens Control Card)" : "Active in Manual Mode (Click to return to Design 3D Mode)", 
+        id: "cle-r-gp-design", 
+        label: "Design Mode", 
+        title: "Active 3D CAD Viewport Navigation (Left Stick: Orbit 3D, Right Stick: Pan)", 
         icon: "motion", 
-        pressed: this.gamepad.mode === "manual", 
-        fn: () => this.gamepad.toggleMode() 
+        pressed: this.gamepad.mode === "design", 
+        fn: () => this.gamepad.setMode('design') 
       },
       { 
-        id: "cle-r-manual-hub", 
-        label: `Control Card (${activeMach.name})`, 
-        title: `Open Device Control Card for ${activeMach.name} (DRO, Spindle/Laser, Camera)`, 
+        id: "cle-r-gp-manual", 
+        label: "Manual Mode", 
+        title: "Switch to Manual CNC/Laser Control (Connects to device, opens Control Card & starts camera)", 
         icon: "inspect", 
-        fn: async () => {
-          this.gamepad.mode = "manual";
-          this.gamepad.updateModeUI();
-          if (this.fluidnc && !this.fluidnc.isConnected) await this.fluidnc.autoConnect();
-          await this.openManualControlCenter();
-          if (this.camera) await this.camera.autoStartIfAvailable();
-        } 
+        pressed: this.gamepad.mode === "manual", 
+        fn: () => this.gamepad.setMode('manual') 
       },
       { 
         id: "cle-r-gp-remap", 
@@ -561,7 +556,7 @@ class CLEBridge {
           </div>
         </div>
 
-        <!-- Interactive Function Remap Table -->
+        <!-- Interactive Function Remap Table with Live Button Status Indicators -->
         <div style="max-height:220px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; margin-top:8px;">
           <table class="cle-table">
             <thead>
@@ -569,6 +564,7 @@ class CLEBridge {
                 <th>Function / Action</th>
                 <th>Target Action in JS / CNC</th>
                 <th>Assigned Button</th>
+                <th style="text-align:center;">Status</th>
                 <th>Remap</th>
               </tr>
             </thead>
@@ -1218,7 +1214,8 @@ class CLEBridge {
         <tr>
           <td><strong>${a.name}</strong></td>
           <td style="color:var(--ink-2);">${a.target}</td>
-          <td><span id="cle-remap-val-${a.key}" style="font-family:var(--f-mono); color:var(--accent);">${assigned}</span></td>
+          <td><span id="cle-remap-val-${a.key}" style="font-family:var(--f-mono); color:var(--accent); font-weight:700;">${assigned}</span></td>
+          <td style="text-align:center;"><span id="cle-remap-led-${a.key}" class="cle-switch-pill" style="padding:2px 8px; font-size:10px; font-weight:700; background:var(--panel-2); border:1px solid var(--line); color:var(--ink-3);">IDLE</span></td>
           <td><button class="cle-btn" onclick="window.CLE.remapButton('${a.key}')" style="padding:2px 8px;">Bind</button></td>
         </tr>
       `;
@@ -1322,8 +1319,17 @@ class CLEBridge {
       const btnNames = ['B', 'A', 'Y', 'X', 'L', 'R', 'ZL', 'ZR', 'Minus -', 'Plus +', 'L3', 'R3', 'D-Up ↑', 'D-Dn ↓', 'D-Lf ←', 'D-Rt →', 'Home', 'Capture'];
       const activeBtns = [];
       for (let b = 0; b < 18; b++) {
-        const btnObj = gp.buttons[b];
-        const isPressed = btnObj && (btnObj.pressed || btnObj.value > 0.4);
+        let isPressed = false;
+        // Check direct button
+        if (gp.buttons[b] && (gp.buttons[b].pressed || gp.buttons[b].value > 0.4)) {
+          isPressed = true;
+        }
+        // Link D-pad state directly to indicators 12..15 so POV hat and axes also light them up
+        if (b === 12 && dpad.dpadUp) isPressed = true;
+        if (b === 13 && dpad.dpadDown) isPressed = true;
+        if (b === 14 && dpad.dpadLeft) isPressed = true;
+        if (b === 15 && dpad.dpadRight) isPressed = true;
+
         const tagEl = document.getElementById(`cle-btn-tag-${b}`);
         if (tagEl) {
           if (isPressed) {
@@ -1340,6 +1346,38 @@ class CLEBridge {
           }
         }
       }
+
+      // Update Remap Table Status Column in real-time
+      const actionKeys = ['toggleMode', 'macroRecord', 'zeroWCS', 'feedHold', 'touchProbe', 'cycleAxis', 'spindleToggle', 'laserToggle', 'dpadUp', 'dpadDown', 'dpadLeft', 'dpadRight'];
+      const mappedBtns = this.gamepad.mapping.buttons;
+      actionKeys.forEach(k => {
+        const ledEl = document.getElementById(`cle-remap-led-${k}`);
+        if (!ledEl) return;
+        let isAct = false;
+        if (k === 'dpadUp') isAct = dpad.dpadUp;
+        else if (k === 'dpadDown') isAct = dpad.dpadDown;
+        else if (k === 'dpadLeft') isAct = dpad.dpadLeft;
+        else if (k === 'dpadRight') isAct = dpad.dpadRight;
+        else {
+          const bIdx = mappedBtns[k];
+          if (bIdx !== undefined && gp.buttons[bIdx]) {
+            isAct = gp.buttons[bIdx].pressed || gp.buttons[bIdx].value > 0.4;
+          }
+        }
+        if (isAct) {
+          ledEl.style.background = (k === 'feedHold') ? 'var(--danger)' : 'var(--ok)';
+          ledEl.style.color = '#fff';
+          ledEl.style.borderColor = (k === 'feedHold') ? 'var(--danger)' : 'var(--ok)';
+          ledEl.style.boxShadow = (k === 'feedHold') ? '0 0 8px rgba(235, 87, 87, 0.7)' : '0 0 8px rgba(57, 211, 83, 0.7)';
+          ledEl.textContent = 'PRESSED';
+        } else {
+          ledEl.style.background = 'var(--panel-2)';
+          ledEl.style.color = 'var(--ink-3)';
+          ledEl.style.borderColor = 'var(--line)';
+          ledEl.style.boxShadow = 'none';
+          ledEl.textContent = 'IDLE';
+        }
+      });
 
       const summaryEl = document.getElementById('cle-active-btn-summary');
       if (summaryEl) {

@@ -148,8 +148,12 @@ export class CLEGamepadEngine {
     return sign * ((Math.abs(val) - dz) / (1 - dz));
   }
 
-  async toggleMode() {
-    this.mode = this.mode === 'design' ? 'manual' : 'design';
+  async setMode(targetMode) {
+    if (this.mode === targetMode) {
+      this.updateModeUI();
+      return;
+    }
+    this.mode = targetMode;
     this.updateModeUI();
 
     if (this.mode === 'manual') {
@@ -173,19 +177,32 @@ export class CLEGamepadEngine {
     }
   }
 
+  async toggleMode() {
+    await this.setMode(this.mode === 'design' ? 'manual' : 'design');
+  }
+
   updateModeUI() {
+    const btnDesign = document.getElementById('cle-r-gp-design');
+    const btnManual = document.getElementById('cle-r-gp-manual');
     const modeBtn = document.getElementById('cle-gp-mode-toggle');
-    const ribbonBtn = document.getElementById('cle-r-gp-mode');
-    const label = this.mode === 'design' ? 'Mode: Design 3D' : 'Mode: Manual CNC/Laser';
+    const legacyRibbonBtn = document.getElementById('cle-r-gp-mode');
     
+    if (btnDesign) {
+      btnDesign.setAttribute('aria-pressed', this.mode === 'design' ? 'true' : 'false');
+      btnDesign.classList.toggle('active', this.mode === 'design');
+    }
+    if (btnManual) {
+      btnManual.setAttribute('aria-pressed', this.mode === 'manual' ? 'true' : 'false');
+      btnManual.classList.toggle('active', this.mode === 'manual');
+    }
     if (modeBtn) {
-      modeBtn.textContent = label;
+      modeBtn.textContent = this.mode === 'design' ? 'Mode: Design 3D' : 'Mode: Manual CNC/Laser';
       modeBtn.classList.toggle('active', this.mode === 'manual');
     }
-    if (ribbonBtn) {
-      const span = ribbonBtn.querySelector('span');
+    if (legacyRibbonBtn) {
+      const span = legacyRibbonBtn.querySelector('span');
       if (span) span.textContent = this.mode === 'design' ? 'Design Mode' : 'Manual Mode';
-      ribbonBtn.setAttribute('aria-pressed', this.mode === 'manual' ? 'true' : 'false');
+      legacyRibbonBtn.setAttribute('aria-pressed', this.mode === 'manual' ? 'true' : 'false');
     }
   }
 
@@ -246,24 +263,60 @@ export class CLEGamepadEngine {
     }
   }
 
-  // D-Pad cluster cross: enforces clean, single-direction activation
+  // D-Pad cluster cross: robust detection supporting standard buttons, DirectInput POV hat & discrete axes
   getDpadState(gp) {
     const upIdx = this.mapping.buttons?.dpadUp ?? 12;
     const downIdx = this.mapping.buttons?.dpadDown ?? 13;
     const leftIdx = this.mapping.buttons?.dpadLeft ?? 14;
     const rightIdx = this.mapping.buttons?.dpadRight ?? 15;
 
-    const bUp = gp.buttons[upIdx] && (gp.buttons[upIdx].pressed || gp.buttons[upIdx].value > 0.5);
-    const bDown = gp.buttons[downIdx] && (gp.buttons[downIdx].pressed || gp.buttons[downIdx].value > 0.5);
-    const bLeft = gp.buttons[leftIdx] && (gp.buttons[leftIdx].pressed || gp.buttons[leftIdx].value > 0.5);
-    const bRight = gp.buttons[rightIdx] && (gp.buttons[rightIdx].pressed || gp.buttons[rightIdx].value > 0.5);
+    let bUp = gp.buttons[upIdx] && (gp.buttons[upIdx].pressed || gp.buttons[upIdx].value > 0.5);
+    let bDown = gp.buttons[downIdx] && (gp.buttons[downIdx].pressed || gp.buttons[downIdx].value > 0.5);
+    let bLeft = gp.buttons[leftIdx] && (gp.buttons[leftIdx].pressed || gp.buttons[leftIdx].value > 0.5);
+    let bRight = gp.buttons[rightIdx] && (gp.buttons[rightIdx].pressed || gp.buttons[rightIdx].value > 0.5);
+
+    // Fallback: Check alternative buttons 14..17 if 12..15 are inactive
+    if (!bUp && !bDown && !bLeft && !bRight && gp.buttons.length >= 18) {
+      bUp = gp.buttons[14] && (gp.buttons[14].pressed || gp.buttons[14].value > 0.5);
+      bDown = gp.buttons[15] && (gp.buttons[15].pressed || gp.buttons[15].value > 0.5);
+      bLeft = gp.buttons[16] && (gp.buttons[16].pressed || gp.buttons[16].value > 0.5);
+      bRight = gp.buttons[17] && (gp.buttons[17].pressed || gp.buttons[17].value > 0.5);
+    }
+
+    // DirectInput POV Hat on Axis 9 (Standard for Switch controllers in Windows DirectInput)
+    if (!bUp && !bDown && !bLeft && !bRight && gp.axes && gp.axes.length > 9) {
+      const pov = gp.axes[9];
+      if (pov >= -1.05 && pov <= 1.05) {
+        if (Math.abs(pov - (-1.0)) < 0.15 || Math.abs(pov - (1.0)) < 0.15) bUp = true;
+        else if (Math.abs(pov - (-0.428)) < 0.15) bRight = true;
+        else if (Math.abs(pov - (0.143)) < 0.15) bDown = true;
+        else if (Math.abs(pov - (0.714)) < 0.15) bLeft = true;
+      }
+    }
+
+    // Axes 4 and 5 fallback (when not mapped to main joysticks)
+    if (!bUp && !bDown && !bLeft && !bRight && gp.axes && gp.axes.length >= 6) {
+      const usedAxes = [this.mapping.axes.lx, this.mapping.axes.ly, this.mapping.axes.rx, this.mapping.axes.ry];
+      if (!usedAxes.includes(4) && Math.abs(gp.axes[4]) > 0.6) {
+        if (gp.axes[4] < -0.6) bLeft = true;
+        if (gp.axes[4] > 0.6) bRight = true;
+      }
+      if (!usedAxes.includes(5) && Math.abs(gp.axes[5]) > 0.6) {
+        if (gp.axes[5] < -0.6) bUp = true;
+        if (gp.axes[5] > 0.6) bDown = true;
+      }
+    }
 
     // Mutually exclusive single-active cross button
     let dpadUp = false, dpadDown = false, dpadLeft = false, dpadRight = false;
-    if (bUp && !bDown) dpadUp = true;
-    else if (bDown && !bUp) dpadDown = true;
-    else if (bLeft && !bRight) dpadLeft = true;
-    else if (bRight && !bLeft) dpadRight = true;
+    if (bUp && !bDown && !bLeft && !bRight) dpadUp = true;
+    else if (bDown && !bUp && !bLeft && !bRight) dpadDown = true;
+    else if (bLeft && !bRight && !bUp && !bDown) dpadLeft = true;
+    else if (bRight && !bLeft && !bUp && !bDown) dpadRight = true;
+    else if (bUp) dpadUp = true;
+    else if (bDown) dpadDown = true;
+    else if (bLeft) dpadLeft = true;
+    else if (bRight) dpadRight = true;
 
     return { dpadUp, dpadDown, dpadLeft, dpadRight };
   }
@@ -316,20 +369,27 @@ export class CLEGamepadEngine {
       needsUpdate = true;
     }
 
-    // 4. D-Pad Cross: Instant Orthogonal View Snaps
-    if (dpad.dpadUp && this.isJustPressed(gp, this.mapping.buttons.dpadUp)) {
+    // 4. D-Pad Cross: Instant Orthogonal View Snaps (Works for buttons, POV hat and axes)
+    if (!this.lastDpad) this.lastDpad = {};
+    const dpadJustUp = dpad.dpadUp && !this.lastDpad.up;
+    const dpadJustDown = dpad.dpadDown && !this.lastDpad.down;
+    const dpadJustLeft = dpad.dpadLeft && !this.lastDpad.left;
+    const dpadJustRight = dpad.dpadRight && !this.lastDpad.right;
+    this.lastDpad = { up: dpad.dpadUp, down: dpad.dpadDown, left: dpad.dpadLeft, right: dpad.dpadRight };
+
+    if (dpadJustUp) {
       if (app.setView) app.setView('top');
       else { app.vp.view.az = 0; app.vp.view.el = Math.PI / 2; }
       needsUpdate = true;
-    } else if (dpad.dpadDown && this.isJustPressed(gp, this.mapping.buttons.dpadDown)) {
+    } else if (dpadJustDown) {
       if (app.setView) app.setView('front');
       else { app.vp.view.az = 0; app.vp.view.el = 0; }
       needsUpdate = true;
-    } else if (dpad.dpadLeft && this.isJustPressed(gp, this.mapping.buttons.dpadLeft)) {
+    } else if (dpadJustLeft) {
       if (app.setView) app.setView('left');
       else { app.vp.view.az = -Math.PI / 2; app.vp.view.el = 0; }
       needsUpdate = true;
-    } else if (dpad.dpadRight && this.isJustPressed(gp, this.mapping.buttons.dpadRight)) {
+    } else if (dpadJustRight) {
       if (app.setView) app.setView('right');
       else { app.vp.view.az = Math.PI / 2; app.vp.view.el = 0; }
       needsUpdate = true;

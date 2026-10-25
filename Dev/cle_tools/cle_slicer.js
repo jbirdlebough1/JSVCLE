@@ -26,31 +26,51 @@ export class CLESlicerEngine {
     const app = window.app || window.xe;
     const bodies = app?.doc?.bodies || [];
     
-    // 1. Try extracting actual mesh vertices from JumpStart scene views
+    // 1. Try window.__JS3D_CHISEL__.bodyTris() (built-in JumpStart matrix-transformed world triangles)
+    if (window.__JS3D_CHISEL__ && typeof window.__JS3D_CHISEL__.bodyTris === 'function') {
+      for (const b of bodies) {
+        if (!b.hidden) {
+          const tris = window.__JS3D_CHISEL__.bodyTris(b.id);
+          if (tris && tris.length >= 9) {
+            console.log(`[CLE Slicer] Extracted ${tris.length / 3} world triangles from Body "${b.name}" via bodyTris.`);
+            return { name: b.name || 'CAD_Body', triangles: tris };
+          }
+        }
+      }
+    }
+
+    // 2. Try extracting from JumpStart scene views with matrixWorld transformation
     if (app?.scene?.views) {
       for (const b of bodies) {
         if (!b.hidden) {
           const view = app.scene.views.get(b.id);
-          if (view) {
-            // Check Three.js mesh geometry
-            if (view.mesh?.geometry?.attributes?.position) {
-              const pos = view.mesh.geometry.attributes.position.array;
-              if (pos && pos.length >= 9) {
-                return { name: b.name || 'CAD_Body', triangles: new Float32Array(pos) };
+          if (view && view.mesh && view.data) {
+            view.mesh.updateMatrixWorld(true);
+            const T = view.mesh.matrixWorld;
+            const Q = view.data.vertices;
+            const idxs = view.data.triangles;
+            if (Q && idxs && idxs.length > 0) {
+              const THREE = window.THREE;
+              const v = new THREE.Vector3();
+              const L = new Float32Array(idxs.length * 3);
+              for (let i = 0; i < idxs.length; i++) {
+                const vi = idxs[i] * 3;
+                v.set(Q[vi], Q[vi + 1], Q[vi + 2]).applyMatrix4(T);
+                L[i * 3] = v.x;
+                L[i * 3 + 1] = v.y;
+                L[i * 3 + 2] = v.z;
               }
-            }
-            // Check view.data.vertices
-            if (view.data?.vertices && view.data.vertices.length >= 9) {
-              return { name: b.name || 'CAD_Body', triangles: new Float32Array(view.data.vertices) };
+              console.log(`[CLE Slicer] Transformed ${L.length / 3} vertices from view.data for "${b.name}".`);
+              return { name: b.name || 'CAD_Body', triangles: L };
             }
           }
         }
       }
     }
 
-    // 2. Fallback Sample 3D Test Object (50x40x12 mm rectangular billet with chamfer)
-    console.log('[CLE Slicer] No meshed bodies active. Generating sample 3D test billet.');
-    const sampleTris = this.generateSampleBoxTriangles(50, 40, 12);
+    // 3. Fallback Sample 3D Test Object (50x40x15 mm rectangular billet with chamfer)
+    console.log('[CLE Slicer] No active meshed CAD bodies found. Generating 50x40x15 mm test billet.');
+    const sampleTris = this.generateSampleBoxTriangles(50, 40, 15);
     return { name: 'Sample_Billet_50x40', triangles: sampleTris };
   }
 
@@ -362,24 +382,83 @@ export class CLESlicerEngine {
 
       const mat = new THREE.LineBasicMaterial({
         vertexColors: true,
-        linewidth: 2,
+        linewidth: 3,
         transparent: true,
-        opacity: 0.95
+        opacity: 1.0,
+        depthTest: false,
+        depthWrite: false
       });
 
       const lineMesh = new THREE.LineSegments(geom, mat);
+      lineMesh.renderOrder = 9999;
       lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z };
       this.visualizerGroup.add(lineMesh);
     });
 
     threeScene.add(this.visualizerGroup);
 
+    // Make CAD bodies in JumpStart translucent so toolpaths are vividly visible inside & out
+    if (app.scene && app.scene.views) {
+      for (const [id, view] of app.scene.views) {
+        if (view.mesh && view.mesh.material) {
+          const mats = Array.isArray(view.mesh.material) ? view.mesh.material : [view.mesh.material];
+          mats.forEach(m => {
+            if (m._cleOrigOpacity === undefined) {
+              m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
+              m._cleOrigTransparent = m.transparent || false;
+            }
+            m.transparent = true;
+            m.opacity = 0.35;
+            m.needsUpdate = true;
+          });
+        }
+      }
+    }
+
+    // Set Gamepad mode to Design so left joystick immediately orbits the 3D scene around the slices!
+    if (this.bridge.gamepad) {
+      this.bridge.gamepad.setMode('design');
+    }
+
     // Trigger JumpStart viewport redraw
     if (app.vp) {
       app.vp.dirty = true;
+      if (app.vp.updateCamera) app.vp.updateCamera();
       if (app.vp.request) app.vp.request();
     }
     console.log(`[CLE Slicer] Rendered ${numLayers} toolpath layers into Three.js scene.`);
+  }
+
+  clearVisualizer() {
+    const app = window.app || window.xe;
+    if (this.visualizerGroup) {
+      const threeScene = (app?.vp && app.vp.scene) || app?.scene;
+      if (threeScene) threeScene.remove(this.visualizerGroup);
+      this.visualizerGroup = null;
+    }
+    // Restore CAD body opacity
+    if (app?.scene?.views) {
+      for (const [id, view] of app.scene.views) {
+        if (view.mesh && view.mesh.material) {
+          const mats = Array.isArray(view.mesh.material) ? view.mesh.material : [view.mesh.material];
+          mats.forEach(m => {
+            if (m._cleOrigOpacity !== undefined) {
+              m.opacity = m._cleOrigOpacity;
+              m.transparent = m._cleOrigTransparent;
+              delete m._cleOrigOpacity;
+              delete m._cleOrigTransparent;
+              m.needsUpdate = true;
+            }
+          });
+        }
+      }
+    }
+    const hud = document.getElementById('cle-slicer-hud');
+    if (hud) hud.style.display = 'none';
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
   }
 
   // Filter layer visibility according to scrubbed layer index
@@ -400,7 +479,10 @@ export class CLESlicerEngine {
     });
 
     const app = window.app || window.xe;
-    if (app?.vp?.request) app.vp.request();
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
   }
 
   // Floating Layer & Export HUD
@@ -480,7 +562,7 @@ export class CLESlicerEngine {
     document.getElementById('cle-hud-all').onclick = () => updateHUD(-1);
     document.getElementById('cle-hud-export').onclick = () => this.exportGCodeFile();
     document.getElementById('cle-hud-upload').onclick = () => this.uploadGCodeToSD();
-    document.getElementById('cle-hud-close').onclick = () => { hud.style.display = 'none'; };
+    document.getElementById('cle-hud-close').onclick = () => { this.clearVisualizer(); };
   }
 
   exportGCodeFile() {

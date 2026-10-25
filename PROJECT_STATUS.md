@@ -117,8 +117,11 @@ When an AI agent opens this repository in a new session:
   - Toolsetter Touch-Off Probe Cycle: Generates safe G-code for MTC with touch-plate probing (`G38.2`), fixed collet stop rings, and ATC rack slots.
   - Tool Library UI: Interactive modal to add/edit/delete tools, save to Vault, and execute live tool changes directly over FluidNC.
 - [x] **Joystick Mode Ribbon Cleanup & Real-Time Controller Switch Indicators**:
-  - Defaults cleanly to **Design Mode** (Three.js 3D viewport navigation).
+  - Defaults cleanly to **Design Mode** (Three.js 3D viewport navigation) with dedicated **Manual Mode** button on ribbon.
   - Switching to **Manual Mode** immediately initiates machine auto-connection and pops up the live Device Control Card.
   - **Camera Auto-Start**: Automatically enumerates and starts the USB webcam (e.g., Logitech C270) or IP camera stream upon opening the control center.
   - **Live Controller Switch State Indicator Strip**: 18 real-time LED pill badges (B, A, Y, X, L, R, ZL, ZR, Minus, Plus, L3, R3, D-Pad Up/Down/Left/Right, Home, Capture) illuminating dynamically with glowing green feedback and summary text as buttons are pressed.
+  - **Remap Table Live Status Column**: Real-time `PRESSED` / `IDLE` status badge on every individual function in the remap table.
+  - **Universal D-Pad Switch Decoding**: Decodes DirectInput POV Hat axis 9, discrete axes 4/5, and standard buttons without crosstalk.
+  - **3D Slicer Visualizer Visibility & Left Stick Orbit**: Extracted world-space triangles via `bodyTris` and `matrixWorld`, disabled line depth testing (`depthTest: false`, `renderOrder: 9999`) with neon color progression, ghosted CAD bodies to 35% translucent acrylic, and enabled left joystick spherical orbit to view slices in 3D.
   - **Vault Save Confirmation**: Parameter edits (axis remapping, inversions, and profiles) display an in-modal CLE-Vault confirmation banner and desktop toast notification.

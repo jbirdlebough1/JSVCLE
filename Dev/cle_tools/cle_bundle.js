@@ -427,8 +427,12 @@ class CLEGamepadEngine {
     return sign * ((Math.abs(val) - dz) / (1 - dz));
   }
 
-  async toggleMode() {
-    this.mode = this.mode === 'design' ? 'manual' : 'design';
+  async setMode(targetMode) {
+    if (this.mode === targetMode) {
+      this.updateModeUI();
+      return;
+    }
+    this.mode = targetMode;
     this.updateModeUI();
 
     if (this.mode === 'manual') {
@@ -452,19 +456,32 @@ class CLEGamepadEngine {
     }
   }
 
+  async toggleMode() {
+    await this.setMode(this.mode === 'design' ? 'manual' : 'design');
+  }
+
   updateModeUI() {
+    const btnDesign = document.getElementById('cle-r-gp-design');
+    const btnManual = document.getElementById('cle-r-gp-manual');
     const modeBtn = document.getElementById('cle-gp-mode-toggle');
-    const ribbonBtn = document.getElementById('cle-r-gp-mode');
-    const label = this.mode === 'design' ? 'Mode: Design 3D' : 'Mode: Manual CNC/Laser';
+    const legacyRibbonBtn = document.getElementById('cle-r-gp-mode');
     
+    if (btnDesign) {
+      btnDesign.setAttribute('aria-pressed', this.mode === 'design' ? 'true' : 'false');
+      btnDesign.classList.toggle('active', this.mode === 'design');
+    }
+    if (btnManual) {
+      btnManual.setAttribute('aria-pressed', this.mode === 'manual' ? 'true' : 'false');
+      btnManual.classList.toggle('active', this.mode === 'manual');
+    }
     if (modeBtn) {
-      modeBtn.textContent = label;
+      modeBtn.textContent = this.mode === 'design' ? 'Mode: Design 3D' : 'Mode: Manual CNC/Laser';
       modeBtn.classList.toggle('active', this.mode === 'manual');
     }
-    if (ribbonBtn) {
-      const span = ribbonBtn.querySelector('span');
+    if (legacyRibbonBtn) {
+      const span = legacyRibbonBtn.querySelector('span');
       if (span) span.textContent = this.mode === 'design' ? 'Design Mode' : 'Manual Mode';
-      ribbonBtn.setAttribute('aria-pressed', this.mode === 'manual' ? 'true' : 'false');
+      legacyRibbonBtn.setAttribute('aria-pressed', this.mode === 'manual' ? 'true' : 'false');
     }
   }
 
@@ -525,24 +542,60 @@ class CLEGamepadEngine {
     }
   }
 
-  // D-Pad cluster cross: enforces clean, single-direction activation
+  // D-Pad cluster cross: robust detection supporting standard buttons, DirectInput POV hat & discrete axes
   getDpadState(gp) {
     const upIdx = this.mapping.buttons?.dpadUp ?? 12;
     const downIdx = this.mapping.buttons?.dpadDown ?? 13;
     const leftIdx = this.mapping.buttons?.dpadLeft ?? 14;
     const rightIdx = this.mapping.buttons?.dpadRight ?? 15;
 
-    const bUp = gp.buttons[upIdx] && (gp.buttons[upIdx].pressed || gp.buttons[upIdx].value > 0.5);
-    const bDown = gp.buttons[downIdx] && (gp.buttons[downIdx].pressed || gp.buttons[downIdx].value > 0.5);
-    const bLeft = gp.buttons[leftIdx] && (gp.buttons[leftIdx].pressed || gp.buttons[leftIdx].value > 0.5);
-    const bRight = gp.buttons[rightIdx] && (gp.buttons[rightIdx].pressed || gp.buttons[rightIdx].value > 0.5);
+    let bUp = gp.buttons[upIdx] && (gp.buttons[upIdx].pressed || gp.buttons[upIdx].value > 0.5);
+    let bDown = gp.buttons[downIdx] && (gp.buttons[downIdx].pressed || gp.buttons[downIdx].value > 0.5);
+    let bLeft = gp.buttons[leftIdx] && (gp.buttons[leftIdx].pressed || gp.buttons[leftIdx].value > 0.5);
+    let bRight = gp.buttons[rightIdx] && (gp.buttons[rightIdx].pressed || gp.buttons[rightIdx].value > 0.5);
+
+    // Fallback: Check alternative buttons 14..17 if 12..15 are inactive
+    if (!bUp && !bDown && !bLeft && !bRight && gp.buttons.length >= 18) {
+      bUp = gp.buttons[14] && (gp.buttons[14].pressed || gp.buttons[14].value > 0.5);
+      bDown = gp.buttons[15] && (gp.buttons[15].pressed || gp.buttons[15].value > 0.5);
+      bLeft = gp.buttons[16] && (gp.buttons[16].pressed || gp.buttons[16].value > 0.5);
+      bRight = gp.buttons[17] && (gp.buttons[17].pressed || gp.buttons[17].value > 0.5);
+    }
+
+    // DirectInput POV Hat on Axis 9 (Standard for Switch controllers in Windows DirectInput)
+    if (!bUp && !bDown && !bLeft && !bRight && gp.axes && gp.axes.length > 9) {
+      const pov = gp.axes[9];
+      if (pov >= -1.05 && pov <= 1.05) {
+        if (Math.abs(pov - (-1.0)) < 0.15 || Math.abs(pov - (1.0)) < 0.15) bUp = true;
+        else if (Math.abs(pov - (-0.428)) < 0.15) bRight = true;
+        else if (Math.abs(pov - (0.143)) < 0.15) bDown = true;
+        else if (Math.abs(pov - (0.714)) < 0.15) bLeft = true;
+      }
+    }
+
+    // Axes 4 and 5 fallback (when not mapped to main joysticks)
+    if (!bUp && !bDown && !bLeft && !bRight && gp.axes && gp.axes.length >= 6) {
+      const usedAxes = [this.mapping.axes.lx, this.mapping.axes.ly, this.mapping.axes.rx, this.mapping.axes.ry];
+      if (!usedAxes.includes(4) && Math.abs(gp.axes[4]) > 0.6) {
+        if (gp.axes[4] < -0.6) bLeft = true;
+        if (gp.axes[4] > 0.6) bRight = true;
+      }
+      if (!usedAxes.includes(5) && Math.abs(gp.axes[5]) > 0.6) {
+        if (gp.axes[5] < -0.6) bUp = true;
+        if (gp.axes[5] > 0.6) bDown = true;
+      }
+    }
 
     // Mutually exclusive single-active cross button
     let dpadUp = false, dpadDown = false, dpadLeft = false, dpadRight = false;
-    if (bUp && !bDown) dpadUp = true;
-    else if (bDown && !bUp) dpadDown = true;
-    else if (bLeft && !bRight) dpadLeft = true;
-    else if (bRight && !bLeft) dpadRight = true;
+    if (bUp && !bDown && !bLeft && !bRight) dpadUp = true;
+    else if (bDown && !bUp && !bLeft && !bRight) dpadDown = true;
+    else if (bLeft && !bRight && !bUp && !bDown) dpadLeft = true;
+    else if (bRight && !bLeft && !bUp && !bDown) dpadRight = true;
+    else if (bUp) dpadUp = true;
+    else if (bDown) dpadDown = true;
+    else if (bLeft) dpadLeft = true;
+    else if (bRight) dpadRight = true;
 
     return { dpadUp, dpadDown, dpadLeft, dpadRight };
   }
@@ -595,20 +648,27 @@ class CLEGamepadEngine {
       needsUpdate = true;
     }
 
-    // 4. D-Pad Cross: Instant Orthogonal View Snaps
-    if (dpad.dpadUp && this.isJustPressed(gp, this.mapping.buttons.dpadUp)) {
+    // 4. D-Pad Cross: Instant Orthogonal View Snaps (Works for buttons, POV hat and axes)
+    if (!this.lastDpad) this.lastDpad = {};
+    const dpadJustUp = dpad.dpadUp && !this.lastDpad.up;
+    const dpadJustDown = dpad.dpadDown && !this.lastDpad.down;
+    const dpadJustLeft = dpad.dpadLeft && !this.lastDpad.left;
+    const dpadJustRight = dpad.dpadRight && !this.lastDpad.right;
+    this.lastDpad = { up: dpad.dpadUp, down: dpad.dpadDown, left: dpad.dpadLeft, right: dpad.dpadRight };
+
+    if (dpadJustUp) {
       if (app.setView) app.setView('top');
       else { app.vp.view.az = 0; app.vp.view.el = Math.PI / 2; }
       needsUpdate = true;
-    } else if (dpad.dpadDown && this.isJustPressed(gp, this.mapping.buttons.dpadDown)) {
+    } else if (dpadJustDown) {
       if (app.setView) app.setView('front');
       else { app.vp.view.az = 0; app.vp.view.el = 0; }
       needsUpdate = true;
-    } else if (dpad.dpadLeft && this.isJustPressed(gp, this.mapping.buttons.dpadLeft)) {
+    } else if (dpadJustLeft) {
       if (app.setView) app.setView('left');
       else { app.vp.view.az = -Math.PI / 2; app.vp.view.el = 0; }
       needsUpdate = true;
-    } else if (dpad.dpadRight && this.isJustPressed(gp, this.mapping.buttons.dpadRight)) {
+    } else if (dpadJustRight) {
       if (app.setView) app.setView('right');
       else { app.vp.view.az = Math.PI / 2; app.vp.view.el = 0; }
       needsUpdate = true;
@@ -2564,31 +2624,51 @@ class CLESlicerEngine {
     const app = window.app || window.xe;
     const bodies = app?.doc?.bodies || [];
     
-    // 1. Try extracting actual mesh vertices from JumpStart scene views
+    // 1. Try window.__JS3D_CHISEL__.bodyTris() (built-in JumpStart matrix-transformed world triangles)
+    if (window.__JS3D_CHISEL__ && typeof window.__JS3D_CHISEL__.bodyTris === 'function') {
+      for (const b of bodies) {
+        if (!b.hidden) {
+          const tris = window.__JS3D_CHISEL__.bodyTris(b.id);
+          if (tris && tris.length >= 9) {
+            console.log(`[CLE Slicer] Extracted ${tris.length / 3} world triangles from Body "${b.name}" via bodyTris.`);
+            return { name: b.name || 'CAD_Body', triangles: tris };
+          }
+        }
+      }
+    }
+
+    // 2. Try extracting from JumpStart scene views with matrixWorld transformation
     if (app?.scene?.views) {
       for (const b of bodies) {
         if (!b.hidden) {
           const view = app.scene.views.get(b.id);
-          if (view) {
-            // Check Three.js mesh geometry
-            if (view.mesh?.geometry?.attributes?.position) {
-              const pos = view.mesh.geometry.attributes.position.array;
-              if (pos && pos.length >= 9) {
-                return { name: b.name || 'CAD_Body', triangles: new Float32Array(pos) };
+          if (view && view.mesh && view.data) {
+            view.mesh.updateMatrixWorld(true);
+            const T = view.mesh.matrixWorld;
+            const Q = view.data.vertices;
+            const idxs = view.data.triangles;
+            if (Q && idxs && idxs.length > 0) {
+              const THREE = window.THREE;
+              const v = new THREE.Vector3();
+              const L = new Float32Array(idxs.length * 3);
+              for (let i = 0; i < idxs.length; i++) {
+                const vi = idxs[i] * 3;
+                v.set(Q[vi], Q[vi + 1], Q[vi + 2]).applyMatrix4(T);
+                L[i * 3] = v.x;
+                L[i * 3 + 1] = v.y;
+                L[i * 3 + 2] = v.z;
               }
-            }
-            // Check view.data.vertices
-            if (view.data?.vertices && view.data.vertices.length >= 9) {
-              return { name: b.name || 'CAD_Body', triangles: new Float32Array(view.data.vertices) };
+              console.log(`[CLE Slicer] Transformed ${L.length / 3} vertices from view.data for "${b.name}".`);
+              return { name: b.name || 'CAD_Body', triangles: L };
             }
           }
         }
       }
     }
 
-    // 2. Fallback Sample 3D Test Object (50x40x12 mm rectangular billet with chamfer)
-    console.log('[CLE Slicer] No meshed bodies active. Generating sample 3D test billet.');
-    const sampleTris = this.generateSampleBoxTriangles(50, 40, 12);
+    // 3. Fallback Sample 3D Test Object (50x40x15 mm rectangular billet with chamfer)
+    console.log('[CLE Slicer] No active meshed CAD bodies found. Generating 50x40x15 mm test billet.');
+    const sampleTris = this.generateSampleBoxTriangles(50, 40, 15);
     return { name: 'Sample_Billet_50x40', triangles: sampleTris };
   }
 
@@ -2900,24 +2980,83 @@ class CLESlicerEngine {
 
       const mat = new THREE.LineBasicMaterial({
         vertexColors: true,
-        linewidth: 2,
+        linewidth: 3,
         transparent: true,
-        opacity: 0.95
+        opacity: 1.0,
+        depthTest: false,
+        depthWrite: false
       });
 
       const lineMesh = new THREE.LineSegments(geom, mat);
+      lineMesh.renderOrder = 9999;
       lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z };
       this.visualizerGroup.add(lineMesh);
     });
 
     threeScene.add(this.visualizerGroup);
 
+    // Make CAD bodies in JumpStart translucent so toolpaths are vividly visible inside & out
+    if (app.scene && app.scene.views) {
+      for (const [id, view] of app.scene.views) {
+        if (view.mesh && view.mesh.material) {
+          const mats = Array.isArray(view.mesh.material) ? view.mesh.material : [view.mesh.material];
+          mats.forEach(m => {
+            if (m._cleOrigOpacity === undefined) {
+              m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
+              m._cleOrigTransparent = m.transparent || false;
+            }
+            m.transparent = true;
+            m.opacity = 0.35;
+            m.needsUpdate = true;
+          });
+        }
+      }
+    }
+
+    // Set Gamepad mode to Design so left joystick immediately orbits the 3D scene around the slices!
+    if (this.bridge.gamepad) {
+      this.bridge.gamepad.setMode('design');
+    }
+
     // Trigger JumpStart viewport redraw
     if (app.vp) {
       app.vp.dirty = true;
+      if (app.vp.updateCamera) app.vp.updateCamera();
       if (app.vp.request) app.vp.request();
     }
     console.log(`[CLE Slicer] Rendered ${numLayers} toolpath layers into Three.js scene.`);
+  }
+
+  clearVisualizer() {
+    const app = window.app || window.xe;
+    if (this.visualizerGroup) {
+      const threeScene = (app?.vp && app.vp.scene) || app?.scene;
+      if (threeScene) threeScene.remove(this.visualizerGroup);
+      this.visualizerGroup = null;
+    }
+    // Restore CAD body opacity
+    if (app?.scene?.views) {
+      for (const [id, view] of app.scene.views) {
+        if (view.mesh && view.mesh.material) {
+          const mats = Array.isArray(view.mesh.material) ? view.mesh.material : [view.mesh.material];
+          mats.forEach(m => {
+            if (m._cleOrigOpacity !== undefined) {
+              m.opacity = m._cleOrigOpacity;
+              m.transparent = m._cleOrigTransparent;
+              delete m._cleOrigOpacity;
+              delete m._cleOrigTransparent;
+              m.needsUpdate = true;
+            }
+          });
+        }
+      }
+    }
+    const hud = document.getElementById('cle-slicer-hud');
+    if (hud) hud.style.display = 'none';
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
   }
 
   // Filter layer visibility according to scrubbed layer index
@@ -2938,7 +3077,10 @@ class CLESlicerEngine {
     });
 
     const app = window.app || window.xe;
-    if (app?.vp?.request) app.vp.request();
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
   }
 
   // Floating Layer & Export HUD
@@ -3018,7 +3160,7 @@ class CLESlicerEngine {
     document.getElementById('cle-hud-all').onclick = () => updateHUD(-1);
     document.getElementById('cle-hud-export').onclick = () => this.exportGCodeFile();
     document.getElementById('cle-hud-upload').onclick = () => this.uploadGCodeToSD();
-    document.getElementById('cle-hud-close').onclick = () => { hud.style.display = 'none'; };
+    document.getElementById('cle-hud-close').onclick = () => { this.clearVisualizer(); };
   }
 
   exportGCodeFile() {
@@ -3469,28 +3611,23 @@ class CLEBridge {
       { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "inspect", fn: () => this.fluidnc.openFluidTouchWebGUI() }
     ]);
 
-    // 2. JOYSTICK MODE Section (Defaults to Design Mode; switching to Manual connects & opens Control Card)
+    // 2. JOYSTICK MODE Section (Defaults to Design Mode; has dedicated Manual Mode button)
     m("JOYSTICK MODE", "", [
       { 
-        id: "cle-r-gp-mode", 
-        label: this.gamepad.mode === "design" ? "Design Mode" : "Manual Mode", 
-        title: this.gamepad.mode === "design" ? "Click to switch to Manual Mode (Connects to device & opens Control Card)" : "Active in Manual Mode (Click to return to Design 3D Mode)", 
+        id: "cle-r-gp-design", 
+        label: "Design Mode", 
+        title: "Active 3D CAD Viewport Navigation (Left Stick: Orbit 3D, Right Stick: Pan)", 
         icon: "motion", 
-        pressed: this.gamepad.mode === "manual", 
-        fn: () => this.gamepad.toggleMode() 
+        pressed: this.gamepad.mode === "design", 
+        fn: () => this.gamepad.setMode('design') 
       },
       { 
-        id: "cle-r-manual-hub", 
-        label: `Control Card (${activeMach.name})`, 
-        title: `Open Device Control Card for ${activeMach.name} (DRO, Spindle/Laser, Camera)`, 
+        id: "cle-r-gp-manual", 
+        label: "Manual Mode", 
+        title: "Switch to Manual CNC/Laser Control (Connects to device, opens Control Card & starts camera)", 
         icon: "inspect", 
-        fn: async () => {
-          this.gamepad.mode = "manual";
-          this.gamepad.updateModeUI();
-          if (this.fluidnc && !this.fluidnc.isConnected) await this.fluidnc.autoConnect();
-          await this.openManualControlCenter();
-          if (this.camera) await this.camera.autoStartIfAvailable();
-        } 
+        pressed: this.gamepad.mode === "manual", 
+        fn: () => this.gamepad.setMode('manual') 
       },
       { 
         id: "cle-r-gp-remap", 
@@ -3905,7 +4042,7 @@ class CLEBridge {
           </div>
         </div>
 
-        <!-- Interactive Function Remap Table -->
+        <!-- Interactive Function Remap Table with Live Button Status Indicators -->
         <div style="max-height:220px; overflow-y:auto; border:1px solid var(--line); border-radius:6px; margin-top:8px;">
           <table class="cle-table">
             <thead>
@@ -3913,6 +4050,7 @@ class CLEBridge {
                 <th>Function / Action</th>
                 <th>Target Action in JS / CNC</th>
                 <th>Assigned Button</th>
+                <th style="text-align:center;">Status</th>
                 <th>Remap</th>
               </tr>
             </thead>
@@ -4562,7 +4700,8 @@ class CLEBridge {
         <tr>
           <td><strong>${a.name}</strong></td>
           <td style="color:var(--ink-2);">${a.target}</td>
-          <td><span id="cle-remap-val-${a.key}" style="font-family:var(--f-mono); color:var(--accent);">${assigned}</span></td>
+          <td><span id="cle-remap-val-${a.key}" style="font-family:var(--f-mono); color:var(--accent); font-weight:700;">${assigned}</span></td>
+          <td style="text-align:center;"><span id="cle-remap-led-${a.key}" class="cle-switch-pill" style="padding:2px 8px; font-size:10px; font-weight:700; background:var(--panel-2); border:1px solid var(--line); color:var(--ink-3);">IDLE</span></td>
           <td><button class="cle-btn" onclick="window.CLE.remapButton('${a.key}')" style="padding:2px 8px;">Bind</button></td>
         </tr>
       `;
@@ -4666,8 +4805,17 @@ class CLEBridge {
       const btnNames = ['B', 'A', 'Y', 'X', 'L', 'R', 'ZL', 'ZR', 'Minus -', 'Plus +', 'L3', 'R3', 'D-Up ↑', 'D-Dn ↓', 'D-Lf ←', 'D-Rt →', 'Home', 'Capture'];
       const activeBtns = [];
       for (let b = 0; b < 18; b++) {
-        const btnObj = gp.buttons[b];
-        const isPressed = btnObj && (btnObj.pressed || btnObj.value > 0.4);
+        let isPressed = false;
+        // Check direct button
+        if (gp.buttons[b] && (gp.buttons[b].pressed || gp.buttons[b].value > 0.4)) {
+          isPressed = true;
+        }
+        // Link D-pad state directly to indicators 12..15 so POV hat and axes also light them up
+        if (b === 12 && dpad.dpadUp) isPressed = true;
+        if (b === 13 && dpad.dpadDown) isPressed = true;
+        if (b === 14 && dpad.dpadLeft) isPressed = true;
+        if (b === 15 && dpad.dpadRight) isPressed = true;
+
         const tagEl = document.getElementById(`cle-btn-tag-${b}`);
         if (tagEl) {
           if (isPressed) {
@@ -4684,6 +4832,38 @@ class CLEBridge {
           }
         }
       }
+
+      // Update Remap Table Status Column in real-time
+      const actionKeys = ['toggleMode', 'macroRecord', 'zeroWCS', 'feedHold', 'touchProbe', 'cycleAxis', 'spindleToggle', 'laserToggle', 'dpadUp', 'dpadDown', 'dpadLeft', 'dpadRight'];
+      const mappedBtns = this.gamepad.mapping.buttons;
+      actionKeys.forEach(k => {
+        const ledEl = document.getElementById(`cle-remap-led-${k}`);
+        if (!ledEl) return;
+        let isAct = false;
+        if (k === 'dpadUp') isAct = dpad.dpadUp;
+        else if (k === 'dpadDown') isAct = dpad.dpadDown;
+        else if (k === 'dpadLeft') isAct = dpad.dpadLeft;
+        else if (k === 'dpadRight') isAct = dpad.dpadRight;
+        else {
+          const bIdx = mappedBtns[k];
+          if (bIdx !== undefined && gp.buttons[bIdx]) {
+            isAct = gp.buttons[bIdx].pressed || gp.buttons[bIdx].value > 0.4;
+          }
+        }
+        if (isAct) {
+          ledEl.style.background = (k === 'feedHold') ? 'var(--danger)' : 'var(--ok)';
+          ledEl.style.color = '#fff';
+          ledEl.style.borderColor = (k === 'feedHold') ? 'var(--danger)' : 'var(--ok)';
+          ledEl.style.boxShadow = (k === 'feedHold') ? '0 0 8px rgba(235, 87, 87, 0.7)' : '0 0 8px rgba(57, 211, 83, 0.7)';
+          ledEl.textContent = 'PRESSED';
+        } else {
+          ledEl.style.background = 'var(--panel-2)';
+          ledEl.style.color = 'var(--ink-3)';
+          ledEl.style.borderColor = 'var(--line)';
+          ledEl.style.boxShadow = 'none';
+          ledEl.textContent = 'IDLE';
+        }
+      });
 
       const summaryEl = document.getElementById('cle-active-btn-summary');
       if (summaryEl) {
