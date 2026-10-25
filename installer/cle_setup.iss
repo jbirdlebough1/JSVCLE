@@ -42,3 +42,4 @@ Name: "{group}\CLEJS JumpStart"; Filename: "{app}\cle_start.bat"; WorkingDir: "{
 
 [Run]
 Filename: "{app}\cle_start.bat"; Description: "{cm:LaunchProgram,CLEJS JumpStart}"; Flags: nowait postinstall skipifsilent
+

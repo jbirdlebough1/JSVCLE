@@ -15,3 +15,4 @@ try {
     Write-Warning "[CLEJS] Could not register scheduled task with admin privileges: $_"
     Write-Host "[CLEJS] You can run D:\CLEJS\Update-JumpStart.ps1 manually at any time." -ForegroundColor Yellow
 }
+
