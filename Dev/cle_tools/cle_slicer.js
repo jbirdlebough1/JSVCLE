@@ -343,8 +343,15 @@ export class CLESlicerEngine {
       return;
     }
 
-    // Prefer app.vp.world (where CAD bodies live), fallback to app.vp.scene
-    const container = app.vp.world || app.vp.scene;
+    if (THREE.Object3D && !THREE.Object3D.prototype.removeFromParent) {
+      THREE.Object3D.prototype.removeFromParent = function() {
+        if (this.parent) this.parent.remove(this);
+        return this;
+      };
+    }
+
+    // Mount directly to app.vp.scene for guaranteed rendering
+    const container = app.vp.scene || app.vp.world;
     if (!container || !container.add) return;
 
     // Clean up previous visualizer group
@@ -459,14 +466,14 @@ export class CLESlicerEngine {
 
       // 3. Safe Clearance / Retract Plane wireframe (Z = maxZ + 5.0mm)
       const retractZ = maxZ + 5.0;
-      const retPts = [
-        minX - 5, minY - 5, retractZ,
-        maxX + 5, minY - 5, retractZ,
-        maxX + 5, maxY + 5, retractZ,
-        minX - 5, maxY + 5, retractZ,
-        minX - 5, minY - 5, retractZ
+      const retVectors = [
+        new THREE.Vector3(minX - 5, minY - 5, retractZ),
+        new THREE.Vector3(maxX + 5, minY - 5, retractZ),
+        new THREE.Vector3(maxX + 5, maxY + 5, retractZ),
+        new THREE.Vector3(minX - 5, maxY + 5, retractZ),
+        new THREE.Vector3(minX - 5, minY - 5, retractZ)
       ];
-      const retGeo = new THREE.BufferGeometry().setFromPoints(retPts.map(p => new THREE.Vector3(p[0]||0, p[1]||0, p[2]||0)));
+      const retGeo = new THREE.BufferGeometry().setFromPoints(retVectors);
       const retMat = new THREE.LineDashedMaterial({ color: 0xf59e0b, dashSize: 4, gapSize: 3, depthTest: false, transparent: true, opacity: 0.7 });
       const retLine = new THREE.Line(retGeo, retMat);
       retLine.computeLineDistances();

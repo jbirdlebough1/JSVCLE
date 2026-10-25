@@ -49,7 +49,10 @@ export class CLEVault {
           maxRateZ: 1000,
           maxRateA: 3000,
           spindleMaxRPM: 24000,
-          wifiIP: '192.168.12.158'
+          wifiIP: '192.168.12.158',
+          spoilboardX: 600,
+          spoilboardY: 500,
+          spoilboardThickness: 20.0
         }
       ],
       macros: [
@@ -330,7 +333,7 @@ export class CLEVault {
         travelA: 10000,
         spoilboardX: 600,            // Spoilboard Width (mm)
         spoilboardY: 500,            // Spoilboard Length/Depth (mm)
-        spoilboardThickness: 15.0,   // Spoilboard Thickness (mm, e.g. 15mm MDF)
+        spoilboardThickness: 20.0,   // Spoilboard Thickness (mm, 20mm MDF spoilboard)
         spoilboardOffsetX: 0.0,      // Spoilboard Offset X from Machine 0,0
         spoilboardOffsetY: 0.0,      // Spoilboard Offset Y from Machine 0,0
         stepsPerMmX: 640.0,
@@ -463,7 +466,7 @@ export class CLEVault {
     if (mach) {
       if (mach.spoilboardX === undefined) mach.spoilboardX = mach.travelX || 600;
       if (mach.spoilboardY === undefined) mach.spoilboardY = mach.travelY || 500;
-      if (mach.spoilboardThickness === undefined) mach.spoilboardThickness = 15.0;
+      if (mach.spoilboardThickness === undefined || mach.spoilboardThickness === 15.0) mach.spoilboardThickness = 20.0;
       if (mach.spoilboardOffsetX === undefined) mach.spoilboardOffsetX = 0.0;
       if (mach.spoilboardOffsetY === undefined) mach.spoilboardOffsetY = 0.0;
 

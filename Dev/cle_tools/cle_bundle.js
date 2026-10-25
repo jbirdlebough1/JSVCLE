@@ -2,6 +2,12 @@
 (function(){
 'use strict';
 
+if (typeof THREE !== 'undefined' && THREE.Object3D) {
+  if (!THREE.Object3D.prototype.removeFromParent) {
+    THREE.Object3D.prototype.removeFromParent = function() { if (this.parent) this.parent.remove(this); return this; };
+  }
+}
+
 /* --- Module: cle_camera.js --- */
 /**
  * CLEJS - Generic Camera Subsystem
@@ -1023,28 +1029,76 @@ class CLEFluidNCClient {
         this.bridge.vault.saveMachine(mach);
       }
     }
-    const wsUrl = `ws://${cleanIp}:81`;
+
+    if (this.socket) {
+      try { this.socket.close(); } catch (e) {}
+      this.socket = null;
+    }
+
+    // Probe port 81 (raw FluidNC websocket); fallback to port 80 (/websocket) if port 81 is closed/unreachable
+    this._tryWebSocketConnect(cleanIp, 81, () => {
+      console.log(`[CLE FluidNC] Port 81 unreachable on ${cleanIp}, trying ws://${cleanIp}:80/websocket...`);
+      this._tryWebSocketConnect(cleanIp, 80);
+    });
+  }
+
+  _tryWebSocketConnect(cleanIp, port, onFailFallback = null) {
+    const wsUrl = port === 80 ? `ws://${cleanIp}:80/websocket` : `ws://${cleanIp}:81`;
+    let connected = false;
+    let connectTimeout = null;
+
     try {
-      this.socket = new WebSocket(wsUrl);
-      this.socket.onopen = () => {
+      const ws = new WebSocket(wsUrl);
+      this.socket = ws;
+
+      connectTimeout = setTimeout(() => {
+        if (!connected && ws.readyState !== WebSocket.OPEN) {
+          try { ws.close(); } catch (e) {}
+          if (onFailFallback) {
+            onFailFallback();
+          } else {
+            this.bridge.notify(`Connection timeout connecting to ${cleanIp} (ports 81/80)`, 'error');
+            this.disconnect();
+          }
+        }
+      }, 4000);
+
+      ws.onopen = () => {
+        connected = true;
+        if (connectTimeout) clearTimeout(connectTimeout);
         this.isConnected = true;
         this.connectionType = 'websocket';
-        this.logConsole(`[SYSTEM] Connected to FluidTouch/FluidNC at ${this.ip}.`);
-        this.bridge.notify(`Connected to FluidTouch/FluidNC at ${this.ip}`, 'ok');
+        this.logConsole(`[SYSTEM] Connected to FluidTouch/FluidNC at ${cleanIp}:${port}.`);
+        this.bridge.notify(`Connected to FluidTouch/FluidNC at ${cleanIp} (port ${port})`, 'ok');
         this.updateConnectionUI(true);
         this.startStatusPolling();
       };
-      this.socket.onmessage = (event) => {
+
+      ws.onmessage = (event) => {
         this.handleIncomingData(event.data);
       };
-      this.socket.onerror = (err) => {
-        this.bridge.notify(`WebSocket error connecting to ${this.ip}`, 'error');
+
+      ws.onerror = (err) => {
+        if (!connected && onFailFallback) {
+          if (connectTimeout) clearTimeout(connectTimeout);
+          try { ws.close(); } catch (e) {}
+          onFailFallback();
+          return;
+        }
+        this.bridge.notify(`WebSocket error connecting to ${cleanIp}:${port}`, 'error');
       };
-      this.socket.onclose = () => {
-        this.disconnect();
+
+      ws.onclose = () => {
+        if (connected) {
+          this.disconnect();
+        }
       };
     } catch (err) {
-      this.bridge.notify(`WebSocket failed: ${err.message}`, 'error');
+      if (onFailFallback) {
+        onFailFallback();
+      } else {
+        this.bridge.notify(`WebSocket failed: ${err.message}`, 'error');
+      }
     }
   }
 
@@ -1517,7 +1571,25 @@ class CLEFluidNCClient {
   }
 
   openFluidTouchWebGUI() {
-    window.open(`http://${this.ip}`, '_blank');
+    let cleanIp = (this.ip || '192.168.12.158').trim();
+    if (cleanIp === '192.168.12.150' || cleanIp === '192.168.1.150' || cleanIp === '192.168.1.100') {
+      cleanIp = '192.168.12.158';
+    }
+    const url = `http://${cleanIp}`;
+    let win = null;
+    try {
+      win = window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {}
+    if (!win) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 100);
+    }
+    this.bridge.notify(`Opening FluidTouch Web GUI at ${url}`, 'info');
   }
 
   streamGCode(gcodeText) {
@@ -1874,7 +1946,10 @@ class CLEVault {
           maxRateZ: 1000,
           maxRateA: 3000,
           spindleMaxRPM: 24000,
-          wifiIP: '192.168.12.158'
+          wifiIP: '192.168.12.158',
+          spoilboardX: 600,
+          spoilboardY: 500,
+          spoilboardThickness: 20.0
         }
       ],
       macros: [
@@ -2155,7 +2230,7 @@ class CLEVault {
         travelA: 10000,
         spoilboardX: 600,            // Spoilboard Width (mm)
         spoilboardY: 500,            // Spoilboard Length/Depth (mm)
-        spoilboardThickness: 15.0,   // Spoilboard Thickness (mm, e.g. 15mm MDF)
+        spoilboardThickness: 20.0,   // Spoilboard Thickness (mm, 20mm MDF spoilboard)
         spoilboardOffsetX: 0.0,      // Spoilboard Offset X from Machine 0,0
         spoilboardOffsetY: 0.0,      // Spoilboard Offset Y from Machine 0,0
         stepsPerMmX: 640.0,
@@ -2288,7 +2363,7 @@ class CLEVault {
     if (mach) {
       if (mach.spoilboardX === undefined) mach.spoilboardX = mach.travelX || 600;
       if (mach.spoilboardY === undefined) mach.spoilboardY = mach.travelY || 500;
-      if (mach.spoilboardThickness === undefined) mach.spoilboardThickness = 15.0;
+      if (mach.spoilboardThickness === undefined || mach.spoilboardThickness === 15.0) mach.spoilboardThickness = 20.0;
       if (mach.spoilboardOffsetX === undefined) mach.spoilboardOffsetX = 0.0;
       if (mach.spoilboardOffsetY === undefined) mach.spoilboardOffsetY = 0.0;
 
@@ -3027,8 +3102,15 @@ class CLESlicerEngine {
       return;
     }
 
-    // Prefer app.vp.world (where CAD bodies live), fallback to app.vp.scene
-    const container = app.vp.world || app.vp.scene;
+    if (THREE.Object3D && !THREE.Object3D.prototype.removeFromParent) {
+      THREE.Object3D.prototype.removeFromParent = function() {
+        if (this.parent) this.parent.remove(this);
+        return this;
+      };
+    }
+
+    // Mount directly to app.vp.scene for guaranteed rendering
+    const container = app.vp.scene || app.vp.world;
     if (!container || !container.add) return;
 
     // Clean up previous visualizer group
@@ -3143,14 +3225,14 @@ class CLESlicerEngine {
 
       // 3. Safe Clearance / Retract Plane wireframe (Z = maxZ + 5.0mm)
       const retractZ = maxZ + 5.0;
-      const retPts = [
-        minX - 5, minY - 5, retractZ,
-        maxX + 5, minY - 5, retractZ,
-        maxX + 5, maxY + 5, retractZ,
-        minX - 5, maxY + 5, retractZ,
-        minX - 5, minY - 5, retractZ
+      const retVectors = [
+        new THREE.Vector3(minX - 5, minY - 5, retractZ),
+        new THREE.Vector3(maxX + 5, minY - 5, retractZ),
+        new THREE.Vector3(maxX + 5, maxY + 5, retractZ),
+        new THREE.Vector3(minX - 5, maxY + 5, retractZ),
+        new THREE.Vector3(minX - 5, minY - 5, retractZ)
       ];
-      const retGeo = new THREE.BufferGeometry().setFromPoints(retPts.map(p => new THREE.Vector3(p[0]||0, p[1]||0, p[2]||0)));
+      const retGeo = new THREE.BufferGeometry().setFromPoints(retVectors);
       const retMat = new THREE.LineDashedMaterial({ color: 0xf59e0b, dashSize: 4, gapSize: 3, depthTest: false, transparent: true, opacity: 0.7 });
       const retLine = new THREE.Line(retGeo, retMat);
       retLine.computeLineDistances();
@@ -3698,7 +3780,7 @@ class CLEBedVisualizer {
       travelZ: 100,
       spoilboardX: 600,
       spoilboardY: 500,
-      spoilboardThickness: 15.0,
+      spoilboardThickness: 20.0,
       spoilboardOffsetX: 0.0,
       spoilboardOffsetY: 0.0,
       gridPitch: 10.0,
@@ -3725,7 +3807,7 @@ class CLEBedVisualizer {
 
     this.config.spoilboardX = parseFloat(mach.spoilboardX) || this.config.travelX;
     this.config.spoilboardY = parseFloat(mach.spoilboardY) || this.config.travelY;
-    this.config.spoilboardThickness = mach.spoilboardThickness !== undefined ? parseFloat(mach.spoilboardThickness) : 15.0;
+    this.config.spoilboardThickness = mach.spoilboardThickness !== undefined ? parseFloat(mach.spoilboardThickness) : 20.0;
     this.config.spoilboardOffsetX = mach.spoilboardOffsetX !== undefined ? parseFloat(mach.spoilboardOffsetX) : 0.0;
     this.config.spoilboardOffsetY = mach.spoilboardOffsetY !== undefined ? parseFloat(mach.spoilboardOffsetY) : 0.0;
   }
@@ -3734,8 +3816,8 @@ class CLEBedVisualizer {
   getWorldContainer() {
     const app = window.app || window.xe;
     if (!app || !app.vp) return null;
-    // Prefer app.vp.world (holds CAD bodies), fallback to app.vp.scene
-    return app.vp.world || app.vp.scene || null;
+    // Mount directly to app.vp.scene for guaranteed rendering
+    return app.vp.scene || app.vp.world || null;
   }
 
   // Mount bed and cursor to JumpStart Three.js viewport
@@ -3745,6 +3827,13 @@ class CLEBedVisualizer {
     if (!container || !THREE) {
       setTimeout(() => this.mountToScene(), 300);
       return;
+    }
+
+    if (THREE.Object3D && !THREE.Object3D.prototype.removeFromParent) {
+      THREE.Object3D.prototype.removeFromParent = function() {
+        if (this.parent) this.parent.remove(this);
+        return this;
+      };
     }
 
     if (this.bedGroup && this.bedGroup.parent) {
@@ -3765,20 +3854,19 @@ class CLEBedVisualizer {
     console.log('[CLE Bed] Mounted device bed, spoilboard and rulers to 3D viewport.');
   }
 
-  // 1. Spoilboard Slab (Physical MDF / Tooling Plate)
+  // 1. Spoilboard Slab & 600x500x20mm High-Contrast Outline
   buildSpoilboardSlab(THREE) {
     const { spoilboardX, spoilboardY, spoilboardThickness, spoilboardOffsetX, spoilboardOffsetY } = this.config;
 
     // Solid MDF/Aluminum Base Slab
     const slabGeo = new THREE.BoxGeometry(spoilboardX, spoilboardY, spoilboardThickness);
-    // Dark engineering slate/MDF tone
     const slabMat = new THREE.MeshStandardMaterial({
-      color: 0x1e242d,
+      color: 0x1e2632,
       roughness: 0.85,
       metalness: 0.1,
       transparent: true,
-      opacity: 0.88,
-      depthWrite: true
+      opacity: 0.85,
+      depthWrite: false
     });
 
     const slab = new THREE.Mesh(slabGeo, slabMat);
@@ -3792,20 +3880,43 @@ class CLEBedVisualizer {
     slab.name = 'CLE_Spoilboard_Slab';
     this.bedGroup.add(slab);
 
-    // Subtle edge highlight for spoilboard border
+    // High-Contrast Spoilboard 3D Box Outline (600x500x20mm)
     const edgesGeo = new THREE.EdgesGeometry(slabGeo);
-    const edgesMat = new THREE.LineBasicMaterial({ color: 0x415065, transparent: true, opacity: 0.6 });
+    const edgesMat = new THREE.LineBasicMaterial({
+      color: 0x38bdf8, // Bright cyan perimeter outline
+      linewidth: 2,
+      transparent: true,
+      opacity: 0.95
+    });
     const slabEdges = new THREE.LineSegments(edgesGeo, edgesMat);
     slab.add(slabEdges);
+
+    // Spoilboard Top Surface Perimeter Outline (Z = 0.08mm)
+    const x0 = spoilboardOffsetX;
+    const x1 = spoilboardOffsetX + spoilboardX;
+    const y0 = spoilboardOffsetY;
+    const y1 = spoilboardOffsetY + spoilboardY;
+    const topPts = [
+      x0, y0, 0.08,  x1, y0, 0.08,
+      x1, y0, 0.08,  x1, y1, 0.08,
+      x1, y1, 0.08,  x0, y1, 0.08,
+      x0, y1, 0.08,  x0, y0, 0.08
+    ];
+    const topGeo = new THREE.BufferGeometry();
+    topGeo.setAttribute('position', new THREE.Float32BufferAttribute(topPts, 3));
+    const topMat = new THREE.LineBasicMaterial({ color: 0x0284c7, linewidth: 3, transparent: true, opacity: 1.0 });
+    const topBorder = new THREE.LineSegments(topGeo, topMat);
+    topBorder.name = 'CLE_Spoilboard_Top_Border';
+    this.bedGroup.add(topBorder);
   }
 
-  // 2. Machine Travel Frame & Millimeter Grid Lines on Spoilboard Surface
+  // 2. Machine Travel Limits Volume (600x500x100mm) & Surface Grid
   buildGridAndExtrusionFrame(THREE) {
-    const { travelX, travelY, spoilboardX, spoilboardY, spoilboardOffsetX, spoilboardOffsetY, gridPitch, majorGridPitch } = this.config;
+    const { travelX, travelY, travelZ, spoilboardX, spoilboardY, spoilboardOffsetX, spoilboardOffsetY, gridPitch, majorGridPitch } = this.config;
 
     const minorPts = [];
     const majorPts = [];
-    const zSurface = 0.04; // Placed right above spoilboard surface to avoid z-fighting
+    const zSurface = 0.06;
 
     const x0 = spoilboardOffsetX;
     const x1 = spoilboardOffsetX + spoilboardX;
@@ -3828,40 +3939,48 @@ class CLEBedVisualizer {
       target.push(x0, y, zSurface, x1, y, zSurface);
     }
 
-    // Minor grid lines
+    // Minor grid lines (10mm pitch)
     if (minorPts.length > 0) {
       const minGeo = new THREE.BufferGeometry();
       minGeo.setAttribute('position', new THREE.Float32BufferAttribute(minorPts, 3));
-      const minMat = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.35 });
+      const minMat = new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.45 });
       const minLines = new THREE.LineSegments(minGeo, minMat);
       this.bedGroup.add(minLines);
     }
 
-    // Major grid lines
+    // Major grid lines (50mm pitch)
     if (majorPts.length > 0) {
       const majGeo = new THREE.BufferGeometry();
       majGeo.setAttribute('position', new THREE.Float32BufferAttribute(majorPts, 3));
-      const majMat = new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.75 });
+      const majMat = new THREE.LineBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.85 });
       const majLines = new THREE.LineSegments(majGeo, majMat);
       this.bedGroup.add(majLines);
     }
 
-    // Physical Machine Travel Limits Wireframe (Extrusion Perimeter)
-    const travelPts = [
-      0, 0, zSurface,
-      travelX, 0, zSurface,
-      travelX, 0, zSurface,
-      travelX, travelY, zSurface,
-      travelX, travelY, zSurface,
-      0, travelY, zSurface,
-      0, travelY, zSurface,
-      0, 0, zSurface
+    // 3D Physical Travel Volume Frame (600x500x100mm)
+    const tz = travelZ || 100;
+    const travelBoxPts = [
+      // Base rectangle
+      0, 0, zSurface,  travelX, 0, zSurface,
+      travelX, 0, zSurface,  travelX, travelY, zSurface,
+      travelX, travelY, zSurface,  0, travelY, zSurface,
+      0, travelY, zSurface,  0, 0, zSurface,
+      // Top rectangle at Z = travelZ
+      0, 0, tz,  travelX, 0, tz,
+      travelX, 0, tz,  travelX, travelY, tz,
+      travelX, travelY, tz,  0, travelY, tz,
+      0, travelY, tz,  0, 0, tz,
+      // 4 vertical corner posts
+      0, 0, zSurface,  0, 0, tz,
+      travelX, 0, zSurface,  travelX, 0, tz,
+      travelX, travelY, zSurface,  travelX, travelY, tz,
+      0, travelY, zSurface,  0, travelY, tz
     ];
     const travelGeo = new THREE.BufferGeometry();
-    travelGeo.setAttribute('position', new THREE.Float32BufferAttribute(travelPts, 3));
-    const travelMat = new THREE.LineBasicMaterial({ color: 0xe056fd, linewidth: 2, transparent: true, opacity: 0.85 });
+    travelGeo.setAttribute('position', new THREE.Float32BufferAttribute(travelBoxPts, 3));
+    const travelMat = new THREE.LineBasicMaterial({ color: 0xd946ef, linewidth: 2, transparent: true, opacity: 0.85 });
     const travelFrame = new THREE.LineSegments(travelGeo, travelMat);
-    travelFrame.name = 'CLE_Machine_Travel_Limit_Box';
+    travelFrame.name = 'CLE_Machine_Travel_Volume_Box';
     this.bedGroup.add(travelFrame);
   }
 
@@ -4248,8 +4367,10 @@ class CLEBridge {
       this.fluidnc.disconnect();
       return;
     }
+    // Always open Manual Control Center so the user has immediate visual feedback of the machine card, DRO, and console
+    this.openManualControlCenter();
     const mach = this.vault.getActiveMachine();
-    if (mach.wifiIP) {
+    if (mach && mach.wifiIP && mach.wifiIP !== 'none') {
       const ok = await this.fluidnc.autoConnect();
       if (ok) return;
     }

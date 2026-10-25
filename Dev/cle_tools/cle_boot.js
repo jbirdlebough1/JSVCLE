@@ -97,8 +97,10 @@ class CLEBridge {
       this.fluidnc.disconnect();
       return;
     }
+    // Always open Manual Control Center so the user has immediate visual feedback of the machine card, DRO, and console
+    this.openManualControlCenter();
     const mach = this.vault.getActiveMachine();
-    if (mach.wifiIP) {
+    if (mach && mach.wifiIP && mach.wifiIP !== 'none') {
       const ok = await this.fluidnc.autoConnect();
       if (ok) return;
     }

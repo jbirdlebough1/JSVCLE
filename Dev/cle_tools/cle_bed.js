@@ -23,7 +23,7 @@ export class CLEBedVisualizer {
       travelZ: 100,
       spoilboardX: 600,
       spoilboardY: 500,
-      spoilboardThickness: 15.0,
+      spoilboardThickness: 20.0,
       spoilboardOffsetX: 0.0,
       spoilboardOffsetY: 0.0,
       gridPitch: 10.0,
@@ -50,7 +50,7 @@ export class CLEBedVisualizer {
 
     this.config.spoilboardX = parseFloat(mach.spoilboardX) || this.config.travelX;
     this.config.spoilboardY = parseFloat(mach.spoilboardY) || this.config.travelY;
-    this.config.spoilboardThickness = mach.spoilboardThickness !== undefined ? parseFloat(mach.spoilboardThickness) : 15.0;
+    this.config.spoilboardThickness = mach.spoilboardThickness !== undefined ? parseFloat(mach.spoilboardThickness) : 20.0;
     this.config.spoilboardOffsetX = mach.spoilboardOffsetX !== undefined ? parseFloat(mach.spoilboardOffsetX) : 0.0;
     this.config.spoilboardOffsetY = mach.spoilboardOffsetY !== undefined ? parseFloat(mach.spoilboardOffsetY) : 0.0;
   }
@@ -59,8 +59,8 @@ export class CLEBedVisualizer {
   getWorldContainer() {
     const app = window.app || window.xe;
     if (!app || !app.vp) return null;
-    // Prefer app.vp.world (holds CAD bodies), fallback to app.vp.scene
-    return app.vp.world || app.vp.scene || null;
+    // Mount directly to app.vp.scene for guaranteed rendering
+    return app.vp.scene || app.vp.world || null;
   }
 
   // Mount bed and cursor to JumpStart Three.js viewport
@@ -70,6 +70,13 @@ export class CLEBedVisualizer {
     if (!container || !THREE) {
       setTimeout(() => this.mountToScene(), 300);
       return;
+    }
+
+    if (THREE.Object3D && !THREE.Object3D.prototype.removeFromParent) {
+      THREE.Object3D.prototype.removeFromParent = function() {
+        if (this.parent) this.parent.remove(this);
+        return this;
+      };
     }
 
     if (this.bedGroup && this.bedGroup.parent) {
@@ -90,20 +97,19 @@ export class CLEBedVisualizer {
     console.log('[CLE Bed] Mounted device bed, spoilboard and rulers to 3D viewport.');
   }
 
-  // 1. Spoilboard Slab (Physical MDF / Tooling Plate)
+  // 1. Spoilboard Slab & 600x500x20mm High-Contrast Outline
   buildSpoilboardSlab(THREE) {
     const { spoilboardX, spoilboardY, spoilboardThickness, spoilboardOffsetX, spoilboardOffsetY } = this.config;
 
     // Solid MDF/Aluminum Base Slab
     const slabGeo = new THREE.BoxGeometry(spoilboardX, spoilboardY, spoilboardThickness);
-    // Dark engineering slate/MDF tone
     const slabMat = new THREE.MeshStandardMaterial({
-      color: 0x1e242d,
+      color: 0x1e2632,
       roughness: 0.85,
       metalness: 0.1,
       transparent: true,
-      opacity: 0.88,
-      depthWrite: true
+      opacity: 0.85,
+      depthWrite: false
     });
 
     const slab = new THREE.Mesh(slabGeo, slabMat);
@@ -117,20 +123,43 @@ export class CLEBedVisualizer {
     slab.name = 'CLE_Spoilboard_Slab';
     this.bedGroup.add(slab);
 
-    // Subtle edge highlight for spoilboard border
+    // High-Contrast Spoilboard 3D Box Outline (600x500x20mm)
     const edgesGeo = new THREE.EdgesGeometry(slabGeo);
-    const edgesMat = new THREE.LineBasicMaterial({ color: 0x415065, transparent: true, opacity: 0.6 });
+    const edgesMat = new THREE.LineBasicMaterial({
+      color: 0x38bdf8, // Bright cyan perimeter outline
+      linewidth: 2,
+      transparent: true,
+      opacity: 0.95
+    });
     const slabEdges = new THREE.LineSegments(edgesGeo, edgesMat);
     slab.add(slabEdges);
+
+    // Spoilboard Top Surface Perimeter Outline (Z = 0.08mm)
+    const x0 = spoilboardOffsetX;
+    const x1 = spoilboardOffsetX + spoilboardX;
+    const y0 = spoilboardOffsetY;
+    const y1 = spoilboardOffsetY + spoilboardY;
+    const topPts = [
+      x0, y0, 0.08,  x1, y0, 0.08,
+      x1, y0, 0.08,  x1, y1, 0.08,
+      x1, y1, 0.08,  x0, y1, 0.08,
+      x0, y1, 0.08,  x0, y0, 0.08
+    ];
+    const topGeo = new THREE.BufferGeometry();
+    topGeo.setAttribute('position', new THREE.Float32BufferAttribute(topPts, 3));
+    const topMat = new THREE.LineBasicMaterial({ color: 0x0284c7, linewidth: 3, transparent: true, opacity: 1.0 });
+    const topBorder = new THREE.LineSegments(topGeo, topMat);
+    topBorder.name = 'CLE_Spoilboard_Top_Border';
+    this.bedGroup.add(topBorder);
   }
 
-  // 2. Machine Travel Frame & Millimeter Grid Lines on Spoilboard Surface
+  // 2. Machine Travel Limits Volume (600x500x100mm) & Surface Grid
   buildGridAndExtrusionFrame(THREE) {
-    const { travelX, travelY, spoilboardX, spoilboardY, spoilboardOffsetX, spoilboardOffsetY, gridPitch, majorGridPitch } = this.config;
+    const { travelX, travelY, travelZ, spoilboardX, spoilboardY, spoilboardOffsetX, spoilboardOffsetY, gridPitch, majorGridPitch } = this.config;
 
     const minorPts = [];
     const majorPts = [];
-    const zSurface = 0.04; // Placed right above spoilboard surface to avoid z-fighting
+    const zSurface = 0.06;
 
     const x0 = spoilboardOffsetX;
     const x1 = spoilboardOffsetX + spoilboardX;
@@ -153,40 +182,48 @@ export class CLEBedVisualizer {
       target.push(x0, y, zSurface, x1, y, zSurface);
     }
 
-    // Minor grid lines
+    // Minor grid lines (10mm pitch)
     if (minorPts.length > 0) {
       const minGeo = new THREE.BufferGeometry();
       minGeo.setAttribute('position', new THREE.Float32BufferAttribute(minorPts, 3));
-      const minMat = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.35 });
+      const minMat = new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.45 });
       const minLines = new THREE.LineSegments(minGeo, minMat);
       this.bedGroup.add(minLines);
     }
 
-    // Major grid lines
+    // Major grid lines (50mm pitch)
     if (majorPts.length > 0) {
       const majGeo = new THREE.BufferGeometry();
       majGeo.setAttribute('position', new THREE.Float32BufferAttribute(majorPts, 3));
-      const majMat = new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.75 });
+      const majMat = new THREE.LineBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.85 });
       const majLines = new THREE.LineSegments(majGeo, majMat);
       this.bedGroup.add(majLines);
     }
 
-    // Physical Machine Travel Limits Wireframe (Extrusion Perimeter)
-    const travelPts = [
-      0, 0, zSurface,
-      travelX, 0, zSurface,
-      travelX, 0, zSurface,
-      travelX, travelY, zSurface,
-      travelX, travelY, zSurface,
-      0, travelY, zSurface,
-      0, travelY, zSurface,
-      0, 0, zSurface
+    // 3D Physical Travel Volume Frame (600x500x100mm)
+    const tz = travelZ || 100;
+    const travelBoxPts = [
+      // Base rectangle
+      0, 0, zSurface,  travelX, 0, zSurface,
+      travelX, 0, zSurface,  travelX, travelY, zSurface,
+      travelX, travelY, zSurface,  0, travelY, zSurface,
+      0, travelY, zSurface,  0, 0, zSurface,
+      // Top rectangle at Z = travelZ
+      0, 0, tz,  travelX, 0, tz,
+      travelX, 0, tz,  travelX, travelY, tz,
+      travelX, travelY, tz,  0, travelY, tz,
+      0, travelY, tz,  0, 0, tz,
+      // 4 vertical corner posts
+      0, 0, zSurface,  0, 0, tz,
+      travelX, 0, zSurface,  travelX, 0, tz,
+      travelX, travelY, zSurface,  travelX, travelY, tz,
+      0, travelY, zSurface,  0, travelY, tz
     ];
     const travelGeo = new THREE.BufferGeometry();
-    travelGeo.setAttribute('position', new THREE.Float32BufferAttribute(travelPts, 3));
-    const travelMat = new THREE.LineBasicMaterial({ color: 0xe056fd, linewidth: 2, transparent: true, opacity: 0.85 });
+    travelGeo.setAttribute('position', new THREE.Float32BufferAttribute(travelBoxPts, 3));
+    const travelMat = new THREE.LineBasicMaterial({ color: 0xd946ef, linewidth: 2, transparent: true, opacity: 0.85 });
     const travelFrame = new THREE.LineSegments(travelGeo, travelMat);
-    travelFrame.name = 'CLE_Machine_Travel_Limit_Box';
+    travelFrame.name = 'CLE_Machine_Travel_Volume_Box';
     this.bedGroup.add(travelFrame);
   }
 

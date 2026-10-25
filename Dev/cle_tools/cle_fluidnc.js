@@ -212,28 +212,76 @@ export class CLEFluidNCClient {
         this.bridge.vault.saveMachine(mach);
       }
     }
-    const wsUrl = `ws://${cleanIp}:81`;
+
+    if (this.socket) {
+      try { this.socket.close(); } catch (e) {}
+      this.socket = null;
+    }
+
+    // Probe port 81 (raw FluidNC websocket); fallback to port 80 (/websocket) if port 81 is closed/unreachable
+    this._tryWebSocketConnect(cleanIp, 81, () => {
+      console.log(`[CLE FluidNC] Port 81 unreachable on ${cleanIp}, trying ws://${cleanIp}:80/websocket...`);
+      this._tryWebSocketConnect(cleanIp, 80);
+    });
+  }
+
+  _tryWebSocketConnect(cleanIp, port, onFailFallback = null) {
+    const wsUrl = port === 80 ? `ws://${cleanIp}:80/websocket` : `ws://${cleanIp}:81`;
+    let connected = false;
+    let connectTimeout = null;
+
     try {
-      this.socket = new WebSocket(wsUrl);
-      this.socket.onopen = () => {
+      const ws = new WebSocket(wsUrl);
+      this.socket = ws;
+
+      connectTimeout = setTimeout(() => {
+        if (!connected && ws.readyState !== WebSocket.OPEN) {
+          try { ws.close(); } catch (e) {}
+          if (onFailFallback) {
+            onFailFallback();
+          } else {
+            this.bridge.notify(`Connection timeout connecting to ${cleanIp} (ports 81/80)`, 'error');
+            this.disconnect();
+          }
+        }
+      }, 4000);
+
+      ws.onopen = () => {
+        connected = true;
+        if (connectTimeout) clearTimeout(connectTimeout);
         this.isConnected = true;
         this.connectionType = 'websocket';
-        this.logConsole(`[SYSTEM] Connected to FluidTouch/FluidNC at ${this.ip}.`);
-        this.bridge.notify(`Connected to FluidTouch/FluidNC at ${this.ip}`, 'ok');
+        this.logConsole(`[SYSTEM] Connected to FluidTouch/FluidNC at ${cleanIp}:${port}.`);
+        this.bridge.notify(`Connected to FluidTouch/FluidNC at ${cleanIp} (port ${port})`, 'ok');
         this.updateConnectionUI(true);
         this.startStatusPolling();
       };
-      this.socket.onmessage = (event) => {
+
+      ws.onmessage = (event) => {
         this.handleIncomingData(event.data);
       };
-      this.socket.onerror = (err) => {
-        this.bridge.notify(`WebSocket error connecting to ${this.ip}`, 'error');
+
+      ws.onerror = (err) => {
+        if (!connected && onFailFallback) {
+          if (connectTimeout) clearTimeout(connectTimeout);
+          try { ws.close(); } catch (e) {}
+          onFailFallback();
+          return;
+        }
+        this.bridge.notify(`WebSocket error connecting to ${cleanIp}:${port}`, 'error');
       };
-      this.socket.onclose = () => {
-        this.disconnect();
+
+      ws.onclose = () => {
+        if (connected) {
+          this.disconnect();
+        }
       };
     } catch (err) {
-      this.bridge.notify(`WebSocket failed: ${err.message}`, 'error');
+      if (onFailFallback) {
+        onFailFallback();
+      } else {
+        this.bridge.notify(`WebSocket failed: ${err.message}`, 'error');
+      }
     }
   }
 
@@ -706,7 +754,25 @@ export class CLEFluidNCClient {
   }
 
   openFluidTouchWebGUI() {
-    window.open(`http://${this.ip}`, '_blank');
+    let cleanIp = (this.ip || '192.168.12.158').trim();
+    if (cleanIp === '192.168.12.150' || cleanIp === '192.168.1.150' || cleanIp === '192.168.1.100') {
+      cleanIp = '192.168.12.158';
+    }
+    const url = `http://${cleanIp}`;
+    let win = null;
+    try {
+      win = window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {}
+    if (!win) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => a.remove(), 100);
+    }
+    this.bridge.notify(`Opening FluidTouch Web GUI at ${url}`, 'info');
   }
 
   streamGCode(gcodeText) {

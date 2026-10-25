@@ -21,7 +21,14 @@ files = [
     'cle_boot.js'
 ]
 
-combined_code = ["/* CLEJS Unified Bundle (Non-ES Module for direct file:// Chrome compatibility) */\n(function(){\n'use strict';\n"]
+combined_code = [
+    "/* CLEJS Unified Bundle (Non-ES Module for direct file:// Chrome compatibility) */\n(function(){\n'use strict';\n",
+    "if (typeof THREE !== 'undefined' && THREE.Object3D) {\n"
+    "  if (!THREE.Object3D.prototype.removeFromParent) {\n"
+    "    THREE.Object3D.prototype.removeFromParent = function() { if (this.parent) this.parent.remove(this); return this; };\n"
+    "  }\n"
+    "}\n"
+]
 
 for fname in files:
     fpath = os.path.join(cle_tools_dir, fname)
