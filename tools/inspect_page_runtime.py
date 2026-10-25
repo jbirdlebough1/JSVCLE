@@ -25,18 +25,18 @@ async def run():
         ws_url = js_target["webSocketDebuggerUrl"]
         async with websockets.connect(ws_url) as ws:
             await ws.send(json.dumps({"id": 1, "method": "Runtime.enable"}))
+            await ws.send(json.dumps({"id": 2, "method": "Log.enable"}))
             await asyncio.sleep(1)
             
             checks = [
-                ("typeof THREE", False),
-                ("Boolean(window.CLE.bed && window.CLE.bed.bedGroup && window.CLE.bed.bedGroup.parent)", False),
-                ("(() => { return { camTarget: [app.vp.view.target.x, app.vp.view.target.y, app.vp.view.target.z], gridVisible: app.vp.grid ? app.vp.grid.visible : false }; })()", False),
-                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_MM_LB_Tool_Lines_Overlay'))", False),
-                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_T1_Bed_Boundary'))", False),
-                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_T2_Keepout_Buffer'))", False),
-                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_Clamp_Keepout_Zones'))", False),
-                ("(() => { const slab = window.CLE.bed.bedGroup.getObjectByName('CLE_Spoilboard_Slab'); return { renderOrder: slab.renderOrder, opacity: slab.material.opacity }; })()", False),
-                ("(() => { window.CLE.bed.toggle(); const hidden = !window.CLE.bed.bedGroup.visible; window.CLE.bed.toggle(); const shown = window.CLE.bed.bedGroup.visible; return { toggleHides: hidden, toggleShows: shown }; })()", False)
+                ("(() => { return typeof window.THREE.Material.prototype.onBeforeRender; })()", False),
+                ("(() => { app.setMode('advanced'); return true; })()", False),
+                ("(() => { document.getElementById('ws-cle').click(); return true; })()", False),
+                ("(() => { try { app.vp.render(); return 'RENDER SUCCESSFUL WITH BED ON STARTUP!'; } catch(e) { return 'ERROR: ' + e.message; } })()", False),
+                ("(() => { return { bedVisible: window.CLE.bed.bedGroup.visible }; })()", False),
+                ("(() => { window.CLE.bed.toggle(); app.vp.render(); return { bedVisible: window.CLE.bed.bedGroup.visible }; })()", False),
+                ("(() => { window.CLE.bed.toggle(); app.vp.render(); return { bedVisible: window.CLE.bed.bedGroup.visible }; })()", False),
+                ("(() => { return { spoilboard: window.CLE.bed.bedGroup.getObjectByName('CLE_Spoilboard_Slab') !== null, toolLines: window.CLE.bed.bedGroup.getObjectByName('CLE_MM_LB_Tool_Lines_Overlay') !== null }; })()", False)
             ]
             for idx, (c, await_promise) in enumerate(checks, start=10):
                 await ws.send(json.dumps({
@@ -49,6 +49,8 @@ async def run():
                 try:
                     msg = await asyncio.wait_for(ws.recv(), timeout=2.0)
                     data = json.loads(msg)
+                    if "method" in data and "Console" in data["method"]:
+                        print(f"CONSOLE: {data}")
                     if "id" in data and data["id"] >= 10:
                         req_idx = data["id"] - 10
                         res = data.get("result", {}).get("result", {})
@@ -60,3 +62,4 @@ async def run():
         proc.terminate()
 
 asyncio.run(run())
+

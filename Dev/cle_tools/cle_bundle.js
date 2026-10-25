@@ -3352,6 +3352,12 @@ class CLESlicerEngine {
       return;
     }
 
+    if (THREE.Material && !THREE.Material.prototype.onBeforeRender) {
+      THREE.Material.prototype.onBeforeRender = function() {};
+    }
+    if (THREE.Object3D && !THREE.Object3D.prototype.onBeforeRender) {
+      THREE.Object3D.prototype.onBeforeRender = function() {};
+    }
     if (THREE.Object3D && !THREE.Object3D.prototype.removeFromParent) {
       THREE.Object3D.prototype.removeFromParent = function() {
         if (this.parent) this.parent.remove(this);
@@ -4342,6 +4348,12 @@ class CLEBedVisualizer {
       return;
     }
 
+    if (THREE.Material && !THREE.Material.prototype.onBeforeRender) {
+      THREE.Material.prototype.onBeforeRender = function() {};
+    }
+    if (THREE.Object3D && !THREE.Object3D.prototype.onBeforeRender) {
+      THREE.Object3D.prototype.onBeforeRender = function() {};
+    }
     if (THREE.Object3D && !THREE.Object3D.prototype.removeFromParent) {
       THREE.Object3D.prototype.removeFromParent = function() {
         if (this.parent) this.parent.remove(this);
@@ -5158,6 +5170,21 @@ class CLEBridge {
 
   registerWithJumpStart() {
     const app = window.app || window.xe;
+    const THREE = window.THREE;
+    if (THREE) {
+      if (THREE.Material && !THREE.Material.prototype.onBeforeRender) {
+        THREE.Material.prototype.onBeforeRender = function() {};
+      }
+      if (THREE.Object3D && !THREE.Object3D.prototype.onBeforeRender) {
+        THREE.Object3D.prototype.onBeforeRender = function() {};
+      }
+      if (THREE.Object3D && !THREE.Object3D.prototype.removeFromParent) {
+        THREE.Object3D.prototype.removeFromParent = function() {
+          if (this.parent) this.parent.remove(this);
+          return this;
+        };
+      }
+    }
     if (app && app.vp) {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
       if (this.bed) this.bed.init();
