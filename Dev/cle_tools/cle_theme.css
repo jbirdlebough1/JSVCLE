@@ -1,0 +1,280 @@
+/* CLEJS Theme - Modular extensions for JumpStart 3D */
+/* Harmonized with JumpStart CSS variables: --paper, --panel, --ink, --block, --accent */
+
+.cle-top-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 4px 10px;
+  font: 600 12px/1 var(--f-ui);
+  cursor: pointer;
+  margin-left: 8px;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.cle-top-btn:hover {
+  background: var(--accent-2);
+}
+.cle-top-btn:active {
+  transform: scale(0.97);
+}
+
+.cle-badge {
+  background: var(--amber);
+  color: #000;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.cle-badge.connected {
+  background: var(--ok);
+  color: #fff;
+}
+.cle-badge.alert {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* CLE Ribbon Bar under the main topbar */
+#cle-ribbon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--block-2);
+  color: var(--block-ink);
+  font: 12px/1 var(--f-ui);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+  z-index: 100;
+}
+.cle-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.cle-group-label {
+  font: 600 10px/1 var(--f-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-right: 4px;
+  letter-spacing: 0.05em;
+}
+
+.cle-btn {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: 500 11px/1.2 var(--f-ui);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.cle-btn:hover {
+  background: var(--hover-line);
+  border-color: var(--accent);
+}
+.cle-btn.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent-2);
+}
+.cle-btn.danger {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+/* Digital Readout (DRO) */
+.cle-dro-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+}
+.cle-dro-axis {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.cle-dro-name {
+  font-weight: 700;
+  color: var(--accent-2);
+}
+.cle-dro-val {
+  min-width: 54px;
+  text-align: right;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+/* Gamepad Status Pill */
+.cle-gamepad-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.cle-gamepad-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.cle-gamepad-dot.connected {
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+}
+
+/* Modal Windows */
+.cle-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.cle-modal {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: 0 12px 36px var(--shadow);
+  width: 90%;
+  max-width: 720px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font: 13px/1.4 var(--f-ui);
+}
+.cle-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: var(--block);
+  color: var(--block-ink);
+  font: 700 15px/1 var(--f-label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.cle-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--block-ink);
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+}
+.cle-modal-body {
+  padding: 18px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.cle-modal-footer {
+  padding: 10px 18px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Tabs inside modals */
+.cle-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.cle-tab {
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 500;
+}
+.cle-tab.active {
+  background: var(--panel-2);
+  border-color: var(--line);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* Grid & Form controls */
+.cle-form-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.cle-form-row label {
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.cle-input, .cle-select {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--ink);
+  font-family: var(--f-mono);
+  font-size: 12px;
+}
+.cle-input:focus, .cle-select:focus {
+  outline: 2px solid var(--focus);
+}
+
+/* Switch Controller Visualizer Layout */
+.cle-switch-diagram {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  font-size: 12px;
+}
+.cle-joycon-panel {
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+}
+.cle-joycon-title {
+  font: 700 13px/1 var(--f-label);
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  color: var(--accent);
+}
