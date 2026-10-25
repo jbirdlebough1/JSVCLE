@@ -133,9 +133,17 @@ class CLEBridge {
     m(activeMach.name, "", [
       { id: "cle-r-devices", label: "Devices", title: "Select or Configure Machine Profiles (Like LightBurn/MillMage)", icon: "features", fn: () => this.openModal("machines") },
       { id: "cle-r-serial", label: "USB List", title: "Select & Connect USB Serial COM Port to FluidNC", icon: "drive", fn: () => this.fluidnc.connectSerial() },
-      { id: "cle-r-ws", label: "WiFi Setup", title: "Configure FluidTouch 7\" / FluidNC WiFi IP & WebSocket", icon: "motion", fn: () => {
-          const ip = prompt("Enter FluidTouch 7\" / FluidNC IP:", this.fluidnc.ip);
-          if (ip) this.fluidnc.connectWebSocket(ip);
+      { id: "cle-r-ws", label: "WiFi Setup", title: "Configure FluidTouch 7\" / FluidNC WiFi IP & WebSocket", icon: "motion", fn: async () => {
+          const currentIp = this.fluidnc.ip || activeMach.wifiIP || '192.168.12.158';
+          const ip = prompt("Enter FluidTouch 7\" / FluidNC IP:", currentIp);
+          if (ip && ip.trim()) {
+            const cleanIp = ip.trim();
+            this.fluidnc.ip = cleanIp;
+            localStorage.setItem('cle.fluidnc.ip', cleanIp);
+            activeMach.wifiIP = cleanIp;
+            await this.vault.saveMachine(activeMach);
+            this.fluidnc.connectWebSocket(cleanIp);
+          }
       }},
       { id: "cle-r-connect", label: "Connect", title: "Direct Machine Connect / Disconnect", icon: "drive", pressed: this.fluidnc.isConnected, fn: () => this.connectActiveMachine() },
       { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "motion", fn: () => this.fluidnc.openFluidTouchWebGUI() },
@@ -792,7 +800,7 @@ class CLEBridge {
             </div>
             <div class="cle-form-row">
               <label>WiFi IP (FluidTouch/FluidNC):</label>
-              <input class="cle-input" id="cle-m-ip" value="${activeMach.wifiIP || '192.168.1.150'}">
+              <input class="cle-input" id="cle-m-ip" value="${activeMach.wifiIP || '192.168.12.158'}">
             </div>
             <div class="cle-form-row">
               <label>Storage Endpoints:</label>
@@ -1035,7 +1043,7 @@ class CLEBridge {
         document.getElementById('cle-m-buffer').value = mach.clearanceX || 5.0;
         document.getElementById('cle-m-maxfeed').value = mach.maxRateXY || 5000;
         document.getElementById('cle-m-rpm').value = mach.spindleMaxRPM || 24000;
-        document.getElementById('cle-m-ip').value = mach.wifiIP || '192.168.1.150';
+        document.getElementById('cle-m-ip').value = mach.wifiIP || '192.168.12.158';
       };
 
       const selector = document.getElementById('cle-mach-selector');
@@ -1102,7 +1110,7 @@ class CLEBridge {
         curMach.clearanceY = curMach.clearanceX;
         curMach.maxRateXY = parseFloat(document.getElementById('cle-m-maxfeed').value) || 5000;
         curMach.spindleMaxRPM = parseFloat(document.getElementById('cle-m-rpm').value) || 24000;
-        curMach.wifiIP = document.getElementById('cle-m-ip').value.trim() || '192.168.1.150';
+        curMach.wifiIP = document.getElementById('cle-m-ip').value.trim() || '192.168.12.158';
 
         await this.vault.saveMachine(curMach);
         if (this.bed) this.bed.rebuild();
@@ -1124,7 +1132,7 @@ class CLEBridge {
             clearanceX: 5.0,
             maxRateXY: 5000,
             spindleMaxRPM: 24000,
-            wifiIP: '192.168.1.150'
+            wifiIP: '192.168.12.158'
           };
           this.vault.saveMachine(newMach);
           this.openModal('machines');

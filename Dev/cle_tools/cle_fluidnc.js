@@ -14,7 +14,8 @@ export class CLEFluidNCClient {
     this.reader = null;
     this.writer = null;
     this.socket = null;
-    this.ip = localStorage.getItem('cle.fluidnc.ip') || '192.168.1.100';
+    const cachedIp = localStorage.getItem('cle.fluidnc.ip');
+    this.ip = (cachedIp && cachedIp !== '192.168.1.100' && cachedIp !== '192.168.1.150' && cachedIp !== '192.168.12.150') ? cachedIp : '192.168.12.158';
     this.baud = 115200;
     
     // Status State
@@ -193,8 +194,15 @@ export class CLEFluidNCClient {
 
   // --- WebSocket Connection (FluidTouch 7" Head / FluidNC) ---
   connectWebSocket(ip = this.ip) {
-    this.ip = ip;
-    localStorage.setItem('cle.fluidnc.ip', ip);
+    this.ip = (ip || '192.168.12.158').trim();
+    localStorage.setItem('cle.fluidnc.ip', this.ip);
+    if (this.bridge && this.bridge.vault) {
+      const mach = this.bridge.vault.getActiveMachine();
+      if (mach && mach.wifiIP !== this.ip) {
+        mach.wifiIP = this.ip;
+        this.bridge.vault.saveMachine(mach);
+      }
+    }
     const wsUrl = `ws://${this.ip}:81`;
     try {
       this.socket = new WebSocket(wsUrl);

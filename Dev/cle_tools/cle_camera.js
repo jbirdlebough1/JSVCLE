@@ -10,7 +10,7 @@ export class CLECameraEngine {
     this.activeType = 'none'; // 'usb' | 'wifi' | 'none'
     this.stream = null;
     this.selectedDeviceId = localStorage.getItem('cle.cam.deviceId') || '';
-    this.wifiUrl = localStorage.getItem('cle.cam.wifiUrl') || 'http://192.168.1.150:8080/video';
+    this.wifiUrl = localStorage.getItem('cle.cam.wifiUrl') || 'http://192.168.12.158:8080/video';
     this.reticleMode = 'crosshair'; // 'none' | 'crosshair' | 'bullseye' | 'grid'
     this.reticleColor = '#00ff66';   // High-contrast green
     this.cameraOffset = { X: 0.0, Y: 0.0 }; // Offset from camera center to spindle/laser center (mm)

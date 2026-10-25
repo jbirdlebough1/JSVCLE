@@ -342,7 +342,7 @@ export class CLEVault {
         maxRateXY: 5000,
         maxRateZ: 500,
         maxRateA: 2000,
-        wifiIP: '192.168.1.150',
+        wifiIP: '192.168.12.158',
         activeHead: 'spindle', // 'spindle' | 'laser'
         activeSpindleIndex: 0,
         activeLaserIndex: 0,
@@ -465,6 +465,15 @@ export class CLEVault {
       if (mach.spoilboardThickness === undefined) mach.spoilboardThickness = 15.0;
       if (mach.spoilboardOffsetX === undefined) mach.spoilboardOffsetX = 0.0;
       if (mach.spoilboardOffsetY === undefined) mach.spoilboardOffsetY = 0.0;
+
+      // Ensure accurate FluidTouch / FluidNC WiFi IP
+      const savedFluidIp = localStorage.getItem('cle.fluidnc.ip');
+      if (savedFluidIp && savedFluidIp.trim()) {
+        mach.wifiIP = savedFluidIp.trim();
+      } else if (!mach.wifiIP || mach.wifiIP === '192.168.1.150' || mach.wifiIP === '192.168.12.150' || mach.wifiIP === '192.168.1.100') {
+        mach.wifiIP = '192.168.12.158';
+        localStorage.setItem('cle.fluidnc.ip', '192.168.12.158');
+      }
     }
     return mach;
   }
@@ -486,7 +495,14 @@ export class CLEVault {
       const raw = localStorage.getItem('cle.vault.machines');
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          parsed.forEach(m => {
+            if (!m.wifiIP || m.wifiIP === '192.168.1.150' || m.wifiIP === '192.168.12.150' || m.wifiIP === '192.168.1.100') {
+              m.wifiIP = '192.168.12.158';
+            }
+          });
+          return parsed;
+        }
       }
     } catch {}
     return this.getDefaultMachines();
