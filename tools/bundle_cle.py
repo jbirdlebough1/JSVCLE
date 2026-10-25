@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import os
+import sys
 
-cle_tools_dir = r'D:\CLEJS\Dev\cle_tools'
+script_dir = os.path.dirname(os.path.abspath(__file__))
+repo_root = os.path.abspath(os.path.join(script_dir, '..'))
+cle_tools_dir = os.path.join(repo_root, 'Dev', 'cle_tools')
 
 files = [
+    'cle_camera.js',
     'cle_gamepad.js',
     'cle_fluidnc.js',
     'cle_rotary.js',

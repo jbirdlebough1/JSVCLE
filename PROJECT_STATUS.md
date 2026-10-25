@@ -42,7 +42,7 @@ When an AI agent opens this repository in a new session:
 
 | Conversation ID | Model | Date Started | Status | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Built Manual CNC/Laser Control Center popup with live DRO, terminal console, remote camera feed (USB/IP), Bed Safety Soft-Limits (Z>=0.1mm, X/Y max -5mm), Spindle/Laser toggle, G-code macro recorder, fixed D-Pad cross button and pan vertical. |
+| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Built Generic Camera Subsystem (USB webcam auto-enumeration, Logitech C270 720p/30fps, open Wi-Fi/IP MJPEG stream), optical crosshairs/reticles (digital edge finder with WCS zeroing), workpiece snapshot capture, and viewport PiP docking. Full Manual CNC/Laser Control Center, Bed Safety Soft-Limits, D-Pad integration, and Sliced Stack Visualizer. |
 
 ---
 
@@ -72,3 +72,11 @@ When an AI agent opens this repository in a new session:
   - Renders 3D layer toolpaths directly in Three.js viewport with color elevation gradient.
   - Floating layer slider HUD (`[ < ] [ Layer N / Total ] [ > ] [ Show All ]`).
   - Direct SD Card upload to FluidNC / FluidTouch 7" local storage.
+- [x] **Generic Camera Engine (USB Webcams & Open Wi-Fi/IP Streams)**:
+  - Supports any standard USB camera via HTML5 WebRTC `getUserMedia` with auto-enumeration and persistent device selection.
+  - Auto-selects Logitech C270 HD WebCam connected on CL3 (720p @ 30 FPS, ~30ms latency, zero cloud dependence).
+  - Supports open Wi-Fi/IP cameras via MJPEG / HTTP streaming with persistent stream URL.
+  - Optical Reticle & Digital Edge Finder: High-contrast green overlay with 4 cycleable modes (Crosshair with 5mm tick marks, Concentric Bullseye, Alignment Grid, Off).
+  - Optical WCS Zeroing: Sets WCS zero at optical crosshair location (`G10 L20 P1`) accounting for configurable camera-to-spindle/laser offsets.
+  - One-click Workpiece Snapshot capture: Exports timestamped 1280x720 PNG directly to disk.
+  - Viewport Picture-in-Picture Docking: Floats live video feed into bottom-right of 3D scene.

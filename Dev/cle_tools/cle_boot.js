@@ -1,6 +1,7 @@
 /**
- * CLEJS - Master Extension Bootstrapper (V3)
- * Advanced Mode Ribbon, Manual CNC/Laser Control Center, Live Remote Camera Feed
+ * CLEJS - Master Extension Bootstrapper (V4)
+ * Advanced Mode Ribbon, Manual CNC/Laser Control Center, Generic USB/Wi-Fi Camera Engine,
+ * Optical Crosshair Reticle & Viewport Picture-in-Picture
  */
 
 import { CLEGamepadEngine } from './cle_gamepad.js';
@@ -11,12 +12,14 @@ import { CLEVault } from './cle_vault.js';
 import { CLETestEngine } from './cle_test.js';
 import { CLEJobRecoveryEngine } from './cle_recovery.js';
 import { CLESlicerEngine } from './cle_slicer.js';
+import { CLECameraEngine } from './cle_camera.js';
 
 class CLEBridge {
   constructor() {
-    this.version = '1.2.0';
+    this.version = '1.3.0';
     this.vault = new CLEVault(this);
     this.fluidnc = new CLEFluidNCClient(this);
+    this.camera = new CLECameraEngine(this);
     this.gamepad = new CLEGamepadEngine(this);
     this.rotary = new CLERotaryEngine(this);
     this.calibration = new CLECalibrationEngine(this);
@@ -25,7 +28,6 @@ class CLEBridge {
     this.slicer = new CLESlicerEngine(this);
 
     this.activeModal = null;
-    this.cameraStream = null;
   }
 
   notify(message, type = 'info') {
@@ -106,8 +108,8 @@ class CLEBridge {
     // 2. Controller Section
     m("Manual Control", "", [
       { id: "cle-r-gp-mode", label: this.gamepad.mode === "design" ? "Design 3D" : "Manual CNC/Laser", title: "Toggle Switch Controller Mode", icon: "motion", pressed: this.gamepad.mode === "manual", fn: () => this.gamepad.toggleMode() },
-      { id: "cle-r-manual-hub", label: "Control Center", title: "Open Manual CNC/Laser Control & Camera Feed", icon: "inspect", fn: () => this.openManualControlCenter() },
-      { id: "cle-r-gp-remap", label: "Controller Setup", title: "Configure Switch Controller Buttons", icon: "settings", fn: () => this.openModal("gamepad") }
+      { id: "cle-r-manual-hub", label: "Control Center", title: "Open Manual CNC/Laser Control, Camera & DRO", icon: "inspect", fn: () => this.openManualControlCenter() },
+      { id: "cle-r-gp-remap", label: "Controller Setup", title: "Configure Switch Controller Buttons & D-Pad", icon: "settings", fn: () => this.openModal("gamepad") }
     ]);
 
     // 3. 4th Axis & Slicer
@@ -147,7 +149,7 @@ class CLEBridge {
   }
 
   // --- Pop-up Manual CNC / Laser Control Center ---
-  openManualControlCenter() {
+  async openManualControlCenter() {
     let hub = document.getElementById('cle-manual-hub');
     if (hub) {
       hub.style.display = 'flex';
@@ -160,7 +162,7 @@ class CLEBridge {
       position: fixed;
       top: 90px;
       right: 20px;
-      width: 440px;
+      width: 460px;
       max-height: 85vh;
       background: var(--panel);
       color: var(--ink);
@@ -223,25 +225,48 @@ class CLEBridge {
           </div>
         </div>
 
-        <!-- Live Camera Feed Container -->
-        <div class="cle-joycon-panel" style="padding:8px 10px;">
-          <div class="cle-joycon-title" style="margin-bottom:6px;">Remote Workpiece Camera Feed</div>
-          <video id="cle-webcam-preview" autoplay playsinline style="display:none; width:100%; height:160px; border-radius:4px; object-fit:cover; background:#000;"></video>
-          <img id="cle-mjpeg-preview" style="display:none; width:100%; height:160px; border-radius:4px; object-fit:cover; background:#000;">
-          <div id="cle-cam-placeholder" style="height:100px; display:flex; align-items:center; justify-content:center; background:var(--paper); border:1px dashed var(--line); border-radius:4px; color:var(--ink-3); text-align:center; padding:10px;">
-            Camera inactive. Click USB Webcam or Network IP Cam to stream workpiece.
+        <!-- Generic Camera Subsystem (USB / Wi-Fi + Reticle Overlay) -->
+        <div class="cle-joycon-panel" id="cle-cam-wrapper" style="padding:8px 10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span class="cle-joycon-title">Workpiece Camera (USB & Wi-Fi)</span>
+            <div style="display:flex; gap:6px;">
+              <button class="cle-btn" id="cle-cam-btn-reticle" title="Cycle Reticle: Crosshair / Bullseye / Grid / Off">Crosshair: ON</button>
+              <button class="cle-btn" id="cle-cam-btn-snap" title="Capture Still Image">Snapshot</button>
+              <button class="cle-btn" id="cle-cam-btn-dock" title="Dock in corner of 3D viewport">Dock PiP</button>
+            </div>
           </div>
-          <div style="display:flex; gap:6px; margin-top:6px;">
-            <button class="cle-btn" id="cle-cam-usb">USB Webcam</button>
-            <button class="cle-btn" id="cle-cam-ip">Network IP Cam</button>
-            <button class="cle-btn" id="cle-cam-stop">Stop</button>
+
+          <!-- Video & Overlay Viewport -->
+          <div style="position:relative; width:100%; height:180px; background:#000; border-radius:4px; overflow:hidden;">
+            <video id="cle-cam-video" autoplay playsinline style="display:none; width:100%; height:100%; object-fit:cover;"></video>
+            <img id="cle-cam-img" style="display:none; width:100%; height:100%; object-fit:cover;">
+            <canvas id="cle-cam-canvas" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;"></canvas>
+            
+            <div id="cle-cam-placeholder" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--ink-3); text-align:center; padding:10px; background:var(--paper);">
+              Camera inactive. Select USB or Wi-Fi cam below.
+            </div>
+          </div>
+
+          <!-- Camera Source Selector Controls -->
+          <div style="display:flex; gap:6px; margin-top:8px; align-items:center;">
+            <select class="cle-select" id="cle-cam-device-select" style="flex:1;">
+              <option value="">Detecting USB Cameras...</option>
+            </select>
+            <button class="cle-btn" id="cle-cam-btn-start-usb">Start USB</button>
+            <button class="cle-btn" id="cle-cam-btn-wifi">Wi-Fi Cam</button>
+            <button class="cle-btn" id="cle-cam-btn-stop">Stop</button>
+          </div>
+
+          <!-- Optical Edge Finder Zeroing Action -->
+          <div style="display:flex; gap:6px; margin-top:6px; align-items:center; justify-content:space-between;">
+            <button class="cle-btn" id="cle-cam-btn-zero-cross" style="flex:1; background:var(--accent-soft); border-color:var(--accent);" title="Set Workpiece Origin at Crosshair Center">Zero WCS to Crosshair (Optical Edge)</button>
           </div>
         </div>
 
         <!-- Live G-Code Terminal Console -->
         <div class="cle-joycon-panel" style="padding:8px 10px;">
           <div class="cle-joycon-title" style="margin-bottom:4px;">Live FluidNC Console</div>
-          <div id="cle-man-console-body" style="height:90px; overflow-y:auto; background:var(--block); color:#5fc27f; padding:6px; border-radius:4px; font-family:var(--f-mono); font-size:10px;">
+          <div id="cle-man-console-body" style="height:80px; overflow-y:auto; background:var(--block); color:#5fc27f; padding:6px; border-radius:4px; font-family:var(--f-mono); font-size:10px;">
             <div>[CLE] Manual Console Ready.</div>
           </div>
           <div style="display:flex; gap:6px; margin-top:6px;">
@@ -253,6 +278,18 @@ class CLEBridge {
     `;
 
     document.body.appendChild(hub);
+
+    // Enumerate USB Cameras into dropdown
+    const devSelect = document.getElementById('cle-cam-device-select');
+    const devices = await this.camera.getAvailableDevices();
+    if (devices.length > 0) {
+      devSelect.innerHTML = devices.map(d => `<option value="${d.deviceId}">${d.label || 'USB Camera'}</option>`).join('');
+      // Auto-select Logi C270 if found
+      const logi = devices.find(d => /logi|c270|webcam/i.test(d.label));
+      if (logi) devSelect.value = logi.deviceId;
+    } else {
+      devSelect.innerHTML = '<option value="">Default USB Video Device</option>';
+    }
 
     // Wire Events
     document.getElementById('cle-man-close').onclick = () => { hub.style.display = 'none'; };
@@ -277,51 +314,33 @@ class CLEBridge {
       this.fluidnc.exportRecordedGCode();
     };
 
-    // Camera Feed
-    document.getElementById('cle-cam-usb').onclick = async () => {
-      const v = document.getElementById('cle-webcam-preview');
-      const p = document.getElementById('cle-cam-placeholder');
-      const img = document.getElementById('cle-mjpeg-preview');
-      img.style.display = 'none';
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-        this.cameraStream = stream;
-        v.srcObject = stream;
-        v.style.display = 'block';
-        p.style.display = 'none';
-        this.notify('USB Webcam stream connected.', 'ok');
-      } catch (err) {
-        this.notify(`Webcam error: ${err.message}`, 'error');
-      }
+    // Camera Subsystem Events
+    document.getElementById('cle-cam-btn-start-usb').onclick = () => {
+      this.camera.startUSBCamera(devSelect.value);
     };
-
-    document.getElementById('cle-cam-ip').onclick = () => {
-      const url = prompt('Enter Network Camera Stream URL (MJPEG / HTTP):', 'http://192.168.1.150:8080/stream');
-      if (url) {
-        const v = document.getElementById('cle-webcam-preview');
-        const p = document.getElementById('cle-cam-placeholder');
-        const img = document.getElementById('cle-mjpeg-preview');
-        v.style.display = 'none';
-        img.src = url;
-        img.style.display = 'block';
-        p.style.display = 'none';
-        this.notify(`Connected to IP camera at ${url}`, 'ok');
-      }
+    document.getElementById('cle-cam-btn-wifi').onclick = () => {
+      const url = prompt('Enter Wi-Fi Camera Stream URL (MJPEG / HTTP):', this.camera.wifiUrl);
+      if (url) this.camera.startWiFiCamera(url);
     };
-
-    document.getElementById('cle-cam-stop').onclick = () => {
-      const v = document.getElementById('cle-webcam-preview');
-      const p = document.getElementById('cle-cam-placeholder');
-      const img = document.getElementById('cle-mjpeg-preview');
-      if (this.cameraStream) {
-        this.cameraStream.getTracks().forEach(t => t.stop());
-        this.cameraStream = null;
-      }
-      v.style.display = 'none';
-      img.style.display = 'none';
-      img.src = '';
-      p.style.display = 'flex';
-      this.notify('Camera stopped.');
+    document.getElementById('cle-cam-btn-stop').onclick = () => {
+      this.camera.stopCamera();
+    };
+    document.getElementById('cle-cam-btn-reticle').onclick = () => {
+      const modes = ['crosshair', 'bullseye', 'grid', 'none'];
+      const curIdx = modes.indexOf(this.camera.reticleMode);
+      this.camera.reticleMode = modes[(curIdx + 1) % modes.length];
+      document.getElementById('cle-cam-btn-reticle').textContent = `Reticle: ${this.camera.reticleMode.toUpperCase()}`;
+      this.camera.updateReticleCanvas();
+    };
+    document.getElementById('cle-cam-btn-snap').onclick = () => {
+      this.camera.captureSnapshot();
+    };
+    document.getElementById('cle-cam-btn-dock').onclick = () => {
+      this.camera.toggleViewportDock();
+      document.getElementById('cle-cam-btn-dock').textContent = this.camera.docked ? 'Undock' : 'Dock PiP';
+    };
+    document.getElementById('cle-cam-btn-zero-cross').onclick = () => {
+      this.camera.zeroToCrosshair();
     };
 
     // Console Send
@@ -336,6 +355,9 @@ class CLEBridge {
     document.getElementById('cle-man-gcode-input').onkeydown = (e) => {
       if (e.key === 'Enter') sendInput();
     };
+
+    // Redraw reticle on resize
+    window.addEventListener('resize', () => this.camera.updateReticleCanvas());
   }
 
   openModal(type) {
@@ -616,7 +638,6 @@ class CLEBridge {
       if (rxEl) rxEl.textContent = rx.toFixed(2);
       if (ryEl) ryEl.textContent = ry.toFixed(2);
 
-      // D-Pad Cross Button Monitor
       if (dpad) {
         const updateTag = (id, active) => {
           const el = document.getElementById(id);
@@ -631,7 +652,6 @@ class CLEBridge {
         updateTag('cle-dpad-right-tag', dpad.dpadRight);
       }
 
-      // Light up buttons on live test strip
       gp.buttons.forEach((btn, idx) => {
         const isPressed = btn && (typeof btn === 'object' ? btn.pressed : btn > 0.5);
         const tag = document.getElementById(`cle-btn-tag-${idx}`);

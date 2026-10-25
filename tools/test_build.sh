@@ -20,6 +20,7 @@ echo -e "\033[0;34m==========================================\033[0m"
 # 1. Test Syntax of all JavaScript modules
 echo -e "\n\033[0;33m[Test 1/5] Verifying JavaScript modules syntax...\033[0m"
 JS_FILES=(
+    "$PROJECT_ROOT/Dev/cle_tools/cle_camera.js"
     "$PROJECT_ROOT/Dev/cle_tools/cle_boot.js"
     "$PROJECT_ROOT/Dev/cle_tools/cle_gamepad.js"
     "$PROJECT_ROOT/Dev/cle_tools/cle_fluidnc.js"
