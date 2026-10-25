@@ -280,6 +280,46 @@ class CLEBridge {
           </div>
         </div>
 
+        <!-- Surface Compensation (0.1mm Micro-stepping for Uneven Surface) -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span class="cle-joycon-title" style="margin:0;">Surface Compensation (&plusmn;0.1mm)</span>
+            <span style="font-size:10px; color:var(--accent); font-weight:600;" id="cle-comp-status">Active Nudge: 0.1mm</span>
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px;">
+            <div style="display:flex; flex-direction:column; gap:4px; text-align:center;">
+              <span style="font-size:10px; font-weight:700;">X</span>
+              <button class="cle-btn" id="cle-comp-xp" style="justify-content:center; padding:2px;">+0.1</button>
+              <button class="cle-btn" id="cle-comp-xm" style="justify-content:center; padding:2px;">-0.1</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:4px; text-align:center;">
+              <span style="font-size:10px; font-weight:700;">Y</span>
+              <button class="cle-btn" id="cle-comp-yp" style="justify-content:center; padding:2px;">+0.1</button>
+              <button class="cle-btn" id="cle-comp-ym" style="justify-content:center; padding:2px;">-0.1</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:4px; text-align:center;">
+              <span style="font-size:10px; font-weight:700; color:var(--accent);">Z</span>
+              <button class="cle-btn" id="cle-comp-zp" style="justify-content:center; padding:2px; font-weight:700;">+0.1</button>
+              <button class="cle-btn" id="cle-comp-zm" style="justify-content:center; padding:2px; font-weight:700;">-0.1</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:4px; text-align:center;">
+              <span style="font-size:10px; font-weight:700;">A</span>
+              <button class="cle-btn" id="cle-comp-ap" style="justify-content:center; padding:2px;">+0.1&deg;</button>
+              <button class="cle-btn" id="cle-comp-am" style="justify-content:center; padding:2px;">-0.1&deg;</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Move Current Point (Safe Workpiece Positioning) -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:6px;">Move Current Point (Safe Z Clearance)</div>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input class="cle-input" id="cle-mcp-x" type="number" placeholder="Target X" style="padding:3px 6px; font-size:11px; width:70px;">
+            <input class="cle-input" id="cle-mcp-y" type="number" placeholder="Target Y" style="padding:3px 6px; font-size:11px; width:70px;">
+            <button class="cle-btn" id="cle-mcp-go" style="background:var(--accent); color:var(--on-accent); font-weight:600; flex:1;">Move Point (Z-Safe)</button>
+          </div>
+        </div>
+
         <!-- Spindle & Laser Controls -->
         <div class="cle-joycon-panel" style="padding:8px 10px;">
           <div class="cle-joycon-title" style="margin-bottom:6px;">Spindle & Laser Controls</div>
@@ -400,6 +440,27 @@ class CLEBridge {
       this.fluidnc.exportRecordedGCode();
     };
 
+    // Surface Compensation Events (0.1mm micro-steps)
+    document.getElementById('cle-comp-xp').onclick = () => this.fluidnc.compensateAxis('X', 0.1);
+    document.getElementById('cle-comp-xm').onclick = () => this.fluidnc.compensateAxis('X', -0.1);
+    document.getElementById('cle-comp-yp').onclick = () => this.fluidnc.compensateAxis('Y', 0.1);
+    document.getElementById('cle-comp-ym').onclick = () => this.fluidnc.compensateAxis('Y', -0.1);
+    document.getElementById('cle-comp-zp').onclick = () => this.fluidnc.compensateAxis('Z', 0.1);
+    document.getElementById('cle-comp-zm').onclick = () => this.fluidnc.compensateAxis('Z', -0.1);
+    document.getElementById('cle-comp-ap').onclick = () => this.fluidnc.compensateAxis('A', 0.1);
+    document.getElementById('cle-comp-am').onclick = () => this.fluidnc.compensateAxis('A', -0.1);
+
+    // Move Current Point (Safe clearance retract first)
+    document.getElementById('cle-mcp-go').onclick = () => {
+      const tx = parseFloat(document.getElementById('cle-mcp-x').value);
+      const ty = parseFloat(document.getElementById('cle-mcp-y').value);
+      if (!isNaN(tx) && !isNaN(ty)) {
+        this.moveCurrentPoint(tx, ty);
+      } else {
+        this.notify('Enter valid target X and Y coordinates.', 'error');
+      }
+    };
+
     // Camera Subsystem Events
     document.getElementById('cle-cam-btn-start-usb').onclick = () => {
       this.camera.startUSBCamera(devSelect.value);
@@ -444,6 +505,85 @@ class CLEBridge {
     };
 
     window.addEventListener('resize', () => this.camera.updateReticleCanvas());
+  }
+
+  // --- Safe Workpiece Navigation: Move Current Point ---
+  moveCurrentPoint(targetX, targetY) {
+    if (!this.fluidnc || !this.fluidnc.isConnected) {
+      this.notify('Connect to machine first.', 'error');
+      return;
+    }
+    this.notify(`Moving tool to X:${targetX.toFixed(1)} Y:${targetY.toFixed(1)} (Safe Z Retract first)...`, 'info');
+    // 1. Safe clearance retract
+    this.fluidnc.sendImmediate('G0 Z20.000 F800\n');
+    // 2. Rapid traverse to target XY
+    this.fluidnc.sendImmediate(`G0 X${targetX.toFixed(3)} Y${targetY.toFixed(3)} F3000\n`);
+  }
+
+  // --- Manual Tool Change Card (M6 Intercept Routine) ---
+  openToolChangeCard(resumeState) {
+    let card = document.getElementById('cle-tool-change-card');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'cle-tool-change-card';
+      card.style.cssText = `
+        position: fixed;
+        top: 80px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 440px;
+        background: var(--panel);
+        color: var(--ink);
+        border: 2px solid var(--accent);
+        border-radius: 10px;
+        box-shadow: 0 16px 48px var(--shadow);
+        z-index: 10000;
+        padding: 16px;
+        font-family: var(--f);
+      `;
+      document.body.appendChild(card);
+    }
+
+    const tool = (this.toolLibrary && this.toolLibrary.tools)
+      ? (this.toolLibrary.tools.find(t => t.number === resumeState.toolNum) || { name: `Tool #${resumeState.toolNum}`, type: 'Endmill / Laser', diameter: 3.175 })
+      : { name: `Tool #${resumeState.toolNum}`, type: 'Endmill / Laser', diameter: 3.175 };
+
+    card.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:12px;">
+        <span style="font-size:14px; font-weight:800; color:var(--accent);">Manual Tool Change Required</span>
+        <span class="cle-badge alert">Job Paused</span>
+      </div>
+      <div class="cle-joycon-panel" style="padding:10px; margin-bottom:12px;">
+        <div style="font-size:13px; font-weight:700; color:var(--ink);">Please Install: Tool #${resumeState.toolNum} &mdash; ${tool.name}</div>
+        <div style="font-size:11px; color:var(--ink-2); margin-top:4px;">Type: ${tool.type} | Diameter: ${tool.diameter}mm</div>
+        <div style="font-size:11px; color:var(--ink-3); margin-top:2px;">Requested at G-code line ${resumeState.lineIndex}: <code>${resumeState.gcodeLine}</code></div>
+      </div>
+      <div style="font-size:11px; color:var(--ink-2); margin-bottom:10px;">
+        Saved Resume Position: <strong>X: ${resumeState.lastPos.X.toFixed(2)}, Y: ${resumeState.lastPos.Y.toFixed(2)}, Z: ${resumeState.lastPos.Z.toFixed(2)}</strong> (Spindle is safely retracted at Z=20mm)
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px;">
+        <button class="cle-btn" id="cle-tc-btn-probe">Probe Z (Touch Plate)</button>
+        <button class="cle-btn" id="cle-tc-btn-zero">Zero Z (G92 Z0)</button>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="cle-btn" id="cle-tc-btn-continue" style="background:var(--ok); color:#fff; font-weight:700; padding:8px 18px;">Continue Job</button>
+      </div>
+    `;
+
+    card.style.display = 'block';
+
+    document.getElementById('cle-tc-btn-probe').onclick = () => {
+      this.fluidnc.sendGCode('G21 G91\nG38.2 Z-30 F75\nG92 Z15.0\nG0 Z5\nG90\n');
+      this.notify('Probing Z touch plate...', 'info');
+    };
+    document.getElementById('cle-tc-btn-zero').onclick = () => {
+      this.fluidnc.sendImmediate('G92 Z0\n');
+      this.notify('Work coordinate Z zeroed (G92 Z0).', 'ok');
+    };
+    document.getElementById('cle-tc-btn-continue').onclick = () => {
+      card.style.display = 'none';
+      this.fluidnc.continueAfterToolChange();
+    };
   }
 
   // --- Modals (Gamepad Setup Table, MEAGCLE Vault, Job Recovery, Slicer) ---
@@ -714,6 +854,65 @@ class CLEBridge {
 
         <div style="margin-top:14px; display:flex; gap:10px;">
           <button class="cle-btn" id="slice-run-btn" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Slice & Display in 3D Viewport</button>
+        </div>
+      `;
+    } else if (type === 'grayscale') {
+      title = '🖼️ Grayscale Heightmap to Slices (Original CLE)';
+      bodyHtml = `
+        <p>Convert 8-bit or 16-bit grayscale depthmaps/relief images into multi-pass toolpath slices with real-time brightness, contrast, and gamma modulation.</p>
+        
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
+          <div class="cle-form-row">
+            <label>Machine Mode (Device-Aware):</label>
+            <select class="cle-select" id="grey-mode">
+              <option value="cnc" ${this.slicer.mode==='cnc'?'selected':''}>CNC Milling (Top-Down Carving into Stock)</option>
+              <option value="laser" ${this.slicer.mode==='laser'?'selected':''}>Laser Engraving (Power Modulated S0-S1000)</option>
+              <option value="3d" ${this.slicer.mode==='3d'?'selected':''}>3D Additive Relief (Lithophane Bottom-Up)</option>
+            </select>
+          </div>
+          <div class="cle-form-row">
+            <label>Bit Depth Mode:</label>
+            <select class="cle-select" id="grey-bitdepth">
+              <option value="8bit">8-Bit Mode (256 Discrete Grayscale Levels)</option>
+              <option value="16bit">16-Bit Mode (High-Precision 65,536 Levels)</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <div class="cle-form-row">
+            <label>Number of Slices / Passes:</label>
+            <input class="cle-input" id="grey-slices" type="number" min="2" max="64" value="16">
+          </div>
+          <div class="cle-form-row">
+            <label>Max Carving / Relief Depth (mm):</label>
+            <input class="cle-input" id="grey-depth" type="number" step="0.5" value="4.0">
+          </div>
+        </div>
+
+        <div class="cle-joycon-panel" style="padding:10px 14px; margin-top:8px;">
+          <div class="cle-joycon-title" style="margin-bottom:8px;">Image Modulation Controls</div>
+          <div class="cle-form-row" style="margin-bottom:6px;">
+            <label>Brightness: <span id="lbl-grey-bright" style="font-family:var(--f-mono);">0</span></label>
+            <input type="range" id="grey-bright" min="-100" max="100" value="0" style="width:100%;">
+          </div>
+          <div class="cle-form-row" style="margin-bottom:6px;">
+            <label>Contrast: <span id="lbl-grey-contrast" style="font-family:var(--f-mono);">0</span></label>
+            <input type="range" id="grey-contrast" min="-100" max="100" value="0" style="width:100%;">
+          </div>
+          <div class="cle-form-row" style="margin-bottom:6px;">
+            <label>Gamma: <span id="lbl-grey-gamma" style="font-family:var(--f-mono);">1.0</span></label>
+            <input type="range" id="grey-gamma" min="20" max="300" value="100" style="width:100%;">
+          </div>
+        </div>
+
+        <div class="cle-form-row" style="margin-top:10px;">
+          <label>Load Custom Image File (Optional):</label>
+          <input type="file" id="grey-file" accept="image/*" class="cle-input" style="padding:4px;">
+        </div>
+
+        <div style="margin-top:14px; display:flex; justify-content:flex-end; gap:8px;">
+          <button class="cle-btn" id="grey-btn-generate" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Generate Slices & View in 3D</button>
         </div>
       `;
     } else if (type === 'machines') {
@@ -1036,6 +1235,47 @@ class CLEBridge {
         this.slicer.feedRate = parseFloat(feed) || 1500;
         await this.slicer.sliceModel({ mode, layerHeight: layerH, infill });
         this.closeModal();
+      };
+    } else if (type === 'grayscale') {
+      const bSlider = document.getElementById('grey-bright');
+      const cSlider = document.getElementById('grey-contrast');
+      const gSlider = document.getElementById('grey-gamma');
+      bSlider.oninput = (e) => { document.getElementById('lbl-grey-bright').textContent = e.target.value; };
+      cSlider.oninput = (e) => { document.getElementById('lbl-grey-contrast').textContent = e.target.value; };
+      gSlider.oninput = (e) => { document.getElementById('lbl-grey-gamma').textContent = (e.target.value / 100).toFixed(1); };
+
+      let loadedImg = null;
+      document.getElementById('grey-file').onchange = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (re) => {
+            loadedImg = new Image();
+            loadedImg.src = re.target.result;
+          };
+          reader.readAsDataURL(file);
+        }
+      };
+
+      document.getElementById('grey-btn-generate').onclick = async () => {
+        const b = parseInt(bSlider.value, 10);
+        const c = parseInt(cSlider.value, 10);
+        const g = parseInt(gSlider.value, 10) / 100;
+        const slices = parseInt(document.getElementById('grey-slices').value, 10) || 16;
+        const depth = parseFloat(document.getElementById('grey-depth').value) || 4.0;
+        const bitDepth = document.getElementById('grey-bitdepth').value;
+        const mode = document.getElementById('grey-mode').value;
+
+        this.closeModal();
+        await this.slicer.sliceGrayscaleHeightmap(loadedImg, {
+          brightness: b,
+          contrast: c,
+          gamma: g,
+          sliceCount: slices,
+          depthMm: depth,
+          bitDepth,
+          mode
+        });
       };
     } else if (type === 'machines') {
       const populateForm = (mach) => {

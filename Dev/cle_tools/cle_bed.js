@@ -79,9 +79,7 @@ export class CLEBedVisualizer {
       };
     }
 
-    if (this.bedGroup && this.bedGroup.parent) {
-      this.bedGroup.parent.remove(this.bedGroup);
-    }
+    this.disposeBedGroup();
 
     this.bedGroup = new THREE.Group();
     this.bedGroup.name = 'CLE_Device_Bed_Visualizer';
@@ -448,13 +446,28 @@ export class CLEBedVisualizer {
     this.guideLines.computeLineDistances();
   }
 
-  // Live Position Update from FluidNC DRO (wpos or mpos)
+  // Live Position Update from FluidNC DRO (wpos or mpos) - throttled to avoid memory & rendering churn
   updateToolCursor(coords) {
     if (!coords) return;
-    this.lastPos.X = coords.X !== undefined ? coords.X : this.lastPos.X;
-    this.lastPos.Y = coords.Y !== undefined ? coords.Y : this.lastPos.Y;
-    this.lastPos.Z = coords.Z !== undefined ? coords.Z : this.lastPos.Z;
-    if (coords.A !== undefined) this.lastPos.A = coords.A;
+    if (!this._lastRenderedPos) this._lastRenderedPos = { X: NaN, Y: NaN, Z: NaN, A: NaN };
+
+    const newX = coords.X !== undefined ? coords.X : this.lastPos.X;
+    const newY = coords.Y !== undefined ? coords.Y : this.lastPos.Y;
+    const newZ = coords.Z !== undefined ? coords.Z : this.lastPos.Z;
+    const newA = coords.A !== undefined ? coords.A : this.lastPos.A;
+
+    // Only update 3D scene if position has actually moved by > 0.05mm
+    const dx = Math.abs(newX - this._lastRenderedPos.X);
+    const dy = Math.abs(newY - this._lastRenderedPos.Y);
+    const dz = Math.abs(newZ - this._lastRenderedPos.Z);
+    const da = Math.abs(newA - this._lastRenderedPos.A);
+    if (dx < 0.05 && dy < 0.05 && dz < 0.05 && da < 0.1) return;
+
+    this.lastPos.X = newX;
+    this.lastPos.Y = newY;
+    this.lastPos.Z = newZ;
+    this.lastPos.A = newA;
+    this._lastRenderedPos = { X: newX, Y: newY, Z: newZ, A: newA };
 
     if (this.cursorGroup) {
       this.cursorGroup.position.set(this.lastPos.X, this.lastPos.Y, this.lastPos.Z);
@@ -464,7 +477,10 @@ export class CLEBedVisualizer {
 
     if (this.coordTag && this.coordTag.material && this.coordTag.material.map) {
       const text = `X:${this.lastPos.X.toFixed(1)} Y:${this.lastPos.Y.toFixed(1)} Z:${this.lastPos.Z.toFixed(1)}`;
-      this.updateSpriteCanvasText(this.coordTag, text);
+      if (this._lastCoordText !== text) {
+        this._lastCoordText = text;
+        this.updateSpriteCanvasText(this.coordTag, text);
+      }
     }
 
     this.requestRender();
@@ -502,6 +518,42 @@ export class CLEBedVisualizer {
     this.requestRender();
     this.bridge.notify(`Machine Bed & Rulers: ${this.visible ? 'VISIBLE' : 'HIDDEN'}`, 'info');
     return this.visible;
+  }
+
+  // Safely dispose all geometries, materials and textures to prevent memory leaks
+  disposeBedGroup() {
+    if (!this.bedGroup) return;
+    if (this.rulerSprites) {
+      this.rulerSprites.forEach(s => {
+        if (s.material && s.material.map) s.material.map.dispose();
+        if (s.material) s.material.dispose();
+      });
+      this.rulerSprites = [];
+    }
+
+    this.bedGroup.traverse((obj) => {
+      if (obj.geometry) {
+        try { obj.geometry.dispose(); } catch (e) {}
+      }
+      if (obj.material) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach(m => {
+          if (m.map) {
+            try { m.map.dispose(); } catch (e) {}
+          }
+          try { m.dispose(); } catch (e) {}
+        });
+      }
+    });
+
+    if (this.bedGroup.parent) {
+      this.bedGroup.parent.remove(this.bedGroup);
+    }
+    this.bedGroup = null;
+    this.cursorGroup = null;
+    this.shadowCrosshair = null;
+    this.guideLines = null;
+    this.coordTag = null;
   }
 
   // Full Rebuild when Machine Profile or Spoilboard Size is changed in Vault

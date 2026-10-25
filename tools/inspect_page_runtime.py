@@ -28,20 +28,25 @@ async def run():
             await asyncio.sleep(1)
             
             checks = [
-                "typeof THREE",
-                "Boolean(window.CLE.bed && window.CLE.bed.bedGroup && window.CLE.bed.bedGroup.parent)",
-                "window.CLE.bed.bedGroup.children.length",
-                "window.CLE.bed.config.spoilboardThickness",
-                "window.CLE.vault.getActiveMachine().wifiIP",
-                "window.CLE.vault.getActiveMachine().spoilboardThickness",
-                "window.CLE.gamepad.mode",
-                "(() => { window.CLE.slicer.slicedLayers = [{ z: 0, points: [{x:0,y:0,z:0},{x:100,y:100,z:0}] }, { z: -1, points: [{x:0,y:0,z:-1},{x:100,y:100,z:-1}] }]; window.CLE.slicer.renderSlicedStackToVisualizer(); return Boolean(window.CLE.slicer.visualizerGroup && window.CLE.slicer.visualizerGroup.parent); })()"
+                ("typeof THREE", False),
+                ("Boolean(window.CLE.bed && window.CLE.bed.bedGroup && window.CLE.bed.bedGroup.parent)", False),
+                ("window.CLE.bed.bedGroup.children.length", False),
+                ("window.CLE.bed.config.spoilboardThickness", False),
+                ("window.CLE.vault.getActiveMachine().wifiIP", False),
+                ("window.CLE.vault.getActiveMachine().spoilboardThickness", False),
+                ("window.CLE.gamepad.mode", False),
+                ("(() => { window.CLE.slicer.slicedLayers = [{ z: 0, points: [{x:0,y:0,z:0},{x:100,y:100,z:0}] }, { z: -1, points: [{x:0,y:0,z:-1},{x:100,y:100,z:-1}] }]; window.CLE.slicer.renderSlicedStackToVisualizer(); return Boolean(window.CLE.slicer.visualizerGroup && window.CLE.slicer.visualizerGroup.parent); })()", False),
+                ("typeof window.CLE.slicer.sliceGrayscaleHeightmap === 'function'", False),
+                ("(async () => { const layers = await window.CLE.slicer.sliceGrayscaleHeightmap(null, { sliceCount: 4, bitDepth: '8bit', mode: 'cnc' }); return layers.length; })()", True),
+                ("Boolean(window.CLE.fluidnc.triggerToolChange && window.CLE.fluidnc.continueAfterToolChange && window.CLE.fluidnc.compensateAxis && window.CLE.moveCurrentPoint)", False),
+                ("Boolean(window.CLE.vault.getCameraConfig && window.CLE.vault.saveCameraConfig)", False),
+                ("(() => { window.CLE.slicer.mode = 'cnc'; window.CLE.slicer.slicedLayers = [{ z: 5, points: [{x:0,y:0,z:5},{x:10,y:10,z:5}] }, { z: 0, points: [{x:0,y:0,z:0},{x:10,y:10,z:0}] }]; window.CLE.slicer.renderSlicedStackToVisualizer(); return window.CLE.slicer.visualizerGroup.children.some(c => c.name === 'CLE_CNC_Top_Start_Surface'); })()", False)
             ]
-            for idx, c in enumerate(checks, start=10):
+            for idx, (c, await_promise) in enumerate(checks, start=10):
                 await ws.send(json.dumps({
                     "id": idx,
                     "method": "Runtime.evaluate",
-                    "params": {"expression": c, "returnByValue": True}
+                    "params": {"expression": c, "returnByValue": True, "awaitPromise": await_promise}
                 }))
             
             while True:
@@ -50,8 +55,9 @@ async def run():
                     data = json.loads(msg)
                     if "id" in data and data["id"] >= 10:
                         req_idx = data["id"] - 10
-                        val = data.get("result", {}).get("result", {}).get("value")
-                        print(f"CHECK [{checks[req_idx]}]: {val}")
+                        res = data.get("result", {}).get("result", {})
+                        val = res.get("value", res.get("description", res))
+                        print(f"CHECK [{checks[req_idx][0]}]: {val}")
                 except asyncio.TimeoutError:
                     break
     finally:

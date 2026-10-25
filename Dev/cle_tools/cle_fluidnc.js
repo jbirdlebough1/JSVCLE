@@ -341,7 +341,7 @@ export class CLEFluidNCClient {
       if (this.isConnected) {
         this.sendImmediate('?');
       }
-    }, 150);
+    }, 250);
   }
 
   handleIncomingData(chunk) {
@@ -364,6 +364,11 @@ export class CLEFluidNCClient {
 
     for (const line of lines) {
       const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      // Filter out internal ESP32 heartbeat counter packets to stop console DOM spam and memory leaks
+      if (/^currentid:/i.test(trimmed)) continue;
+
       if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
         this.parseStatusReport(trimmed);
       } else if (trimmed === 'ok') {
@@ -375,7 +380,7 @@ export class CLEFluidNCClient {
           this.isDumpingYaml = false;
           this.applyYamlCapabilityModel(this.yamlDumpBuffer, 'Flash ($Config/Dump)');
         }
-      } else if (trimmed) {
+      } else {
         if (this.isDumpingYaml) {
           this.yamlDumpBuffer += line + '\n';
         }
@@ -567,27 +572,59 @@ export class CLEFluidNCClient {
   updateDRO() {
     const updateVal = (id, val) => {
       const el = document.getElementById(id);
-      if (el) el.textContent = val;
+      if (el && el.textContent !== val) el.textContent = val;
     };
-    updateVal('cle-dro-x', this.wpos.X.toFixed(2));
-    updateVal('cle-dro-y', this.wpos.Y.toFixed(2));
-    updateVal('cle-dro-z', this.wpos.Z.toFixed(2));
-    updateVal('cle-dro-a', this.wpos.A.toFixed(1));
+    const xStr = this.wpos.X.toFixed(2);
+    const yStr = this.wpos.Y.toFixed(2);
+    const zStr = this.wpos.Z.toFixed(2);
+    const aStr = this.wpos.A.toFixed(1);
+
+    updateVal('cle-dro-x', xStr);
+    updateVal('cle-dro-y', yStr);
+    updateVal('cle-dro-z', zStr);
+    updateVal('cle-dro-a', aStr);
 
     // Update manual panel DRO if open
-    updateVal('cle-man-dro-x', this.wpos.X.toFixed(2));
-    updateVal('cle-man-dro-y', this.wpos.Y.toFixed(2));
-    updateVal('cle-man-dro-z', this.wpos.Z.toFixed(2));
-    updateVal('cle-man-dro-a', this.wpos.A.toFixed(1));
+    updateVal('cle-man-dro-x', xStr);
+    updateVal('cle-man-dro-y', yStr);
+    updateVal('cle-man-dro-z', zStr);
+    updateVal('cle-man-dro-a', aStr);
 
-    if (this.bridge.recovery) {
-      this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
-    }
+    if (!this._lastReportedPos) this._lastReportedPos = { X: NaN, Y: NaN, Z: NaN, A: NaN };
+    const dx = Math.abs(this.wpos.X - this._lastReportedPos.X);
+    const dy = Math.abs(this.wpos.Y - this._lastReportedPos.Y);
+    const dz = Math.abs(this.wpos.Z - this._lastReportedPos.Z);
+    const da = Math.abs(this.wpos.A - this._lastReportedPos.A);
 
-    // Update 3D Bed Toolhead Cursor in real time
-    if (this.bridge.bed) {
-      this.bridge.bed.updateToolCursor(this.wpos);
+    // Only update 3D scene & recovery when position has actually changed
+    if (dx > 0.02 || dy > 0.02 || dz > 0.02 || da > 0.05) {
+      this._lastReportedPos = { ...this.wpos };
+
+      // Update 3D Bed Toolhead Cursor in real time
+      if (this.bridge.bed) {
+        this.bridge.bed.updateToolCursor(this.wpos);
+      }
+
+      if (this.isStreaming && this.bridge.recovery) {
+        this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
+      }
     }
+  }
+
+  // --- Real-time Surface Compensation / 0.1mm Micro-Stepping ---
+  // Allows pausing job and nudging X/Y/Z/A in +/- 0.1mm increments to compensate for uneven workpiece surface
+  compensateAxis(axis, delta = 0.1) {
+    if (!this.isConnected) {
+      this.bridge.notify('Connect to machine first.', 'error');
+      return;
+    }
+    const ax = axis.toUpperCase();
+    const rate = ax === 'Z' ? 200 : 500;
+    // FluidNC realtime jog command
+    const jogCmd = `$J=G91 G21 ${ax}${delta > 0 ? '+' : ''}${delta.toFixed(2)} F${rate}`;
+    this.sendImmediate(jogCmd + '\n');
+    this.bridge.notify(`Surface Compensated ${ax} by ${delta > 0 ? '+' : ''}${delta.toFixed(2)}mm`, 'ok');
+    this.logConsole(`[COMPENSATION] ${ax} ${delta > 0 ? '+' : ''}${delta.toFixed(2)}mm ($J)`);
   }
 
   sendImmediate(char) {
@@ -837,7 +874,18 @@ export class CLEFluidNCClient {
       this.bridge.notify('G-Code streaming complete', 'ok');
       return;
     }
-    const next = this.sendQueue.shift();
+
+    const next = this.sendQueue[0];
+    // Detect Tool Change request M6 T#
+    const m6Match = next ? next.match(/M6\s*(?:T(\d+))?/i) : null;
+    if (m6Match) {
+      this.sendQueue.shift();
+      const toolNum = m6Match[1] ? parseInt(m6Match[1], 10) : 1;
+      this.triggerToolChange(toolNum, next);
+      return;
+    }
+
+    this.sendQueue.shift();
     this.streamLineIndex++;
     if (this.bridge.recovery) {
       this.bridge.recovery.advanceLine(this.streamLineIndex, next);
@@ -847,6 +895,53 @@ export class CLEFluidNCClient {
     } else {
       this.sendNextQueued();
     }
+  }
+
+  // --- Tool Change Routine & State Preservation ---
+  triggerToolChange(toolNum, gcodeLine) {
+    this.isStreaming = false;
+    this.toolChangeResumeState = {
+      toolNum,
+      gcodeLine,
+      lineIndex: this.streamLineIndex,
+      lastPos: { ...this.wpos },
+      feedRate: this.feedRate,
+      spindleRPM: this.spindleRPM
+    };
+
+    this.bridge.notify(`Tool change requested: Tool #${toolNum}. Retracting to safe clearance...`, 'info');
+    // Safe clearance retract
+    this.sendImmediate('M5\n');
+    this.sendImmediate('G0 Z20.000 F800\n');
+
+    if (this.bridge && this.bridge.openToolChangeCard) {
+      this.bridge.openToolChangeCard(this.toolChangeResumeState);
+    }
+  }
+
+  continueAfterToolChange() {
+    if (!this.toolChangeResumeState) {
+      this.isStreaming = true;
+      this.sendNextQueued();
+      return;
+    }
+
+    const s = this.toolChangeResumeState;
+    this.bridge.notify(`Resuming job with Tool #${s.toolNum}...`, 'ok');
+
+    // 1. Return to saved XY at safe clearance Z
+    this.sendImmediate(`G0 X${s.lastPos.X.toFixed(3)} Y${s.lastPos.Y.toFixed(3)} F3000\n`);
+    // 2. Restore Spindle if running
+    if (s.spindleRPM > 0) {
+      this.sendImmediate(`M3 S${s.spindleRPM}\n`);
+      this.sendImmediate('G4 P2\n'); // Dwell 2 sec for spindle spin-up
+    }
+    // 3. Plunge back to cutting Z
+    this.sendImmediate(`G1 Z${s.lastPos.Z.toFixed(3)} F${s.feedRate || 300}\n`);
+
+    this.toolChangeResumeState = null;
+    this.isStreaming = true;
+    this.sendNextQueued();
   }
 
   onCommandAck() {

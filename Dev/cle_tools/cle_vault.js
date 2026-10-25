@@ -602,4 +602,39 @@ export class CLEVault {
     localStorage.setItem('cle.vault.machines', JSON.stringify(list));
     this.bridge.notify(`Machine profile removed from Vault.`);
   }
+
+  // --- Persistent Camera Permission & Device Configuration ---
+  saveCameraConfig(cfg) {
+    const current = this.getCameraConfig();
+    const updated = { ...current, ...cfg, lastSaved: Date.now() };
+    localStorage.setItem('cle.vault.camera', JSON.stringify(updated));
+    if (cfg.deviceId) localStorage.setItem('cle.cam.deviceId', cfg.deviceId);
+    if (cfg.wifiUrl) localStorage.setItem('cle.cam.wifiUrl', cfg.wifiUrl);
+    if (cfg.permissionGranted !== undefined) {
+      localStorage.setItem('cle.cam.permissionGranted', cfg.permissionGranted ? 'true' : 'false');
+    }
+    const mach = this.getActiveMachine();
+    if (mach) {
+      mach.cameraConfig = updated;
+      const list = this.getMachinesSync();
+      const idx = list.findIndex(m => m.id === mach.id);
+      if (idx >= 0) list[idx] = mach;
+      localStorage.setItem('cle.vault.machines', JSON.stringify(list));
+    }
+  }
+
+  getCameraConfig() {
+    try {
+      const raw = localStorage.getItem('cle.vault.camera');
+      if (raw) return JSON.parse(raw);
+    } catch(e) {}
+    const mach = this.getActiveMachine();
+    if (mach && mach.cameraConfig) return mach.cameraConfig;
+    return {
+      permissionGranted: localStorage.getItem('cle.cam.permissionGranted') === 'true',
+      deviceId: localStorage.getItem('cle.cam.deviceId') || '',
+      wifiUrl: localStorage.getItem('cle.cam.wifiUrl') || 'http://192.168.12.158:8080/video',
+      activeType: 'usb'
+    };
+  }
 }

@@ -479,6 +479,35 @@ export class CLESlicerEngine {
       retLine.computeLineDistances();
       this.visualizerGroup.add(retLine);
 
+      // 4. Translucent Orange Mode Indicator Layer:
+      // CNC / Laser (Top-Down): Translucent Orange Cap on TOP layer where milling begins
+      // 3D Printing (Bottom-Up): Translucent Orange Base on BOTTOM layer where depositing begins on the bed
+      const modePlaneGeo = new THREE.PlaneGeometry(stockW, stockD);
+      const modePlaneMat = new THREE.MeshBasicMaterial({
+        color: 0xf97316, // Vivid Orange
+        transparent: true,
+        opacity: 0.38,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const modePlane = new THREE.Mesh(modePlaneGeo, modePlaneMat);
+      const modePlaneZ = isTopDown ? maxZ : minZ;
+      modePlane.position.set(stockCx, stockCy, modePlaneZ);
+      modePlane.name = isTopDown ? 'CLE_CNC_Top_Start_Surface' : 'CLE_3D_Bottom_Bed_Contact';
+      this.visualizerGroup.add(modePlane);
+
+      // Distinct orange perimeter outline border around start layer
+      const modeBorderGeo = new THREE.EdgesGeometry(modePlaneGeo);
+      const modeBorderMat = new THREE.LineBasicMaterial({
+        color: 0xea580c,
+        linewidth: 3,
+        transparent: true,
+        opacity: 0.95
+      });
+      const modeBorder = new THREE.LineSegments(modeBorderGeo, modeBorderMat);
+      modeBorder.position.set(stockCx, stockCy, modePlaneZ);
+      this.visualizerGroup.add(modeBorder);
+
       // Smoothly frame camera on sliced workpiece
       if (app.vp && app.vp.view) {
         app.vp.view.target.set(stockCx, stockCy, stockCz);
@@ -526,6 +555,18 @@ export class CLESlicerEngine {
   clearVisualizer() {
     const app = window.app || window.xe;
     if (this.visualizerGroup) {
+      this.visualizerGroup.traverse((obj) => {
+        if (obj.geometry) {
+          try { obj.geometry.dispose(); } catch (e) {}
+        }
+        if (obj.material) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach(m => {
+            if (m.map) { try { m.map.dispose(); } catch (e) {} }
+            try { m.dispose(); } catch (e) {}
+          });
+        }
+      });
       if (this.visualizerGroup.parent) {
         this.visualizerGroup.parent.remove(this.visualizerGroup);
       }
@@ -627,6 +668,7 @@ export class CLESlicerEngine {
       </div>
       <input type="range" id="cle-hud-slider" min="-1" max="${numLayers - 1}" value="-1" style="width:140px;">
       <button class="cle-btn" id="cle-hud-all">Show All</button>
+      <button class="cle-btn" id="cle-hud-trace" style="background:#0284c7; color:#fff; font-weight:600;">Trace 3D</button>
       <div style="border-left:1px solid var(--line); height:18px;"></div>
       <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600;">Export .NC</button>
       <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600;">To SD Card</button>
@@ -662,7 +704,227 @@ export class CLESlicerEngine {
     document.getElementById('cle-hud-all').onclick = () => updateHUD(-1);
     document.getElementById('cle-hud-export').onclick = () => this.exportGCodeFile();
     document.getElementById('cle-hud-upload').onclick = () => this.uploadGCodeToSD();
+    const traceBtn = document.getElementById('cle-hud-trace');
+    if (traceBtn) {
+      traceBtn.onclick = () => {
+        if (this.isSimulating) {
+          this.stopTraceSimulation();
+          traceBtn.textContent = 'Trace 3D';
+        } else {
+          this.startTraceSimulation(2);
+          traceBtn.textContent = 'Stop Trace';
+        }
+      };
+    }
     document.getElementById('cle-hud-close').onclick = () => { this.clearVisualizer(); };
+  }
+
+  // --- Grayscale Heightmap to Slice Conversion (Original CLE Feature) ---
+  // Converts 8-bit or 16-bit grayscale images to multi-layer toolpath slices with brightness, contrast, gamma
+  async sliceGrayscaleHeightmap(imageSource = null, options = {}) {
+    const brightness = options.brightness !== undefined ? options.brightness : 0;
+    const contrast = options.contrast !== undefined ? options.contrast : 0;
+    const gamma = options.gamma !== undefined ? options.gamma : 1.0;
+    const sliceCount = Math.max(2, Math.min(64, options.sliceCount || 16));
+    const bitDepth = options.bitDepth === '16bit' ? '16bit' : '8bit';
+    const targetW = options.targetWidth || 100.0;
+    const targetD = options.targetHeight || 100.0;
+    const depthMm = options.depthMm || 4.0;
+    const mode = options.mode || this.mode || 'cnc';
+    this.mode = mode;
+
+    this.bridge.notify(`Generating ${sliceCount} Grayscale slices (${bitDepth}, ${mode.toUpperCase()})...`, 'info');
+
+    // 1. Render imageSource to offscreen canvas
+    const cols = 80;
+    const rows = 80;
+    const canvas = document.createElement('canvas');
+    canvas.width = cols;
+    canvas.height = rows;
+    const ctx = canvas.getContext('2d');
+
+    if (imageSource instanceof HTMLImageElement || imageSource instanceof HTMLCanvasElement) {
+      ctx.drawImage(imageSource, 0, 0, cols, rows);
+    } else {
+      // Default radial gradient relief pattern for instant visualization
+      const grad = ctx.createRadialGradient(cols / 2, rows / 2, 4, cols / 2, rows / 2, cols / 2);
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(0.5, '#888888');
+      grad.addColorStop(1, '#000000');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, cols, rows);
+    }
+
+    const imgData = ctx.getImageData(0, 0, cols, rows).data;
+    const heightMap = new Float32Array(cols * rows);
+    const factor = (259 * (contrast + 255)) / (255 * (259 - contrast) || 1);
+
+    for (let i = 0; i < cols * rows; i++) {
+      const idx = i * 4;
+      let r = imgData[idx];
+      let g = imgData[idx + 1];
+      let b = imgData[idx + 2];
+
+      let L = 0.299 * r + 0.587 * g + 0.114 * b;
+      L = L + (brightness * 2.55);
+      L = factor * (L - 128) + 128;
+      L = Math.max(0, Math.min(255, L));
+
+      let v = L / 255.0;
+      v = Math.pow(v, 1.0 / Math.max(0.1, gamma));
+
+      if (bitDepth === '8bit') {
+        v = Math.round(v * 255) / 255.0;
+      } else {
+        v = Math.round(v * 65535) / 65535.0;
+      }
+      heightMap[i] = v;
+    }
+
+    // 2. Build Slices based on Mode
+    this.slicedLayers = [];
+    const isTopDown = (mode === 'cnc' || mode === 'laser');
+    const xStep = targetW / cols;
+    const yStep = targetD / rows;
+
+    for (let s = 0; s < sliceCount; s++) {
+      const progress = s / Math.max(1, sliceCount - 1);
+      let layerZ;
+      if (isTopDown) {
+        layerZ = -progress * depthMm;
+      } else {
+        layerZ = 1.0 + progress * depthMm;
+      }
+
+      const layer = {
+        index: s,
+        z: layerZ,
+        toolNumber: s === 0 ? 1 : (s > sliceCount / 2 ? 2 : 1),
+        points: []
+      };
+
+      for (let r = 0; r < rows; r += 2) {
+        const yPos = r * yStep;
+        const forward = (r / 2) % 2 === 0;
+        const startC = forward ? 0 : cols - 1;
+        const endC = forward ? cols : -1;
+        const stepC = forward ? 1 : -1;
+
+        let inCut = false;
+        for (let c = startC; c !== endC; c += stepC) {
+          const val = heightMap[r * cols + c];
+          const xPos = c * xStep;
+
+          const shouldCut = isTopDown ? (val >= (1.0 - progress)) : (val >= progress);
+
+          if (shouldCut) {
+            if (!inCut) {
+              layer.points.push({ x: xPos, y: yPos, z: layerZ, isRapid: true });
+              inCut = true;
+            }
+            layer.points.push({ x: xPos, y: yPos, z: layerZ, isRapid: false });
+          } else if (inCut) {
+            layer.points.push({ x: xPos, y: yPos, z: layerZ + (isTopDown ? 2.0 : 0.5), isRapid: true });
+            inCut = false;
+          }
+        }
+      }
+
+      if (layer.points.length > 1) {
+        this.slicedLayers.push(layer);
+      }
+    }
+
+    // Generate G-code lines for the grayscale slices
+    const gcode = [];
+    gcode.push(`; === CLEJS Grayscale Slices ===`);
+    gcode.push(`; Mode: ${mode.toUpperCase()} | Passes: ${this.slicedLayers.length} | BitDepth: ${bitDepth}`);
+    gcode.push(`G21 G90 G17`);
+    gcode.push(`G0 Z10.000 F1000`);
+    let currentTool = 0;
+
+    for (const l of this.slicedLayers) {
+      if (l.toolNumber && l.toolNumber !== currentTool) {
+        currentTool = l.toolNumber;
+        gcode.push(`; --- Tool Change to Tool #${currentTool} ---`);
+        gcode.push(`M5`);
+        gcode.push(`G0 Z20.000 F800`);
+        gcode.push(`M6 T${currentTool}`);
+        gcode.push(mode === 'laser' ? 'M3 S1000' : 'M3 S12000');
+        gcode.push(`G4 P2`);
+      }
+      gcode.push(`; Layer Z = ${l.z.toFixed(3)}`);
+      for (const p of l.points) {
+        if (p.isRapid) {
+          gcode.push(`G0 X${p.x.toFixed(3)} Y${p.y.toFixed(3)} Z${p.z.toFixed(3)} F3000`);
+        } else {
+          gcode.push(`G1 X${p.x.toFixed(3)} Y${p.y.toFixed(3)} Z${p.z.toFixed(3)} F1200`);
+        }
+      }
+    }
+    gcode.push(`M5`);
+    gcode.push(`G0 Z20.000 F1000`);
+    this.rawGCode = gcode.join('\n');
+
+    this.renderSlicedStackToVisualizer();
+    this.mountLayerHUD();
+    this.bridge.notify(`Grayscale Sliced: ${this.slicedLayers.length} passes rendered in 3D visualizer!`, 'ok');
+    return this.slicedLayers;
+  }
+
+  showSlicerHUD() {
+    this.mountLayerHUD();
+  }
+
+  // --- 3D Toolpath Trace Simulator ---
+  startTraceSimulation(speedMultiplier = 2) {
+    if (!this.slicedLayers || this.slicedLayers.length === 0) {
+      this.bridge.notify('Slice a model first to run trace simulator.', 'error');
+      return;
+    }
+
+    this.stopTraceSimulation();
+    this.isSimulating = true;
+    this.simSpeed = speedMultiplier;
+
+    const allPts = [];
+    this.slicedLayers.forEach(l => {
+      l.points.forEach(p => allPts.push({ ...p, layerIndex: l.index }));
+    });
+
+    if (allPts.length === 0) return;
+
+    let ptIdx = 0;
+    const step = () => {
+      if (!this.isSimulating) return;
+
+      const pt = allPts[ptIdx];
+      if (pt && this.bridge.bed) {
+        this.bridge.bed.updateToolCursor({ X: pt.x, Y: pt.y, Z: pt.z });
+      }
+
+      ptIdx += Math.max(1, Math.floor(this.simSpeed));
+      if (ptIdx >= allPts.length) {
+        this.isSimulating = false;
+        this.bridge.notify('Trace simulation complete.', 'ok');
+        const traceBtn = document.getElementById('cle-hud-trace');
+        if (traceBtn) traceBtn.textContent = 'Trace 3D';
+        return;
+      }
+
+      this._simAnimId = requestAnimationFrame(step);
+    };
+
+    this._simAnimId = requestAnimationFrame(step);
+    this.bridge.notify(`Trace simulation running (${this.simSpeed}x speed)...`, 'info');
+  }
+
+  stopTraceSimulation() {
+    this.isSimulating = false;
+    if (this._simAnimId) {
+      cancelAnimationFrame(this._simAnimId);
+      this._simAnimId = null;
+    }
   }
 
   exportGCodeFile() {

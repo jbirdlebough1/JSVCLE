@@ -63,7 +63,12 @@ export class CLEJobRecoveryEngine {
   recordPosition(wpos) {
     if (wpos) {
       this.lastPosition = { ...this.lastPosition, ...wpos };
-      this.saveCheckpoint();
+      const now = Date.now();
+      // Throttle checkpoint disk/localStorage writes to at most once per second
+      if (!this._lastSavedTime || (now - this._lastSavedTime > 1000)) {
+        this._lastSavedTime = now;
+        this.saveCheckpoint();
+      }
     }
   }
 

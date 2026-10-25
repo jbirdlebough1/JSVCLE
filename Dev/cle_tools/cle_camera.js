@@ -21,9 +21,13 @@ export class CLECameraEngine {
     return this.activeType !== 'none' && (this.stream !== null || this.activeType === 'wifi');
   }
 
-  // Automatically start USB camera if any video input exists
+  // Automatically start USB camera if permission was previously granted and device exists
   async autoStartIfAvailable() {
     if (this.isActive) return true;
+    const isGranted = (this.permissionGranted || localStorage.getItem('cle.cam.permissionGranted') === 'true');
+    // Do not pop up camera permission prompt unless user already granted permission once
+    if (!isGranted) return false;
+
     try {
       const devices = await this.getAvailableDevices();
       if (devices && devices.length > 0) {
@@ -66,8 +70,17 @@ export class CLECameraEngine {
       }
 
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.permissionGranted = true;
       this.selectedDeviceId = deviceId;
       localStorage.setItem('cle.cam.deviceId', deviceId);
+      localStorage.setItem('cle.cam.permissionGranted', 'true');
+      if (this.bridge && this.bridge.vault) {
+        this.bridge.vault.saveCameraConfig({
+          permissionGranted: true,
+          deviceId: deviceId,
+          activeType: 'usb'
+        });
+      }
       this.activeType = 'usb';
 
       const videoEl = document.getElementById('cle-cam-video');

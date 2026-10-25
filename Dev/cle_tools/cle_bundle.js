@@ -32,9 +32,13 @@ class CLECameraEngine {
     return this.activeType !== 'none' && (this.stream !== null || this.activeType === 'wifi');
   }
 
-  // Automatically start USB camera if any video input exists
+  // Automatically start USB camera if permission was previously granted and device exists
   async autoStartIfAvailable() {
     if (this.isActive) return true;
+    const isGranted = (this.permissionGranted || localStorage.getItem('cle.cam.permissionGranted') === 'true');
+    // Do not pop up camera permission prompt unless user already granted permission once
+    if (!isGranted) return false;
+
     try {
       const devices = await this.getAvailableDevices();
       if (devices && devices.length > 0) {
@@ -77,8 +81,17 @@ class CLECameraEngine {
       }
 
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.permissionGranted = true;
       this.selectedDeviceId = deviceId;
       localStorage.setItem('cle.cam.deviceId', deviceId);
+      localStorage.setItem('cle.cam.permissionGranted', 'true');
+      if (this.bridge && this.bridge.vault) {
+        this.bridge.vault.saveCameraConfig({
+          permissionGranted: true,
+          deviceId: deviceId,
+          activeType: 'usb'
+        });
+      }
       this.activeType = 'usb';
 
       const videoEl = document.getElementById('cle-cam-video');
@@ -1158,7 +1171,7 @@ class CLEFluidNCClient {
       if (this.isConnected) {
         this.sendImmediate('?');
       }
-    }, 150);
+    }, 250);
   }
 
   handleIncomingData(chunk) {
@@ -1181,6 +1194,11 @@ class CLEFluidNCClient {
 
     for (const line of lines) {
       const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      // Filter out internal ESP32 heartbeat counter packets to stop console DOM spam and memory leaks
+      if (/^currentid:/i.test(trimmed)) continue;
+
       if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
         this.parseStatusReport(trimmed);
       } else if (trimmed === 'ok') {
@@ -1192,7 +1210,7 @@ class CLEFluidNCClient {
           this.isDumpingYaml = false;
           this.applyYamlCapabilityModel(this.yamlDumpBuffer, 'Flash ($Config/Dump)');
         }
-      } else if (trimmed) {
+      } else {
         if (this.isDumpingYaml) {
           this.yamlDumpBuffer += line + '\n';
         }
@@ -1384,27 +1402,59 @@ class CLEFluidNCClient {
   updateDRO() {
     const updateVal = (id, val) => {
       const el = document.getElementById(id);
-      if (el) el.textContent = val;
+      if (el && el.textContent !== val) el.textContent = val;
     };
-    updateVal('cle-dro-x', this.wpos.X.toFixed(2));
-    updateVal('cle-dro-y', this.wpos.Y.toFixed(2));
-    updateVal('cle-dro-z', this.wpos.Z.toFixed(2));
-    updateVal('cle-dro-a', this.wpos.A.toFixed(1));
+    const xStr = this.wpos.X.toFixed(2);
+    const yStr = this.wpos.Y.toFixed(2);
+    const zStr = this.wpos.Z.toFixed(2);
+    const aStr = this.wpos.A.toFixed(1);
+
+    updateVal('cle-dro-x', xStr);
+    updateVal('cle-dro-y', yStr);
+    updateVal('cle-dro-z', zStr);
+    updateVal('cle-dro-a', aStr);
 
     // Update manual panel DRO if open
-    updateVal('cle-man-dro-x', this.wpos.X.toFixed(2));
-    updateVal('cle-man-dro-y', this.wpos.Y.toFixed(2));
-    updateVal('cle-man-dro-z', this.wpos.Z.toFixed(2));
-    updateVal('cle-man-dro-a', this.wpos.A.toFixed(1));
+    updateVal('cle-man-dro-x', xStr);
+    updateVal('cle-man-dro-y', yStr);
+    updateVal('cle-man-dro-z', zStr);
+    updateVal('cle-man-dro-a', aStr);
 
-    if (this.bridge.recovery) {
-      this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
-    }
+    if (!this._lastReportedPos) this._lastReportedPos = { X: NaN, Y: NaN, Z: NaN, A: NaN };
+    const dx = Math.abs(this.wpos.X - this._lastReportedPos.X);
+    const dy = Math.abs(this.wpos.Y - this._lastReportedPos.Y);
+    const dz = Math.abs(this.wpos.Z - this._lastReportedPos.Z);
+    const da = Math.abs(this.wpos.A - this._lastReportedPos.A);
 
-    // Update 3D Bed Toolhead Cursor in real time
-    if (this.bridge.bed) {
-      this.bridge.bed.updateToolCursor(this.wpos);
+    // Only update 3D scene & recovery when position has actually changed
+    if (dx > 0.02 || dy > 0.02 || dz > 0.02 || da > 0.05) {
+      this._lastReportedPos = { ...this.wpos };
+
+      // Update 3D Bed Toolhead Cursor in real time
+      if (this.bridge.bed) {
+        this.bridge.bed.updateToolCursor(this.wpos);
+      }
+
+      if (this.isStreaming && this.bridge.recovery) {
+        this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
+      }
     }
+  }
+
+  // --- Real-time Surface Compensation / 0.1mm Micro-Stepping ---
+  // Allows pausing job and nudging X/Y/Z/A in +/- 0.1mm increments to compensate for uneven workpiece surface
+  compensateAxis(axis, delta = 0.1) {
+    if (!this.isConnected) {
+      this.bridge.notify('Connect to machine first.', 'error');
+      return;
+    }
+    const ax = axis.toUpperCase();
+    const rate = ax === 'Z' ? 200 : 500;
+    // FluidNC realtime jog command
+    const jogCmd = `$J=G91 G21 ${ax}${delta > 0 ? '+' : ''}${delta.toFixed(2)} F${rate}`;
+    this.sendImmediate(jogCmd + '\n');
+    this.bridge.notify(`Surface Compensated ${ax} by ${delta > 0 ? '+' : ''}${delta.toFixed(2)}mm`, 'ok');
+    this.logConsole(`[COMPENSATION] ${ax} ${delta > 0 ? '+' : ''}${delta.toFixed(2)}mm ($J)`);
   }
 
   sendImmediate(char) {
@@ -1654,7 +1704,18 @@ class CLEFluidNCClient {
       this.bridge.notify('G-Code streaming complete', 'ok');
       return;
     }
-    const next = this.sendQueue.shift();
+
+    const next = this.sendQueue[0];
+    // Detect Tool Change request M6 T#
+    const m6Match = next ? next.match(/M6\s*(?:T(\d+))?/i) : null;
+    if (m6Match) {
+      this.sendQueue.shift();
+      const toolNum = m6Match[1] ? parseInt(m6Match[1], 10) : 1;
+      this.triggerToolChange(toolNum, next);
+      return;
+    }
+
+    this.sendQueue.shift();
     this.streamLineIndex++;
     if (this.bridge.recovery) {
       this.bridge.recovery.advanceLine(this.streamLineIndex, next);
@@ -1664,6 +1725,53 @@ class CLEFluidNCClient {
     } else {
       this.sendNextQueued();
     }
+  }
+
+  // --- Tool Change Routine & State Preservation ---
+  triggerToolChange(toolNum, gcodeLine) {
+    this.isStreaming = false;
+    this.toolChangeResumeState = {
+      toolNum,
+      gcodeLine,
+      lineIndex: this.streamLineIndex,
+      lastPos: { ...this.wpos },
+      feedRate: this.feedRate,
+      spindleRPM: this.spindleRPM
+    };
+
+    this.bridge.notify(`Tool change requested: Tool #${toolNum}. Retracting to safe clearance...`, 'info');
+    // Safe clearance retract
+    this.sendImmediate('M5\n');
+    this.sendImmediate('G0 Z20.000 F800\n');
+
+    if (this.bridge && this.bridge.openToolChangeCard) {
+      this.bridge.openToolChangeCard(this.toolChangeResumeState);
+    }
+  }
+
+  continueAfterToolChange() {
+    if (!this.toolChangeResumeState) {
+      this.isStreaming = true;
+      this.sendNextQueued();
+      return;
+    }
+
+    const s = this.toolChangeResumeState;
+    this.bridge.notify(`Resuming job with Tool #${s.toolNum}...`, 'ok');
+
+    // 1. Return to saved XY at safe clearance Z
+    this.sendImmediate(`G0 X${s.lastPos.X.toFixed(3)} Y${s.lastPos.Y.toFixed(3)} F3000\n`);
+    // 2. Restore Spindle if running
+    if (s.spindleRPM > 0) {
+      this.sendImmediate(`M3 S${s.spindleRPM}\n`);
+      this.sendImmediate('G4 P2\n'); // Dwell 2 sec for spindle spin-up
+    }
+    // 3. Plunge back to cutting Z
+    this.sendImmediate(`G1 Z${s.lastPos.Z.toFixed(3)} F${s.feedRate || 300}\n`);
+
+    this.toolChangeResumeState = null;
+    this.isStreaming = true;
+    this.sendNextQueued();
   }
 
   onCommandAck() {
@@ -2539,6 +2647,41 @@ class CLEVault {
     localStorage.setItem('cle.vault.machines', JSON.stringify(list));
     this.bridge.notify(`Machine profile removed from Vault.`);
   }
+
+  // --- Persistent Camera Permission & Device Configuration ---
+  saveCameraConfig(cfg) {
+    const current = this.getCameraConfig();
+    const updated = { ...current, ...cfg, lastSaved: Date.now() };
+    localStorage.setItem('cle.vault.camera', JSON.stringify(updated));
+    if (cfg.deviceId) localStorage.setItem('cle.cam.deviceId', cfg.deviceId);
+    if (cfg.wifiUrl) localStorage.setItem('cle.cam.wifiUrl', cfg.wifiUrl);
+    if (cfg.permissionGranted !== undefined) {
+      localStorage.setItem('cle.cam.permissionGranted', cfg.permissionGranted ? 'true' : 'false');
+    }
+    const mach = this.getActiveMachine();
+    if (mach) {
+      mach.cameraConfig = updated;
+      const list = this.getMachinesSync();
+      const idx = list.findIndex(m => m.id === mach.id);
+      if (idx >= 0) list[idx] = mach;
+      localStorage.setItem('cle.vault.machines', JSON.stringify(list));
+    }
+  }
+
+  getCameraConfig() {
+    try {
+      const raw = localStorage.getItem('cle.vault.camera');
+      if (raw) return JSON.parse(raw);
+    } catch(e) {}
+    const mach = this.getActiveMachine();
+    if (mach && mach.cameraConfig) return mach.cameraConfig;
+    return {
+      permissionGranted: localStorage.getItem('cle.cam.permissionGranted') === 'true',
+      deviceId: localStorage.getItem('cle.cam.deviceId') || '',
+      wifiUrl: localStorage.getItem('cle.cam.wifiUrl') || 'http://192.168.12.158:8080/video',
+      activeType: 'usb'
+    };
+  }
 }
 
 /* --- Module: cle_test.js --- */
@@ -2673,7 +2816,12 @@ class CLEJobRecoveryEngine {
   recordPosition(wpos) {
     if (wpos) {
       this.lastPosition = { ...this.lastPosition, ...wpos };
-      this.saveCheckpoint();
+      const now = Date.now();
+      // Throttle checkpoint disk/localStorage writes to at most once per second
+      if (!this._lastSavedTime || (now - this._lastSavedTime > 1000)) {
+        this._lastSavedTime = now;
+        this.saveCheckpoint();
+      }
     }
   }
 
@@ -3278,6 +3426,35 @@ class CLESlicerEngine {
       retLine.computeLineDistances();
       this.visualizerGroup.add(retLine);
 
+      // 4. Translucent Orange Mode Indicator Layer:
+      // CNC / Laser (Top-Down): Translucent Orange Cap on TOP layer where milling begins
+      // 3D Printing (Bottom-Up): Translucent Orange Base on BOTTOM layer where depositing begins on the bed
+      const modePlaneGeo = new THREE.PlaneGeometry(stockW, stockD);
+      const modePlaneMat = new THREE.MeshBasicMaterial({
+        color: 0xf97316, // Vivid Orange
+        transparent: true,
+        opacity: 0.38,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const modePlane = new THREE.Mesh(modePlaneGeo, modePlaneMat);
+      const modePlaneZ = isTopDown ? maxZ : minZ;
+      modePlane.position.set(stockCx, stockCy, modePlaneZ);
+      modePlane.name = isTopDown ? 'CLE_CNC_Top_Start_Surface' : 'CLE_3D_Bottom_Bed_Contact';
+      this.visualizerGroup.add(modePlane);
+
+      // Distinct orange perimeter outline border around start layer
+      const modeBorderGeo = new THREE.EdgesGeometry(modePlaneGeo);
+      const modeBorderMat = new THREE.LineBasicMaterial({
+        color: 0xea580c,
+        linewidth: 3,
+        transparent: true,
+        opacity: 0.95
+      });
+      const modeBorder = new THREE.LineSegments(modeBorderGeo, modeBorderMat);
+      modeBorder.position.set(stockCx, stockCy, modePlaneZ);
+      this.visualizerGroup.add(modeBorder);
+
       // Smoothly frame camera on sliced workpiece
       if (app.vp && app.vp.view) {
         app.vp.view.target.set(stockCx, stockCy, stockCz);
@@ -3325,6 +3502,18 @@ class CLESlicerEngine {
   clearVisualizer() {
     const app = window.app || window.xe;
     if (this.visualizerGroup) {
+      this.visualizerGroup.traverse((obj) => {
+        if (obj.geometry) {
+          try { obj.geometry.dispose(); } catch (e) {}
+        }
+        if (obj.material) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach(m => {
+            if (m.map) { try { m.map.dispose(); } catch (e) {} }
+            try { m.dispose(); } catch (e) {}
+          });
+        }
+      });
       if (this.visualizerGroup.parent) {
         this.visualizerGroup.parent.remove(this.visualizerGroup);
       }
@@ -3426,6 +3615,7 @@ class CLESlicerEngine {
       </div>
       <input type="range" id="cle-hud-slider" min="-1" max="${numLayers - 1}" value="-1" style="width:140px;">
       <button class="cle-btn" id="cle-hud-all">Show All</button>
+      <button class="cle-btn" id="cle-hud-trace" style="background:#0284c7; color:#fff; font-weight:600;">Trace 3D</button>
       <div style="border-left:1px solid var(--line); height:18px;"></div>
       <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600;">Export .NC</button>
       <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600;">To SD Card</button>
@@ -3461,7 +3651,227 @@ class CLESlicerEngine {
     document.getElementById('cle-hud-all').onclick = () => updateHUD(-1);
     document.getElementById('cle-hud-export').onclick = () => this.exportGCodeFile();
     document.getElementById('cle-hud-upload').onclick = () => this.uploadGCodeToSD();
+    const traceBtn = document.getElementById('cle-hud-trace');
+    if (traceBtn) {
+      traceBtn.onclick = () => {
+        if (this.isSimulating) {
+          this.stopTraceSimulation();
+          traceBtn.textContent = 'Trace 3D';
+        } else {
+          this.startTraceSimulation(2);
+          traceBtn.textContent = 'Stop Trace';
+        }
+      };
+    }
     document.getElementById('cle-hud-close').onclick = () => { this.clearVisualizer(); };
+  }
+
+  // --- Grayscale Heightmap to Slice Conversion (Original CLE Feature) ---
+  // Converts 8-bit or 16-bit grayscale images to multi-layer toolpath slices with brightness, contrast, gamma
+  async sliceGrayscaleHeightmap(imageSource = null, options = {}) {
+    const brightness = options.brightness !== undefined ? options.brightness : 0;
+    const contrast = options.contrast !== undefined ? options.contrast : 0;
+    const gamma = options.gamma !== undefined ? options.gamma : 1.0;
+    const sliceCount = Math.max(2, Math.min(64, options.sliceCount || 16));
+    const bitDepth = options.bitDepth === '16bit' ? '16bit' : '8bit';
+    const targetW = options.targetWidth || 100.0;
+    const targetD = options.targetHeight || 100.0;
+    const depthMm = options.depthMm || 4.0;
+    const mode = options.mode || this.mode || 'cnc';
+    this.mode = mode;
+
+    this.bridge.notify(`Generating ${sliceCount} Grayscale slices (${bitDepth}, ${mode.toUpperCase()})...`, 'info');
+
+    // 1. Render imageSource to offscreen canvas
+    const cols = 80;
+    const rows = 80;
+    const canvas = document.createElement('canvas');
+    canvas.width = cols;
+    canvas.height = rows;
+    const ctx = canvas.getContext('2d');
+
+    if (imageSource instanceof HTMLImageElement || imageSource instanceof HTMLCanvasElement) {
+      ctx.drawImage(imageSource, 0, 0, cols, rows);
+    } else {
+      // Default radial gradient relief pattern for instant visualization
+      const grad = ctx.createRadialGradient(cols / 2, rows / 2, 4, cols / 2, rows / 2, cols / 2);
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(0.5, '#888888');
+      grad.addColorStop(1, '#000000');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, cols, rows);
+    }
+
+    const imgData = ctx.getImageData(0, 0, cols, rows).data;
+    const heightMap = new Float32Array(cols * rows);
+    const factor = (259 * (contrast + 255)) / (255 * (259 - contrast) || 1);
+
+    for (let i = 0; i < cols * rows; i++) {
+      const idx = i * 4;
+      let r = imgData[idx];
+      let g = imgData[idx + 1];
+      let b = imgData[idx + 2];
+
+      let L = 0.299 * r + 0.587 * g + 0.114 * b;
+      L = L + (brightness * 2.55);
+      L = factor * (L - 128) + 128;
+      L = Math.max(0, Math.min(255, L));
+
+      let v = L / 255.0;
+      v = Math.pow(v, 1.0 / Math.max(0.1, gamma));
+
+      if (bitDepth === '8bit') {
+        v = Math.round(v * 255) / 255.0;
+      } else {
+        v = Math.round(v * 65535) / 65535.0;
+      }
+      heightMap[i] = v;
+    }
+
+    // 2. Build Slices based on Mode
+    this.slicedLayers = [];
+    const isTopDown = (mode === 'cnc' || mode === 'laser');
+    const xStep = targetW / cols;
+    const yStep = targetD / rows;
+
+    for (let s = 0; s < sliceCount; s++) {
+      const progress = s / Math.max(1, sliceCount - 1);
+      let layerZ;
+      if (isTopDown) {
+        layerZ = -progress * depthMm;
+      } else {
+        layerZ = 1.0 + progress * depthMm;
+      }
+
+      const layer = {
+        index: s,
+        z: layerZ,
+        toolNumber: s === 0 ? 1 : (s > sliceCount / 2 ? 2 : 1),
+        points: []
+      };
+
+      for (let r = 0; r < rows; r += 2) {
+        const yPos = r * yStep;
+        const forward = (r / 2) % 2 === 0;
+        const startC = forward ? 0 : cols - 1;
+        const endC = forward ? cols : -1;
+        const stepC = forward ? 1 : -1;
+
+        let inCut = false;
+        for (let c = startC; c !== endC; c += stepC) {
+          const val = heightMap[r * cols + c];
+          const xPos = c * xStep;
+
+          const shouldCut = isTopDown ? (val >= (1.0 - progress)) : (val >= progress);
+
+          if (shouldCut) {
+            if (!inCut) {
+              layer.points.push({ x: xPos, y: yPos, z: layerZ, isRapid: true });
+              inCut = true;
+            }
+            layer.points.push({ x: xPos, y: yPos, z: layerZ, isRapid: false });
+          } else if (inCut) {
+            layer.points.push({ x: xPos, y: yPos, z: layerZ + (isTopDown ? 2.0 : 0.5), isRapid: true });
+            inCut = false;
+          }
+        }
+      }
+
+      if (layer.points.length > 1) {
+        this.slicedLayers.push(layer);
+      }
+    }
+
+    // Generate G-code lines for the grayscale slices
+    const gcode = [];
+    gcode.push(`; === CLEJS Grayscale Slices ===`);
+    gcode.push(`; Mode: ${mode.toUpperCase()} | Passes: ${this.slicedLayers.length} | BitDepth: ${bitDepth}`);
+    gcode.push(`G21 G90 G17`);
+    gcode.push(`G0 Z10.000 F1000`);
+    let currentTool = 0;
+
+    for (const l of this.slicedLayers) {
+      if (l.toolNumber && l.toolNumber !== currentTool) {
+        currentTool = l.toolNumber;
+        gcode.push(`; --- Tool Change to Tool #${currentTool} ---`);
+        gcode.push(`M5`);
+        gcode.push(`G0 Z20.000 F800`);
+        gcode.push(`M6 T${currentTool}`);
+        gcode.push(mode === 'laser' ? 'M3 S1000' : 'M3 S12000');
+        gcode.push(`G4 P2`);
+      }
+      gcode.push(`; Layer Z = ${l.z.toFixed(3)}`);
+      for (const p of l.points) {
+        if (p.isRapid) {
+          gcode.push(`G0 X${p.x.toFixed(3)} Y${p.y.toFixed(3)} Z${p.z.toFixed(3)} F3000`);
+        } else {
+          gcode.push(`G1 X${p.x.toFixed(3)} Y${p.y.toFixed(3)} Z${p.z.toFixed(3)} F1200`);
+        }
+      }
+    }
+    gcode.push(`M5`);
+    gcode.push(`G0 Z20.000 F1000`);
+    this.rawGCode = gcode.join('\n');
+
+    this.renderSlicedStackToVisualizer();
+    this.mountLayerHUD();
+    this.bridge.notify(`Grayscale Sliced: ${this.slicedLayers.length} passes rendered in 3D visualizer!`, 'ok');
+    return this.slicedLayers;
+  }
+
+  showSlicerHUD() {
+    this.mountLayerHUD();
+  }
+
+  // --- 3D Toolpath Trace Simulator ---
+  startTraceSimulation(speedMultiplier = 2) {
+    if (!this.slicedLayers || this.slicedLayers.length === 0) {
+      this.bridge.notify('Slice a model first to run trace simulator.', 'error');
+      return;
+    }
+
+    this.stopTraceSimulation();
+    this.isSimulating = true;
+    this.simSpeed = speedMultiplier;
+
+    const allPts = [];
+    this.slicedLayers.forEach(l => {
+      l.points.forEach(p => allPts.push({ ...p, layerIndex: l.index }));
+    });
+
+    if (allPts.length === 0) return;
+
+    let ptIdx = 0;
+    const step = () => {
+      if (!this.isSimulating) return;
+
+      const pt = allPts[ptIdx];
+      if (pt && this.bridge.bed) {
+        this.bridge.bed.updateToolCursor({ X: pt.x, Y: pt.y, Z: pt.z });
+      }
+
+      ptIdx += Math.max(1, Math.floor(this.simSpeed));
+      if (ptIdx >= allPts.length) {
+        this.isSimulating = false;
+        this.bridge.notify('Trace simulation complete.', 'ok');
+        const traceBtn = document.getElementById('cle-hud-trace');
+        if (traceBtn) traceBtn.textContent = 'Trace 3D';
+        return;
+      }
+
+      this._simAnimId = requestAnimationFrame(step);
+    };
+
+    this._simAnimId = requestAnimationFrame(step);
+    this.bridge.notify(`Trace simulation running (${this.simSpeed}x speed)...`, 'info');
+  }
+
+  stopTraceSimulation() {
+    this.isSimulating = false;
+    if (this._simAnimId) {
+      cancelAnimationFrame(this._simAnimId);
+      this._simAnimId = null;
+    }
   }
 
   exportGCodeFile() {
@@ -3876,9 +4286,7 @@ class CLEBedVisualizer {
       };
     }
 
-    if (this.bedGroup && this.bedGroup.parent) {
-      this.bedGroup.parent.remove(this.bedGroup);
-    }
+    this.disposeBedGroup();
 
     this.bedGroup = new THREE.Group();
     this.bedGroup.name = 'CLE_Device_Bed_Visualizer';
@@ -4245,13 +4653,28 @@ class CLEBedVisualizer {
     this.guideLines.computeLineDistances();
   }
 
-  // Live Position Update from FluidNC DRO (wpos or mpos)
+  // Live Position Update from FluidNC DRO (wpos or mpos) - throttled to avoid memory & rendering churn
   updateToolCursor(coords) {
     if (!coords) return;
-    this.lastPos.X = coords.X !== undefined ? coords.X : this.lastPos.X;
-    this.lastPos.Y = coords.Y !== undefined ? coords.Y : this.lastPos.Y;
-    this.lastPos.Z = coords.Z !== undefined ? coords.Z : this.lastPos.Z;
-    if (coords.A !== undefined) this.lastPos.A = coords.A;
+    if (!this._lastRenderedPos) this._lastRenderedPos = { X: NaN, Y: NaN, Z: NaN, A: NaN };
+
+    const newX = coords.X !== undefined ? coords.X : this.lastPos.X;
+    const newY = coords.Y !== undefined ? coords.Y : this.lastPos.Y;
+    const newZ = coords.Z !== undefined ? coords.Z : this.lastPos.Z;
+    const newA = coords.A !== undefined ? coords.A : this.lastPos.A;
+
+    // Only update 3D scene if position has actually moved by > 0.05mm
+    const dx = Math.abs(newX - this._lastRenderedPos.X);
+    const dy = Math.abs(newY - this._lastRenderedPos.Y);
+    const dz = Math.abs(newZ - this._lastRenderedPos.Z);
+    const da = Math.abs(newA - this._lastRenderedPos.A);
+    if (dx < 0.05 && dy < 0.05 && dz < 0.05 && da < 0.1) return;
+
+    this.lastPos.X = newX;
+    this.lastPos.Y = newY;
+    this.lastPos.Z = newZ;
+    this.lastPos.A = newA;
+    this._lastRenderedPos = { X: newX, Y: newY, Z: newZ, A: newA };
 
     if (this.cursorGroup) {
       this.cursorGroup.position.set(this.lastPos.X, this.lastPos.Y, this.lastPos.Z);
@@ -4261,7 +4684,10 @@ class CLEBedVisualizer {
 
     if (this.coordTag && this.coordTag.material && this.coordTag.material.map) {
       const text = `X:${this.lastPos.X.toFixed(1)} Y:${this.lastPos.Y.toFixed(1)} Z:${this.lastPos.Z.toFixed(1)}`;
-      this.updateSpriteCanvasText(this.coordTag, text);
+      if (this._lastCoordText !== text) {
+        this._lastCoordText = text;
+        this.updateSpriteCanvasText(this.coordTag, text);
+      }
     }
 
     this.requestRender();
@@ -4299,6 +4725,42 @@ class CLEBedVisualizer {
     this.requestRender();
     this.bridge.notify(`Machine Bed & Rulers: ${this.visible ? 'VISIBLE' : 'HIDDEN'}`, 'info');
     return this.visible;
+  }
+
+  // Safely dispose all geometries, materials and textures to prevent memory leaks
+  disposeBedGroup() {
+    if (!this.bedGroup) return;
+    if (this.rulerSprites) {
+      this.rulerSprites.forEach(s => {
+        if (s.material && s.material.map) s.material.map.dispose();
+        if (s.material) s.material.dispose();
+      });
+      this.rulerSprites = [];
+    }
+
+    this.bedGroup.traverse((obj) => {
+      if (obj.geometry) {
+        try { obj.geometry.dispose(); } catch (e) {}
+      }
+      if (obj.material) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach(m => {
+          if (m.map) {
+            try { m.map.dispose(); } catch (e) {}
+          }
+          try { m.dispose(); } catch (e) {}
+        });
+      }
+    });
+
+    if (this.bedGroup.parent) {
+      this.bedGroup.parent.remove(this.bedGroup);
+    }
+    this.bedGroup = null;
+    this.cursorGroup = null;
+    this.shadowCrosshair = null;
+    this.guideLines = null;
+    this.coordTag = null;
   }
 
   // Full Rebuild when Machine Profile or Spoilboard Size is changed in Vault
@@ -4590,6 +5052,46 @@ class CLEBridge {
           </div>
         </div>
 
+        <!-- Surface Compensation (0.1mm Micro-stepping for Uneven Surface) -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span class="cle-joycon-title" style="margin:0;">Surface Compensation (&plusmn;0.1mm)</span>
+            <span style="font-size:10px; color:var(--accent); font-weight:600;" id="cle-comp-status">Active Nudge: 0.1mm</span>
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px;">
+            <div style="display:flex; flex-direction:column; gap:4px; text-align:center;">
+              <span style="font-size:10px; font-weight:700;">X</span>
+              <button class="cle-btn" id="cle-comp-xp" style="justify-content:center; padding:2px;">+0.1</button>
+              <button class="cle-btn" id="cle-comp-xm" style="justify-content:center; padding:2px;">-0.1</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:4px; text-align:center;">
+              <span style="font-size:10px; font-weight:700;">Y</span>
+              <button class="cle-btn" id="cle-comp-yp" style="justify-content:center; padding:2px;">+0.1</button>
+              <button class="cle-btn" id="cle-comp-ym" style="justify-content:center; padding:2px;">-0.1</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:4px; text-align:center;">
+              <span style="font-size:10px; font-weight:700; color:var(--accent);">Z</span>
+              <button class="cle-btn" id="cle-comp-zp" style="justify-content:center; padding:2px; font-weight:700;">+0.1</button>
+              <button class="cle-btn" id="cle-comp-zm" style="justify-content:center; padding:2px; font-weight:700;">-0.1</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:4px; text-align:center;">
+              <span style="font-size:10px; font-weight:700;">A</span>
+              <button class="cle-btn" id="cle-comp-ap" style="justify-content:center; padding:2px;">+0.1&deg;</button>
+              <button class="cle-btn" id="cle-comp-am" style="justify-content:center; padding:2px;">-0.1&deg;</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Move Current Point (Safe Workpiece Positioning) -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:6px;">Move Current Point (Safe Z Clearance)</div>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input class="cle-input" id="cle-mcp-x" type="number" placeholder="Target X" style="padding:3px 6px; font-size:11px; width:70px;">
+            <input class="cle-input" id="cle-mcp-y" type="number" placeholder="Target Y" style="padding:3px 6px; font-size:11px; width:70px;">
+            <button class="cle-btn" id="cle-mcp-go" style="background:var(--accent); color:var(--on-accent); font-weight:600; flex:1;">Move Point (Z-Safe)</button>
+          </div>
+        </div>
+
         <!-- Spindle & Laser Controls -->
         <div class="cle-joycon-panel" style="padding:8px 10px;">
           <div class="cle-joycon-title" style="margin-bottom:6px;">Spindle & Laser Controls</div>
@@ -4710,6 +5212,27 @@ class CLEBridge {
       this.fluidnc.exportRecordedGCode();
     };
 
+    // Surface Compensation Events (0.1mm micro-steps)
+    document.getElementById('cle-comp-xp').onclick = () => this.fluidnc.compensateAxis('X', 0.1);
+    document.getElementById('cle-comp-xm').onclick = () => this.fluidnc.compensateAxis('X', -0.1);
+    document.getElementById('cle-comp-yp').onclick = () => this.fluidnc.compensateAxis('Y', 0.1);
+    document.getElementById('cle-comp-ym').onclick = () => this.fluidnc.compensateAxis('Y', -0.1);
+    document.getElementById('cle-comp-zp').onclick = () => this.fluidnc.compensateAxis('Z', 0.1);
+    document.getElementById('cle-comp-zm').onclick = () => this.fluidnc.compensateAxis('Z', -0.1);
+    document.getElementById('cle-comp-ap').onclick = () => this.fluidnc.compensateAxis('A', 0.1);
+    document.getElementById('cle-comp-am').onclick = () => this.fluidnc.compensateAxis('A', -0.1);
+
+    // Move Current Point (Safe clearance retract first)
+    document.getElementById('cle-mcp-go').onclick = () => {
+      const tx = parseFloat(document.getElementById('cle-mcp-x').value);
+      const ty = parseFloat(document.getElementById('cle-mcp-y').value);
+      if (!isNaN(tx) && !isNaN(ty)) {
+        this.moveCurrentPoint(tx, ty);
+      } else {
+        this.notify('Enter valid target X and Y coordinates.', 'error');
+      }
+    };
+
     // Camera Subsystem Events
     document.getElementById('cle-cam-btn-start-usb').onclick = () => {
       this.camera.startUSBCamera(devSelect.value);
@@ -4754,6 +5277,85 @@ class CLEBridge {
     };
 
     window.addEventListener('resize', () => this.camera.updateReticleCanvas());
+  }
+
+  // --- Safe Workpiece Navigation: Move Current Point ---
+  moveCurrentPoint(targetX, targetY) {
+    if (!this.fluidnc || !this.fluidnc.isConnected) {
+      this.notify('Connect to machine first.', 'error');
+      return;
+    }
+    this.notify(`Moving tool to X:${targetX.toFixed(1)} Y:${targetY.toFixed(1)} (Safe Z Retract first)...`, 'info');
+    // 1. Safe clearance retract
+    this.fluidnc.sendImmediate('G0 Z20.000 F800\n');
+    // 2. Rapid traverse to target XY
+    this.fluidnc.sendImmediate(`G0 X${targetX.toFixed(3)} Y${targetY.toFixed(3)} F3000\n`);
+  }
+
+  // --- Manual Tool Change Card (M6 Intercept Routine) ---
+  openToolChangeCard(resumeState) {
+    let card = document.getElementById('cle-tool-change-card');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'cle-tool-change-card';
+      card.style.cssText = `
+        position: fixed;
+        top: 80px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 440px;
+        background: var(--panel);
+        color: var(--ink);
+        border: 2px solid var(--accent);
+        border-radius: 10px;
+        box-shadow: 0 16px 48px var(--shadow);
+        z-index: 10000;
+        padding: 16px;
+        font-family: var(--f);
+      `;
+      document.body.appendChild(card);
+    }
+
+    const tool = (this.toolLibrary && this.toolLibrary.tools)
+      ? (this.toolLibrary.tools.find(t => t.number === resumeState.toolNum) || { name: `Tool #${resumeState.toolNum}`, type: 'Endmill / Laser', diameter: 3.175 })
+      : { name: `Tool #${resumeState.toolNum}`, type: 'Endmill / Laser', diameter: 3.175 };
+
+    card.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:12px;">
+        <span style="font-size:14px; font-weight:800; color:var(--accent);">Manual Tool Change Required</span>
+        <span class="cle-badge alert">Job Paused</span>
+      </div>
+      <div class="cle-joycon-panel" style="padding:10px; margin-bottom:12px;">
+        <div style="font-size:13px; font-weight:700; color:var(--ink);">Please Install: Tool #${resumeState.toolNum} &mdash; ${tool.name}</div>
+        <div style="font-size:11px; color:var(--ink-2); margin-top:4px;">Type: ${tool.type} | Diameter: ${tool.diameter}mm</div>
+        <div style="font-size:11px; color:var(--ink-3); margin-top:2px;">Requested at G-code line ${resumeState.lineIndex}: <code>${resumeState.gcodeLine}</code></div>
+      </div>
+      <div style="font-size:11px; color:var(--ink-2); margin-bottom:10px;">
+        Saved Resume Position: <strong>X: ${resumeState.lastPos.X.toFixed(2)}, Y: ${resumeState.lastPos.Y.toFixed(2)}, Z: ${resumeState.lastPos.Z.toFixed(2)}</strong> (Spindle is safely retracted at Z=20mm)
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px;">
+        <button class="cle-btn" id="cle-tc-btn-probe">Probe Z (Touch Plate)</button>
+        <button class="cle-btn" id="cle-tc-btn-zero">Zero Z (G92 Z0)</button>
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="cle-btn" id="cle-tc-btn-continue" style="background:var(--ok); color:#fff; font-weight:700; padding:8px 18px;">Continue Job</button>
+      </div>
+    `;
+
+    card.style.display = 'block';
+
+    document.getElementById('cle-tc-btn-probe').onclick = () => {
+      this.fluidnc.sendGCode('G21 G91\nG38.2 Z-30 F75\nG92 Z15.0\nG0 Z5\nG90\n');
+      this.notify('Probing Z touch plate...', 'info');
+    };
+    document.getElementById('cle-tc-btn-zero').onclick = () => {
+      this.fluidnc.sendImmediate('G92 Z0\n');
+      this.notify('Work coordinate Z zeroed (G92 Z0).', 'ok');
+    };
+    document.getElementById('cle-tc-btn-continue').onclick = () => {
+      card.style.display = 'none';
+      this.fluidnc.continueAfterToolChange();
+    };
   }
 
   // --- Modals (Gamepad Setup Table, MEAGCLE Vault, Job Recovery, Slicer) ---
@@ -5024,6 +5626,65 @@ class CLEBridge {
 
         <div style="margin-top:14px; display:flex; gap:10px;">
           <button class="cle-btn" id="slice-run-btn" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Slice & Display in 3D Viewport</button>
+        </div>
+      `;
+    } else if (type === 'grayscale') {
+      title = '🖼️ Grayscale Heightmap to Slices (Original CLE)';
+      bodyHtml = `
+        <p>Convert 8-bit or 16-bit grayscale depthmaps/relief images into multi-pass toolpath slices with real-time brightness, contrast, and gamma modulation.</p>
+        
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
+          <div class="cle-form-row">
+            <label>Machine Mode (Device-Aware):</label>
+            <select class="cle-select" id="grey-mode">
+              <option value="cnc" ${this.slicer.mode==='cnc'?'selected':''}>CNC Milling (Top-Down Carving into Stock)</option>
+              <option value="laser" ${this.slicer.mode==='laser'?'selected':''}>Laser Engraving (Power Modulated S0-S1000)</option>
+              <option value="3d" ${this.slicer.mode==='3d'?'selected':''}>3D Additive Relief (Lithophane Bottom-Up)</option>
+            </select>
+          </div>
+          <div class="cle-form-row">
+            <label>Bit Depth Mode:</label>
+            <select class="cle-select" id="grey-bitdepth">
+              <option value="8bit">8-Bit Mode (256 Discrete Grayscale Levels)</option>
+              <option value="16bit">16-Bit Mode (High-Precision 65,536 Levels)</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <div class="cle-form-row">
+            <label>Number of Slices / Passes:</label>
+            <input class="cle-input" id="grey-slices" type="number" min="2" max="64" value="16">
+          </div>
+          <div class="cle-form-row">
+            <label>Max Carving / Relief Depth (mm):</label>
+            <input class="cle-input" id="grey-depth" type="number" step="0.5" value="4.0">
+          </div>
+        </div>
+
+        <div class="cle-joycon-panel" style="padding:10px 14px; margin-top:8px;">
+          <div class="cle-joycon-title" style="margin-bottom:8px;">Image Modulation Controls</div>
+          <div class="cle-form-row" style="margin-bottom:6px;">
+            <label>Brightness: <span id="lbl-grey-bright" style="font-family:var(--f-mono);">0</span></label>
+            <input type="range" id="grey-bright" min="-100" max="100" value="0" style="width:100%;">
+          </div>
+          <div class="cle-form-row" style="margin-bottom:6px;">
+            <label>Contrast: <span id="lbl-grey-contrast" style="font-family:var(--f-mono);">0</span></label>
+            <input type="range" id="grey-contrast" min="-100" max="100" value="0" style="width:100%;">
+          </div>
+          <div class="cle-form-row" style="margin-bottom:6px;">
+            <label>Gamma: <span id="lbl-grey-gamma" style="font-family:var(--f-mono);">1.0</span></label>
+            <input type="range" id="grey-gamma" min="20" max="300" value="100" style="width:100%;">
+          </div>
+        </div>
+
+        <div class="cle-form-row" style="margin-top:10px;">
+          <label>Load Custom Image File (Optional):</label>
+          <input type="file" id="grey-file" accept="image/*" class="cle-input" style="padding:4px;">
+        </div>
+
+        <div style="margin-top:14px; display:flex; justify-content:flex-end; gap:8px;">
+          <button class="cle-btn" id="grey-btn-generate" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Generate Slices & View in 3D</button>
         </div>
       `;
     } else if (type === 'machines') {
@@ -5346,6 +6007,47 @@ class CLEBridge {
         this.slicer.feedRate = parseFloat(feed) || 1500;
         await this.slicer.sliceModel({ mode, layerHeight: layerH, infill });
         this.closeModal();
+      };
+    } else if (type === 'grayscale') {
+      const bSlider = document.getElementById('grey-bright');
+      const cSlider = document.getElementById('grey-contrast');
+      const gSlider = document.getElementById('grey-gamma');
+      bSlider.oninput = (e) => { document.getElementById('lbl-grey-bright').textContent = e.target.value; };
+      cSlider.oninput = (e) => { document.getElementById('lbl-grey-contrast').textContent = e.target.value; };
+      gSlider.oninput = (e) => { document.getElementById('lbl-grey-gamma').textContent = (e.target.value / 100).toFixed(1); };
+
+      let loadedImg = null;
+      document.getElementById('grey-file').onchange = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (re) => {
+            loadedImg = new Image();
+            loadedImg.src = re.target.result;
+          };
+          reader.readAsDataURL(file);
+        }
+      };
+
+      document.getElementById('grey-btn-generate').onclick = async () => {
+        const b = parseInt(bSlider.value, 10);
+        const c = parseInt(cSlider.value, 10);
+        const g = parseInt(gSlider.value, 10) / 100;
+        const slices = parseInt(document.getElementById('grey-slices').value, 10) || 16;
+        const depth = parseFloat(document.getElementById('grey-depth').value) || 4.0;
+        const bitDepth = document.getElementById('grey-bitdepth').value;
+        const mode = document.getElementById('grey-mode').value;
+
+        this.closeModal();
+        await this.slicer.sliceGrayscaleHeightmap(loadedImg, {
+          brightness: b,
+          contrast: c,
+          gamma: g,
+          sliceCount: slices,
+          depthMm: depth,
+          bitDepth,
+          mode
+        });
       };
     } else if (type === 'machines') {
       const populateForm = (mach) => {
