@@ -16,6 +16,7 @@ files = [
     'cle_test.js',
     'cle_recovery.js',
     'cle_slicer.js',
+    'cle_tool_library.js',
     'cle_boot.js'
 ]
 

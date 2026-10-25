@@ -316,66 +316,138 @@ export class CLEVault {
   getDefaultMachines() {
     return [
       {
-        id: 'ttc6050_cnc',
-        name: 'TwoTrees TTC6050 CNC (FluidNC)',
-        type: 'cnc',
+        id: 'ttc6050_custom_dlc32',
+        name: 'TwoTrees TTC6050 (MKS DLC32 MAX 4-Axis)',
+        chassis: 'TwoTrees TTC6050',
+        board: 'MKS DLC32 MAX (ESP32-WROVER-32E, 4-Axis True Motion)',
+        drivers: 'XYZ Closed-Loop CL57 Stepper Drivers',
+        encoders: 'VTA102 40K CPR Optical Encoders',
+        firmware: 'FluidNC v3.7+ Current FW',
         travelX: 600,
         travelY: 500,
         travelZ: 100,
-        travelA: 360,
-        safeLimitZ: 0.1,
-        clearanceX: 5.0,
-        clearanceY: 5.0,
+        travelA: 10000,
+        stepsPerMmX: 640.0,
+        stepsPerMmY: 640.0,
+        stepsPerMmZ: 640.0,
+        stepsPerMmA: 40.776,
+        safeLimitZ: 0.1,    // 0.1mm above bed spoilboard protection
+        clearanceX: 5.0,    // 5mm buffer from endstops
+        clearanceY: 5.0,    // 5mm buffer from endstops
         maxRateXY: 5000,
-        maxRateZ: 1000,
-        maxRateA: 3000,
-        spindleMaxRPM: 24000,
-        laserMaxPwr: 1000,
+        maxRateZ: 500,
+        maxRateA: 2000,
         wifiIP: '192.168.1.150',
-        firmware: 'FluidNC',
-        notes: 'Main 600x500 CNC mill with ESP32 FluidNC + FluidTouch 7" screen'
-      },
-      {
-        id: 'ttc6050_laser',
-        name: 'TwoTrees 20W Diode Laser (FluidNC)',
-        type: 'laser',
-        travelX: 600,
-        travelY: 500,
-        travelZ: 100,
-        travelA: 0,
-        safeLimitZ: 0.1,
-        clearanceX: 5.0,
-        clearanceY: 5.0,
-        maxRateXY: 8000,
-        maxRateZ: 1000,
-        maxRateA: 0,
-        spindleMaxRPM: 0,
-        laserMaxPwr: 1000,
-        wifiIP: '192.168.1.150',
-        firmware: 'FluidNC',
-        notes: '20W Diode Laser Module with air assist'
-      },
-      {
-        id: 'ttc6050_rotary',
-        name: 'TwoTrees TTC6050 4-Axis Rotary (FluidNC)',
-        type: 'rotary',
-        travelX: 600,
-        travelY: 100,
-        travelZ: 100,
-        travelA: 360,
-        safeLimitZ: 0.1,
-        clearanceX: 5.0,
-        clearanceY: 5.0,
-        maxRateXY: 3000,
-        maxRateZ: 1000,
-        maxRateA: 3000,
-        spindleMaxRPM: 24000,
-        laserMaxPwr: 0,
-        wifiIP: '192.168.1.150',
-        firmware: 'FluidNC',
-        notes: 'Cylindrical 4th axis carving with 80mm chuck'
+        activeHead: 'spindle', // 'spindle' | 'laser'
+        activeSpindleIndex: 0,
+        activeLaserIndex: 0,
+        spindles: [
+          {
+            id: 'sp1',
+            number: 1,
+            name: 'Spindle 1: Stock TTC 500W DC (12,000 RPM)',
+            type: 'DC PWM (gpio.35)',
+            toolNum: 0,
+            maxRPM: 12000,
+            minRPM: 1000,
+            spinupMs: 1500,
+            pwmHz: 5000,
+            notes: 'Stock TTC6050 spindle for general carving and light engraving'
+          },
+          {
+            id: 'sp2',
+            number: 2,
+            name: 'Spindle 2: 800W Air-Cooled Router (24,000 RPM)',
+            type: 'Trim Router / ER11',
+            toolNum: 0,
+            maxRPM: 24000,
+            minRPM: 5000,
+            spinupMs: 2000,
+            pwmHz: 5000,
+            notes: 'High-speed router for rapid wood and acrylic pocketing'
+          },
+          {
+            id: 'sp3',
+            number: 3,
+            name: 'Spindle 3: 1.5kW Water-Cooled VFD (24,000 RPM)',
+            type: 'VFD Spindle / ER16',
+            toolNum: 0,
+            maxRPM: 24000,
+            minRPM: 6000,
+            spinupMs: 3500,
+            pwmHz: 5000,
+            notes: 'Heavy duty, low-runout spindle for aluminum 6061 and precision 3D reliefs'
+          }
+        ],
+        lasers: [
+          {
+            id: 'ls1',
+            number: 1,
+            name: 'Laser 1: A70 Ultra-Power Laser (70W Optical)',
+            laserType: 'Quad/Octa Diode Array (gpio.2)',
+            toolNum: 1,
+            opticalWatts: 70.0,      // Optical output delivered to Ztop
+            electricalWatts: 160.0,  // Actual power consumption draw
+            efficiencyPct: 43.75,    // 70W / 160W = 43.75%
+            pwmFrequencyHz: 5000,    // Configurable 2,500Hz - 20,000Hz
+            focalDistanceMm: 30.0,   // Distance from tip of output cone to Ztop of workpiece
+            spotDiameterMm: 0.08,
+            maxFeedRate: 10000,
+            notes: 'Atomstack/IKIER A70 high power cutter: 70W optical at Ztop, 160W electrical'
+          },
+          {
+            id: 'ls2',
+            number: 2,
+            name: 'Laser 2: 20W Precision Engraver (20W Optical)',
+            laserType: 'Diode Array (gpio.2)',
+            toolNum: 1,
+            opticalWatts: 20.0,      // Optical output delivered to Ztop
+            electricalWatts: 120.0,  // Actual power consumption draw
+            efficiencyPct: 16.67,
+            pwmFrequencyHz: 5000,    // Configurable 2,500Hz - 20,000Hz
+            focalDistanceMm: 20.0,   // Distance from tip of output cone to Ztop of workpiece
+            spotDiameterMm: 0.05,
+            maxFeedRate: 8000,
+            notes: 'Fine-focus 20W diode head for high-resolution photo engraving and vector marking'
+          }
+        ]
       }
     ];
+  }
+
+  getActiveHead() {
+    const mach = this.getActiveMachine();
+    if (mach.activeHead === 'laser') {
+      const idx = mach.activeLaserIndex || 0;
+      return { type: 'laser', tool: mach.lasers ? mach.lasers[idx] : null };
+    }
+    const idx = mach.activeSpindleIndex || 0;
+    return { type: 'spindle', tool: mach.spindles ? mach.spindles[idx] : null };
+  }
+
+  getActiveSpindle() {
+    const mach = this.getActiveMachine();
+    const idx = mach.activeSpindleIndex || 0;
+    return (mach.spindles && mach.spindles[idx]) || (this.getDefaultMachines()[0].spindles[0]);
+  }
+
+  getActiveLaser() {
+    const mach = this.getActiveMachine();
+    const idx = mach.activeLaserIndex || 0;
+    return (mach.lasers && mach.lasers[idx]) || (this.getDefaultMachines()[0].lasers[0]);
+  }
+
+  setActiveHead(headType, toolIndex = 0) {
+    const mach = this.getActiveMachine();
+    mach.activeHead = headType;
+    if (headType === 'spindle') mach.activeSpindleIndex = toolIndex;
+    if (headType === 'laser') mach.activeLaserIndex = toolIndex;
+    this.saveMachine(mach);
+    if (this.bridge.fluidnc) {
+      this.bridge.fluidnc.applyMachineProfile(mach);
+    }
+    const tool = headType === 'spindle' ? mach.spindles[toolIndex] : mach.lasers[toolIndex];
+    this.bridge.notify(`Active tool changed to ${headType.toUpperCase()}: ${tool.name}`, 'ok');
   }
 
   getActiveMachine() {

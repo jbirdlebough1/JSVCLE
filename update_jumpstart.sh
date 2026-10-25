@@ -15,7 +15,12 @@ REPORTS="$PROJECT_ROOT/upstream-reports"
 
 mkdir -p "$HISTORY" "$REPORTS"
 
-python -c "
+PYTHON_CMD="python"
+if ! command -v python >/dev/null 2>&1; then
+    PYTHON_CMD="python3"
+fi
+
+$PYTHON_CMD -c "
 import urllib.request
 import re
 import hashlib

@@ -13,6 +13,7 @@ import { CLETestEngine } from './cle_test.js';
 import { CLEJobRecoveryEngine } from './cle_recovery.js';
 import { CLESlicerEngine } from './cle_slicer.js';
 import { CLECameraEngine } from './cle_camera.js';
+import { CLEToolLibrary } from './cle_tool_library.js';
 
 class CLEBridge {
   constructor() {
@@ -27,6 +28,7 @@ class CLEBridge {
     this.test = new CLETestEngine(this);
     this.recovery = new CLEJobRecoveryEngine(this);
     this.slicer = new CLESlicerEngine(this);
+    this.toolLibrary = new CLEToolLibrary(this);
 
     this.activeModal = null;
   }
@@ -139,6 +141,7 @@ class CLEBridge {
     // 4. Tools Section
     m("CLE Tools", "", [
       { id: "cle-r-vault", label: "Vault", title: "MEAGCLE Design & Machine State Git Vault", icon: "box", fn: () => this.openModal("vault") },
+      { id: "cle-r-tools", label: "Tool Library", title: "Tool Library & Manual/Automated Tool Changes", icon: "inspect", fn: () => this.openModal("tools") },
       { id: "cle-r-cal", label: "Calibration", title: "Steps/mm, Laser & Backlash Calibration", icon: "inspect", fn: () => this.openModal("calibration") },
       { id: "cle-r-test", label: "Test Suite", title: "Diagnostic Test Cuts", icon: "pattern", fn: () => this.openModal("test") },
       { id: "cle-r-rec", label: "Job Recovery", title: "Job Crash Recovery (-5 lines lookback)", icon: "recovery", fn: () => this.openModal("recovery") }
@@ -702,6 +705,112 @@ class CLEBridge {
           </div>
         </div>
       `;
+    } else if (type === 'tools') {
+      title = '🔧 Tool Library & Tool Changes (Spindles & Lasers)';
+      const tools = this.toolLibrary.tools;
+      const ts = this.toolLibrary.toolsetter;
+
+      bodyHtml = `
+        <div style="display:flex; justify-content:space-between; align-items:center; background:var(--paper); padding:10px 14px; border-radius:6px; border:1px solid var(--line); margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+          <div>
+            <span style="font-weight:700; color:var(--accent);">Tool Library:</span>
+            <span style="font-size:11px; color:var(--ink-2); margin-left:6px;">${tools.length} Tools Configured (Endmills, V-Bits, Lasers)</span>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button class="cle-btn" id="cle-tl-btn-add" style="background:var(--ok); color:#fff; font-weight:700;">+ Add New Tool</button>
+            <button class="cle-btn" id="cle-tl-btn-save-vault">Save to Vault</button>
+          </div>
+        </div>
+
+        <!-- Tool Change & Toolsetter Mode Configuration -->
+        <div class="cle-joycon-panel" style="padding:10px 12px; margin-bottom:12px;">
+          <div class="cle-joycon-title" style="margin-bottom:8px;">Tool Change Mode &amp; Toolsetter Setup (MTC / ATC)</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:11px;">
+            <div>
+              <div class="cle-form-row" style="grid-template-columns:140px 1fr; margin-bottom:6px;">
+                <label>Change Mode:</label>
+                <select class="cle-select" id="cle-ts-mode" style="padding:3px 6px;">
+                  <option value="mtc_probe" ${ts.mode==='mtc_probe'?'selected':''}>Manual Tool Change + Touch-Plate (MTC Probe)</option>
+                  <option value="mtc_fixed" ${ts.mode==='mtc_fixed'?'selected':''}>Manual Fixed-Length Stop Ring</option>
+                  <option value="atc_rack" ${ts.mode==='atc_rack'?'selected':''}>Automated Tool Changer (ATC Rack Slots)</option>
+                </select>
+              </div>
+              <div class="cle-form-row" style="grid-template-columns:140px 1fr; margin-bottom:6px;">
+                <label>Park Pos (G53 XYZ):</label>
+                <div style="display:flex; gap:4px;">
+                  <input class="cle-input" id="cle-ts-park-x" type="number" value="${ts.parkPosition.X}" style="width:50px; padding:2px 4px;">
+                  <input class="cle-input" id="cle-ts-park-y" type="number" value="${ts.parkPosition.Y}" style="width:50px; padding:2px 4px;">
+                  <input class="cle-input" id="cle-ts-park-z" type="number" value="${ts.parkPosition.Z}" style="width:50px; padding:2px 4px;">
+                </div>
+              </div>
+            </div>
+            <div>
+              <div class="cle-form-row" style="grid-template-columns:140px 1fr; margin-bottom:6px;">
+                <label>Toolsetter (G53 XY):</label>
+                <div style="display:flex; gap:4px;">
+                  <input class="cle-input" id="cle-ts-pos-x" type="number" value="${ts.setterPosition.X}" style="width:60px; padding:2px 4px;">
+                  <input class="cle-input" id="cle-ts-pos-y" type="number" value="${ts.setterPosition.Y}" style="width:60px; padding:2px 4px;">
+                </div>
+              </div>
+              <div class="cle-form-row" style="grid-template-columns:140px 1fr; margin-bottom:6px;">
+                <label>Plate Thickness (mm):</label>
+                <input class="cle-input" id="cle-ts-thick" type="number" step="0.1" value="${ts.touchPlateThicknessMm}" style="width:80px; padding:2px 4px;">
+              </div>
+            </div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+            <button class="cle-btn" id="cle-ts-save-btn" style="font-size:11px;">Update Toolsetter Config</button>
+          </div>
+        </div>
+
+        <!-- Tools Table -->
+        <div style="max-height:280px; overflow-y:auto; border:1px solid var(--line); border-radius:6px;">
+          <table class="cle-table">
+            <thead>
+              <tr>
+                <th>T#</th>
+                <th>Tool Name</th>
+                <th>Type</th>
+                <th>Geometry / Laser Specs</th>
+                <th>Assigned Head</th>
+                <th>Feeds &amp; Speeds</th>
+                <th>Tool Change Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tools.map(t => {
+                const isLaser = (t.type === 'laser');
+                const specs = isLaser
+                  ? `<strong>${t.opticalWatts}W Optical</strong> (${t.electricalWatts}W Draw, ${t.efficiencyPct}%)<br><span style="font-size:10px; color:var(--ink-3);">Focal: ${t.focalDistanceMm}mm | ${t.pwmFrequencyHz}Hz</span>`
+                  : `Ø${t.diameter}mm (Flute: ${t.fluteLength || '--'}mm)`;
+                const head = isLaser
+                  ? `<span class="cle-badge" style="background:#e34c26; color:#fff;">Laser ${t.laserNumber || 1}</span>`
+                  : `<span class="cle-badge" style="background:var(--accent); color:var(--on-accent);">Spindle ${t.spindleNumber || 1}</span>`;
+                const feeds = isLaser
+                  ? `Feed: ${t.feedXY} mm/min`
+                  : `RPM: ${t.spindleRPM || 12000}<br>F: ${t.feedXY} / P: ${t.plungeZ}`;
+
+                return `
+                  <tr>
+                    <td><strong>T${t.number}</strong></td>
+                    <td><strong>${t.name}</strong></td>
+                    <td><span style="text-transform:uppercase; font-size:10px; font-weight:700;">${t.type}</span></td>
+                    <td style="font-size:11px;">${specs}</td>
+                    <td>${head}</td>
+                    <td style="font-size:11px; font-family:var(--f-mono);">${feeds}</td>
+                    <td>
+                      <div style="display:flex; gap:4px;">
+                        <button class="cle-btn" onclick="window.CLE.toolLibrary.executeLiveToolChange(${t.number})" style="background:var(--ok); color:#fff; padding:2px 8px; font-weight:600;">Change (T${t.number})</button>
+                        <button class="cle-btn danger" onclick="window.CLE.deleteToolFromUI(${t.number})" style="padding:2px 6px;">&times;</button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
     }
 
     modal.innerHTML = `
@@ -906,6 +1015,104 @@ class CLEBridge {
           this.openModal('machines');
         }
       };
+    } else if (type === 'tools') {
+      // Save Toolsetter Config
+      document.getElementById('cle-ts-save-btn').onclick = () => {
+        const mode = document.getElementById('cle-ts-mode').value;
+        const parkX = parseFloat(document.getElementById('cle-ts-park-x').value) || 10.0;
+        const parkY = parseFloat(document.getElementById('cle-ts-park-y').value) || 10.0;
+        const parkZ = parseFloat(document.getElementById('cle-ts-park-z').value) || -5.0;
+        const posX = parseFloat(document.getElementById('cle-ts-pos-x').value) || 25.0;
+        const posY = parseFloat(document.getElementById('cle-ts-pos-y').value) || 25.0;
+        const thick = parseFloat(document.getElementById('cle-ts-thick').value) || 15.0;
+
+        this.toolLibrary.saveToolsetterConfig({
+          ...this.toolLibrary.toolsetter,
+          mode,
+          parkPosition: { X: parkX, Y: parkY, Z: parkZ },
+          setterPosition: { X: posX, Y: posY, Z: parkZ },
+          touchPlateThicknessMm: thick
+        });
+      };
+
+      // Add New Tool Button (Spindle or Laser with efficiency & optical/electrical W)
+      document.getElementById('cle-tl-btn-add').onclick = () => {
+        const isLaser = confirm('Click OK for Laser Tool, or Cancel for Spindle/Router Tool.');
+        if (isLaser) {
+          const name = prompt('Enter Laser Tool Name:', 'Atomstack A70 70W');
+          if (!name) return;
+          const optW = parseFloat(prompt('Optical Output Power (Watts to Ztop):', '70')) || 70;
+          const elecW = parseFloat(prompt('Electrical Power Consumption Draw (Watts):', '160')) || 160;
+          const focalMm = parseFloat(prompt('Focal Distance (mm from cone tip to Ztop):', '30')) || 30;
+          const pwmHz = parseInt(prompt('PWM Frequency (2500 - 20000 Hz):', '5000'), 10) || 5000;
+          const feed = parseFloat(prompt('Feed Speed (mm/min):', '8000')) || 8000;
+          const effPct = Math.round((optW / elecW) * 10000) / 100;
+          const nextNum = (this.toolLibrary.tools.length > 0) ? Math.max(...this.toolLibrary.tools.map(t => t.number)) + 1 : 1;
+
+          this.toolLibrary.addOrUpdateTool({
+            number: nextNum,
+            name,
+            type: 'laser',
+            diameter: 0.08,
+            laserNumber: (this.toolLibrary.tools.filter(t => t.type === 'laser').length + 1),
+            laserType: `${optW}W Diode (gpio.2)`,
+            opticalWatts: optW,
+            electricalWatts: elecW,
+            efficiencyPct: effPct,
+            pwmFrequencyHz: pwmHz,
+            focalDistanceMm: focalMm,
+            feedXY: feed,
+            plungeZ: 500,
+            changeMode: 'mtc_fixed',
+            atcSlot: nextNum,
+            notes: `Optical: ${optW}W, Electrical: ${elecW}W (${effPct}% efficiency)`
+          });
+          this.openModal('tools');
+        } else {
+          const name = prompt('Enter Spindle Tool Name:', '1/4" 2-Flute Carbide Endmill');
+          if (!name) return;
+          const dia = parseFloat(prompt('Tool Diameter (mm):', '6.35')) || 6.35;
+          const spindleNum = parseInt(prompt('Spindle Select (1=Stock 500W, 2=800W Router, 3=1.5kW VFD):', '1'), 10) || 1;
+          const rpm = parseInt(prompt('Spindle RPM:', '12000'), 10) || 12000;
+          const feed = parseFloat(prompt('Feed Rate XY (mm/min):', '1800')) || 1800;
+          const plunge = parseFloat(prompt('Plunge Rate Z (mm/min):', '400')) || 400;
+          const nextNum = (this.toolLibrary.tools.length > 0) ? Math.max(...this.toolLibrary.tools.map(t => t.number)) + 1 : 1;
+
+          this.toolLibrary.addOrUpdateTool({
+            number: nextNum,
+            name,
+            type: 'flat',
+            diameter: dia,
+            fluteLength: 22.0,
+            overallLength: 50.0,
+            flutes: 2,
+            spindleNumber: spindleNum,
+            spindleRPM: rpm,
+            feedXY: feed,
+            plungeZ: plunge,
+            stepoverPct: 40,
+            passDepth: 1.5,
+            changeMode: 'mtc_probe',
+            atcSlot: nextNum,
+            notes: `Spindle ${spindleNum} bit`
+          });
+          this.openModal('tools');
+        }
+      };
+
+      // Save to Vault Button
+      document.getElementById('cle-tl-btn-save-vault').onclick = async () => {
+        this.toolLibrary.saveTools();
+        await this.vault.saveControllerProfile('tool_library_backup', { tools: this.toolLibrary.tools });
+        this.notify('Tool Library saved to Vault & storage.', 'ok');
+      };
+    }
+  }
+
+  deleteToolFromUI(toolNumber) {
+    if (confirm(`Are you sure you want to delete Tool T${toolNumber}?`)) {
+      this.toolLibrary.deleteTool(toolNumber);
+      this.openModal('tools');
     }
   }
 

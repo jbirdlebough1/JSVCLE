@@ -778,11 +778,60 @@ class CLEFluidNCClient {
     this.softLimits.maxY = (mach.travelY || 500.0) - clY;
     this.softLimits.minZ = mach.safeLimitZ !== undefined ? mach.safeLimitZ : 0.1;
     this.softLimits.maxZ = mach.travelZ || 100.0;
-    if (mach.spindleMaxRPM) this.spindleRPM = mach.spindleMaxRPM;
+    
+    // Configure Active Tool Head (Spindle vs Laser)
+    if (mach.activeHead === 'laser') {
+      const laser = (mach.lasers && mach.lasers[mach.activeLaserIndex || 0]) || null;
+      this.activeToolType = 'laser';
+      this.activeLaser = laser;
+      this.laserActive = false;
+      this.spindleActive = false;
+    } else {
+      const spindle = (mach.spindles && mach.spindles[mach.activeSpindleIndex || 0]) || null;
+      this.activeToolType = 'spindle';
+      this.activeSpindle = spindle;
+      if (spindle && spindle.maxRPM) this.spindleRPM = spindle.maxRPM;
+      this.spindleActive = false;
+      this.laserActive = false;
+    }
+
     if (mach.wifiIP) {
       this.ip = mach.wifiIP;
       localStorage.setItem('cle.fluidnc.ip', mach.wifiIP);
     }
+  }
+
+  // Move Z to laser focal point (distance from output cone to workpiece Ztop)
+  autoFocusLaser() {
+    if (!this.isConnected) {
+      this.bridge.notify('Connect to FluidNC first.', 'error');
+      return;
+    }
+    const laser = this.activeLaser || this.bridge.vault.getActiveLaser();
+    const focalDist = laser.focalDistanceMm || 30.0;
+    this.sendGCode('G90');
+    this.sendGCode(`G0 Z${focalDist.toFixed(2)} F800`);
+    this.bridge.notify(`Positioned Z to laser focal point: ${focalDist}mm above Ztop (${laser.name})`, 'ok');
+  }
+
+  // Calculate & Set Laser Power with optical watts and electrical draw
+  setLaserPower(pct) {
+    const laser = this.activeLaser || this.bridge.vault.getActiveLaser();
+    const clampedPct = Math.max(0, Math.min(100, pct));
+    const opticalWatts = ((clampedPct / 100) * (laser.opticalWatts || 70.0)).toFixed(1);
+    const electricalWatts = ((clampedPct / 100) * (laser.electricalWatts || 160.0)).toFixed(1);
+    const pwmVal = Math.round((clampedPct / 100) * 1000);
+
+    this.laserPowerPct = clampedPct;
+    if (this.laserActive && this.isConnected) {
+      this.sendGCode(`M3 S${pwmVal}`);
+    }
+    return {
+      percent: clampedPct,
+      opticalWatts,
+      electricalWatts,
+      pwmVal
+    };
   }
 
   // Read machine settings & type via G-code variables ($$ and $I)
@@ -1957,66 +2006,138 @@ class CLEVault {
   getDefaultMachines() {
     return [
       {
-        id: 'ttc6050_cnc',
-        name: 'TwoTrees TTC6050 CNC (FluidNC)',
-        type: 'cnc',
+        id: 'ttc6050_custom_dlc32',
+        name: 'TwoTrees TTC6050 (MKS DLC32 MAX 4-Axis)',
+        chassis: 'TwoTrees TTC6050',
+        board: 'MKS DLC32 MAX (ESP32-WROVER-32E, 4-Axis True Motion)',
+        drivers: 'XYZ Closed-Loop CL57 Stepper Drivers',
+        encoders: 'VTA102 40K CPR Optical Encoders',
+        firmware: 'FluidNC v3.7+ Current FW',
         travelX: 600,
         travelY: 500,
         travelZ: 100,
-        travelA: 360,
-        safeLimitZ: 0.1,
-        clearanceX: 5.0,
-        clearanceY: 5.0,
+        travelA: 10000,
+        stepsPerMmX: 640.0,
+        stepsPerMmY: 640.0,
+        stepsPerMmZ: 640.0,
+        stepsPerMmA: 40.776,
+        safeLimitZ: 0.1,    // 0.1mm above bed spoilboard protection
+        clearanceX: 5.0,    // 5mm buffer from endstops
+        clearanceY: 5.0,    // 5mm buffer from endstops
         maxRateXY: 5000,
-        maxRateZ: 1000,
-        maxRateA: 3000,
-        spindleMaxRPM: 24000,
-        laserMaxPwr: 1000,
+        maxRateZ: 500,
+        maxRateA: 2000,
         wifiIP: '192.168.1.150',
-        firmware: 'FluidNC',
-        notes: 'Main 600x500 CNC mill with ESP32 FluidNC + FluidTouch 7" screen'
-      },
-      {
-        id: 'ttc6050_laser',
-        name: 'TwoTrees 20W Diode Laser (FluidNC)',
-        type: 'laser',
-        travelX: 600,
-        travelY: 500,
-        travelZ: 100,
-        travelA: 0,
-        safeLimitZ: 0.1,
-        clearanceX: 5.0,
-        clearanceY: 5.0,
-        maxRateXY: 8000,
-        maxRateZ: 1000,
-        maxRateA: 0,
-        spindleMaxRPM: 0,
-        laserMaxPwr: 1000,
-        wifiIP: '192.168.1.150',
-        firmware: 'FluidNC',
-        notes: '20W Diode Laser Module with air assist'
-      },
-      {
-        id: 'ttc6050_rotary',
-        name: 'TwoTrees TTC6050 4-Axis Rotary (FluidNC)',
-        type: 'rotary',
-        travelX: 600,
-        travelY: 100,
-        travelZ: 100,
-        travelA: 360,
-        safeLimitZ: 0.1,
-        clearanceX: 5.0,
-        clearanceY: 5.0,
-        maxRateXY: 3000,
-        maxRateZ: 1000,
-        maxRateA: 3000,
-        spindleMaxRPM: 24000,
-        laserMaxPwr: 0,
-        wifiIP: '192.168.1.150',
-        firmware: 'FluidNC',
-        notes: 'Cylindrical 4th axis carving with 80mm chuck'
+        activeHead: 'spindle', // 'spindle' | 'laser'
+        activeSpindleIndex: 0,
+        activeLaserIndex: 0,
+        spindles: [
+          {
+            id: 'sp1',
+            number: 1,
+            name: 'Spindle 1: Stock TTC 500W DC (12,000 RPM)',
+            type: 'DC PWM (gpio.35)',
+            toolNum: 0,
+            maxRPM: 12000,
+            minRPM: 1000,
+            spinupMs: 1500,
+            pwmHz: 5000,
+            notes: 'Stock TTC6050 spindle for general carving and light engraving'
+          },
+          {
+            id: 'sp2',
+            number: 2,
+            name: 'Spindle 2: 800W Air-Cooled Router (24,000 RPM)',
+            type: 'Trim Router / ER11',
+            toolNum: 0,
+            maxRPM: 24000,
+            minRPM: 5000,
+            spinupMs: 2000,
+            pwmHz: 5000,
+            notes: 'High-speed router for rapid wood and acrylic pocketing'
+          },
+          {
+            id: 'sp3',
+            number: 3,
+            name: 'Spindle 3: 1.5kW Water-Cooled VFD (24,000 RPM)',
+            type: 'VFD Spindle / ER16',
+            toolNum: 0,
+            maxRPM: 24000,
+            minRPM: 6000,
+            spinupMs: 3500,
+            pwmHz: 5000,
+            notes: 'Heavy duty, low-runout spindle for aluminum 6061 and precision 3D reliefs'
+          }
+        ],
+        lasers: [
+          {
+            id: 'ls1',
+            number: 1,
+            name: 'Laser 1: A70 Ultra-Power Laser (70W Optical)',
+            laserType: 'Quad/Octa Diode Array (gpio.2)',
+            toolNum: 1,
+            opticalWatts: 70.0,      // Optical output delivered to Ztop
+            electricalWatts: 160.0,  // Actual power consumption draw
+            efficiencyPct: 43.75,    // 70W / 160W = 43.75%
+            pwmFrequencyHz: 5000,    // Configurable 2,500Hz - 20,000Hz
+            focalDistanceMm: 30.0,   // Distance from tip of output cone to Ztop of workpiece
+            spotDiameterMm: 0.08,
+            maxFeedRate: 10000,
+            notes: 'Atomstack/IKIER A70 high power cutter: 70W optical at Ztop, 160W electrical'
+          },
+          {
+            id: 'ls2',
+            number: 2,
+            name: 'Laser 2: 20W Precision Engraver (20W Optical)',
+            laserType: 'Diode Array (gpio.2)',
+            toolNum: 1,
+            opticalWatts: 20.0,      // Optical output delivered to Ztop
+            electricalWatts: 120.0,  // Actual power consumption draw
+            efficiencyPct: 16.67,
+            pwmFrequencyHz: 5000,    // Configurable 2,500Hz - 20,000Hz
+            focalDistanceMm: 20.0,   // Distance from tip of output cone to Ztop of workpiece
+            spotDiameterMm: 0.05,
+            maxFeedRate: 8000,
+            notes: 'Fine-focus 20W diode head for high-resolution photo engraving and vector marking'
+          }
+        ]
       }
     ];
+  }
+
+  getActiveHead() {
+    const mach = this.getActiveMachine();
+    if (mach.activeHead === 'laser') {
+      const idx = mach.activeLaserIndex || 0;
+      return { type: 'laser', tool: mach.lasers ? mach.lasers[idx] : null };
+    }
+    const idx = mach.activeSpindleIndex || 0;
+    return { type: 'spindle', tool: mach.spindles ? mach.spindles[idx] : null };
+  }
+
+  getActiveSpindle() {
+    const mach = this.getActiveMachine();
+    const idx = mach.activeSpindleIndex || 0;
+    return (mach.spindles && mach.spindles[idx]) || (this.getDefaultMachines()[0].spindles[0]);
+  }
+
+  getActiveLaser() {
+    const mach = this.getActiveMachine();
+    const idx = mach.activeLaserIndex || 0;
+    return (mach.lasers && mach.lasers[idx]) || (this.getDefaultMachines()[0].lasers[0]);
+  }
+
+  setActiveHead(headType, toolIndex = 0) {
+    const mach = this.getActiveMachine();
+    mach.activeHead = headType;
+    if (headType === 'spindle') mach.activeSpindleIndex = toolIndex;
+    if (headType === 'laser') mach.activeLaserIndex = toolIndex;
+    this.saveMachine(mach);
+    if (this.bridge.fluidnc) {
+      this.bridge.fluidnc.applyMachineProfile(mach);
+    }
+    const tool = headType === 'spindle' ? mach.spindles[toolIndex] : mach.lasers[toolIndex];
+    this.bridge.notify(`Active tool changed to ${headType.toUpperCase()}: ${tool.name}`, 'ok');
   }
 
   getActiveMachine() {
@@ -2873,6 +2994,310 @@ class CLESlicerEngine {
   }
 }
 
+/* --- Module: cle_tool_library.js --- */
+/**
+ * CLEJS - Tool Library & Tool Change Subsystem (V1)
+ * Supports Manual Tool Change (MTC) with Toolsetter Probing, Automated Tool Change (ATC),
+ * Spindle & Laser Tool Models, Optical Power Scaling, and FluidNC Tool Length Offsets (TLO)
+ */
+
+class CLEToolLibrary {
+  constructor(bridge) {
+    this.bridge = bridge;
+    this.storageKey = 'cle.vault.tool_library';
+    this.toolsetterKey = 'cle.vault.toolsetter_config';
+    this.activeToolNumber = 1;
+
+    this.toolsetter = this.loadToolsetterConfig();
+    this.tools = this.loadTools();
+  }
+
+  loadToolsetterConfig() {
+    const defaultSetter = {
+      enabled: true,
+      mode: 'mtc_probe', // 'mtc_probe' | 'mtc_fixed' | 'atc_rack'
+      parkPosition: { X: 10.0, Y: 10.0, Z: -5.0 }, // G53 Machine Coordinates for bit swap
+      setterPosition: { X: 25.0, Y: 25.0, Z: -5.0 }, // G53 Machine Coordinates of toolsetter
+      touchPlateThicknessMm: 15.0, // Height of touch plate / toolsetter sensor
+      maxProbeDistanceMm: 70.0,
+      fastProbeFeed: 300,  // mm/min
+      slowProbeFeed: 50,   // mm/min
+      retractDistanceMm: 5.0,
+      spindleSpinupDwellSec: 2.0
+    };
+    try {
+      const saved = localStorage.getItem(this.toolsetterKey);
+      if (saved) return { ...defaultSetter, ...JSON.parse(saved) };
+    } catch {}
+    return defaultSetter;
+  }
+
+  saveToolsetterConfig(cfg = this.toolsetter) {
+    this.toolsetter = cfg;
+    try {
+      localStorage.setItem(this.toolsetterKey, JSON.stringify(this.toolsetter));
+      this.bridge.notify('Toolsetter & Tool Change configuration saved.', 'ok');
+    } catch {}
+  }
+
+  getDefaultTools() {
+    return [
+      {
+        number: 1,
+        name: '1/4" (6.35mm) 2-Flute Carbide Endmill',
+        type: 'flat',
+        diameter: 6.35,
+        fluteLength: 22.0,
+        overallLength: 60.0,
+        flutes: 2,
+        spindleNumber: 1, // Spindle 1 (Stock TTC 500W), 2 (800W Router), or 3 (1.5kW VFD)
+        spindleRPM: 12000,
+        feedXY: 1800,
+        plungeZ: 400,
+        stepoverPct: 40,
+        passDepth: 1.5,
+        changeMode: 'mtc_probe',
+        atcSlot: 1,
+        notes: 'General roughing & profiling for plywood, hardwood, and acrylic'
+      },
+      {
+        number: 2,
+        name: '1/8" (3.175mm) 2-Flute Flat Endmill',
+        type: 'flat',
+        diameter: 3.175,
+        fluteLength: 12.0,
+        overallLength: 38.0,
+        flutes: 2,
+        spindleNumber: 1,
+        spindleRPM: 12000,
+        feedXY: 1400,
+        plungeZ: 300,
+        stepoverPct: 40,
+        passDepth: 1.0,
+        changeMode: 'mtc_probe',
+        atcSlot: 2,
+        notes: 'Fine profiling, small pockets, and precision contour cutouts'
+      },
+      {
+        number: 3,
+        name: '1/8" (3.175mm) Tapered Ball Nose Carver (R0.5)',
+        type: 'ball',
+        diameter: 3.175,
+        tipRadius: 0.5,
+        fluteLength: 15.0,
+        overallLength: 45.0,
+        flutes: 2,
+        spindleNumber: 2,
+        spindleRPM: 18000,
+        feedXY: 1600,
+        plungeZ: 350,
+        stepoverPct: 10,
+        passDepth: 0.5,
+        changeMode: 'mtc_probe',
+        atcSlot: 3,
+        notes: 'Continuous 3D relief finishing and artistic topography carves'
+      },
+      {
+        number: 4,
+        name: '60° Carbide V-Carve Engraving Bit',
+        type: 'vbit',
+        diameter: 6.35,
+        angle: 60,
+        tipWidth: 0.1,
+        fluteLength: 12.0,
+        overallLength: 45.0,
+        flutes: 1,
+        spindleNumber: 1,
+        spindleRPM: 12000,
+        feedXY: 1200,
+        plungeZ: 250,
+        stepoverPct: 20,
+        passDepth: 1.0,
+        changeMode: 'mtc_probe',
+        atcSlot: 4,
+        notes: 'Precision letter carving, beveling, and chamfering'
+      },
+      {
+        number: 5,
+        name: 'Laser Tool 1: A70 70W Optical Laser Head',
+        type: 'laser',
+        diameter: 0.08, // Spot diameter
+        laserNumber: 1,
+        laserType: 'Diode Array (gpio.2)',
+        opticalWatts: 70.0,      // Optical output delivered to Ztop
+        electricalWatts: 160.0,  // Actual power consumption draw
+        efficiencyPct: 43.75,    // 70W / 160W = 43.75%
+        pwmFrequencyHz: 5000,    // Configurable 2,500Hz - 20,000Hz
+        focalDistanceMm: 30.0,   // Distance from tip of output cone to Ztop of workpiece
+        feedXY: 8000,
+        plungeZ: 500,
+        changeMode: 'mtc_fixed', // Positioned via focal spacer or auto-focus
+        atcSlot: 5,
+        notes: 'High-power 70W optical laser for rapid vector cutting and deep dark engraving'
+      },
+      {
+        number: 6,
+        name: 'Laser Tool 2: 20W Precision Diode Laser',
+        type: 'laser',
+        diameter: 0.05,
+        laserNumber: 2,
+        laserType: 'Quad Diode (gpio.2)',
+        opticalWatts: 20.0,
+        electricalWatts: 120.0,
+        efficiencyPct: 16.67,
+        pwmFrequencyHz: 5000,
+        focalDistanceMm: 20.0,
+        feedXY: 6000,
+        plungeZ: 500,
+        changeMode: 'mtc_fixed',
+        atcSlot: 6,
+        notes: 'Fine-focus 20W diode head for high-resolution photo engraving and vector marking'
+      }
+    ];
+  }
+
+  loadTools() {
+    try {
+      const saved = localStorage.getItem(this.storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.warn('[CLE Tool Library] Load error:', e);
+    }
+    return this.getDefaultTools();
+  }
+
+  saveTools(tools = this.tools) {
+    this.tools = tools;
+    try {
+      localStorage.setItem(this.storageKey, JSON.stringify(this.tools));
+      this.bridge.vault.syncToServer();
+    } catch (e) {
+      console.error('[CLE Tool Library] Save error:', e);
+    }
+  }
+
+  getTool(toolNumber) {
+    return this.tools.find(t => t.number === toolNumber) || this.tools[0];
+  }
+
+  addOrUpdateTool(toolData) {
+    const idx = this.tools.findIndex(t => t.number === toolData.number);
+    if (idx >= 0) {
+      this.tools[idx] = { ...this.tools[idx], ...toolData };
+      this.bridge.notify(`Updated Tool T${toolData.number}: ${toolData.name}`, 'ok');
+    } else {
+      this.tools.push(toolData);
+      this.tools.sort((a, b) => a.number - b.number);
+      this.bridge.notify(`Added Tool T${toolData.number}: ${toolData.name}`, 'ok');
+    }
+    this.saveTools();
+  }
+
+  deleteTool(toolNumber) {
+    this.tools = this.tools.filter(t => t.number !== toolNumber);
+    this.saveTools();
+    this.bridge.notify(`Deleted Tool T${toolNumber}`);
+  }
+
+  // --- G-Code Generation for Manual Tool Change (MTC) & ATC ---
+
+  generateToolChangeGCode(toolNumber) {
+    const tool = this.getTool(toolNumber);
+    if (!tool) return `; Error: Tool T${toolNumber} not found in library`;
+
+    const ts = this.toolsetter;
+    const isLaser = (tool.type === 'laser');
+
+    if (isLaser) {
+      return [
+        `; ==========================================`,
+        `;   Mount Laser Tool T${tool.number}: ${tool.name}`,
+        `;   Optical Power: ${tool.opticalWatts}W | Electrical Draw: ${tool.electricalWatts}W (Eff: ${tool.efficiencyPct}%)`,
+        `;   PWM Frequency: ${tool.pwmFrequencyHz}Hz | Focal Distance: ${tool.focalDistanceMm}mm`,
+        `; ==========================================`,
+        'M5 ; Spindle/Laser OFF',
+        'G90 G21 ; Absolute coordinates, Metric units',
+        `G53 G0 Z${ts.parkPosition.Z} ; Safe Z retract`,
+        `G53 G0 X${ts.parkPosition.X} Y${ts.parkPosition.Y} ; Park machine for laser mount`,
+        `M0 (MSG, Mount Laser Tool T${tool.number}: ${tool.name}. Set Focal Distance to ${tool.focalDistanceMm}mm above Ztop)`,
+        '$32=1 ; Enable FluidNC Laser Mode',
+        `G90 G0 Z${tool.focalDistanceMm} F800 ; Position focal point directly above workpiece Z0`,
+        `; Ready for laser toolpath execution`
+      ].join('\n');
+    }
+
+    // Manual Tool Change with Automatic Toolsetter Touch-off (MTC + Probe)
+    if (ts.mode === 'mtc_probe') {
+      return [
+        `; ==========================================`,
+        `;   Tool Change T${tool.number}: ${tool.name} (Ø${tool.diameter}mm)`,
+        `;   Spindle: Spindle ${tool.spindleNumber || 1} @ ${tool.spindleRPM} RPM`,
+        `; ==========================================`,
+        'M5 M9 ; Spindle and coolant OFF',
+        'G90 G21 ; Absolute metric positioning',
+        `G53 G0 Z${ts.parkPosition.Z} ; 1. Retract to top safe clearance`,
+        `G53 G0 X${ts.parkPosition.X} Y${ts.parkPosition.Y} ; 2. Rapid to operator park position`,
+        `M0 (MSG, Insert Tool T${tool.number}: ${tool.name}. Press Cycle Start to probe)`,
+        `; --- Automatic Tool Length Offset (TLO) Probe Cycle ---`,
+        `G53 G0 X${ts.setterPosition.X} Y${ts.setterPosition.Y} ; 3. Rapid over Toolsetter`,
+        `G91 G38.2 Z-${ts.maxProbeDistanceMm} F${ts.fastProbeFeed} ; 4. Fast initial touch-off`,
+        `G0 Z${ts.retractDistanceMm} ; Retract slightly`,
+        `G38.2 Z-${ts.retractDistanceMm + 2.0} F${ts.slowProbeFeed} ; 5. Precision measurement touch`,
+        `G92 Z${ts.touchPlateThicknessMm} ; 6. Set Tool Reference height`,
+        `G90 G53 G0 Z${ts.parkPosition.Z} ; 7. Retract to safe height`,
+        `M3 S${tool.spindleRPM} ; 8. Spin up Spindle`,
+        `G4 P${ts.spindleSpinupDwellSec} ; 9. Dwell for full RPM`,
+        `; --- Tool T${tool.number} Armed & Ready ---`
+      ].join('\n');
+    }
+
+    // ATC Rack Slot Tool Change
+    if (ts.mode === 'atc_rack') {
+      return [
+        `; --- Automated Tool Change: Slot ${tool.atcSlot || 1} (T${tool.number}) ---`,
+        'M5 M9',
+        `G90 G53 G0 Z${ts.parkPosition.Z}`,
+        `M6 T${tool.number} ; Trigger ATC Rack Macro Slot ${tool.atcSlot || 1}`,
+        `M3 S${tool.spindleRPM}`,
+        `G4 P${ts.spindleSpinupDwellSec}`
+      ].join('\n');
+    }
+
+    // Default Fixed Collet Ring
+    return [
+      `; --- Fixed Stop Tool Change: T${tool.number} ---`,
+      'M5 M9',
+      `G53 G0 Z${ts.parkPosition.Z}`,
+      `G53 G0 X${ts.parkPosition.X} Y${ts.parkPosition.Y}`,
+      `M0 (MSG, Swap to Pre-set Tool T${tool.number}: ${tool.name})`,
+      `M3 S${tool.spindleRPM}`,
+      `G4 P${ts.spindleSpinupDwellSec}`
+    ].join('\n');
+  }
+
+  // Interactively execute a tool change on the connected machine
+  async executeLiveToolChange(toolNumber) {
+    const fluid = this.bridge.fluidnc;
+    if (!fluid || !fluid.isConnected) {
+      this.bridge.notify('Connect to FluidNC first.', 'error');
+      return;
+    }
+    const tool = this.getTool(toolNumber);
+    if (!tool) {
+      this.bridge.notify(`Tool T${toolNumber} not found.`, 'error');
+      return;
+    }
+
+    this.activeToolNumber = toolNumber;
+    const gcode = this.generateToolChangeGCode(toolNumber);
+    this.bridge.notify(`Executing Tool Change routine for T${tool.number}: ${tool.name}...`, 'ok');
+    await fluid.streamGCode(gcode);
+  }
+}
+
 /* --- Module: cle_boot.js --- */
 /**
  * CLEJS - Master Extension Bootstrapper (V5)
@@ -2894,6 +3319,7 @@ class CLEBridge {
     this.test = new CLETestEngine(this);
     this.recovery = new CLEJobRecoveryEngine(this);
     this.slicer = new CLESlicerEngine(this);
+    this.toolLibrary = new CLEToolLibrary(this);
 
     this.activeModal = null;
   }
@@ -3006,6 +3432,7 @@ class CLEBridge {
     // 4. Tools Section
     m("CLE Tools", "", [
       { id: "cle-r-vault", label: "Vault", title: "MEAGCLE Design & Machine State Git Vault", icon: "box", fn: () => this.openModal("vault") },
+      { id: "cle-r-tools", label: "Tool Library", title: "Tool Library & Manual/Automated Tool Changes", icon: "inspect", fn: () => this.openModal("tools") },
       { id: "cle-r-cal", label: "Calibration", title: "Steps/mm, Laser & Backlash Calibration", icon: "inspect", fn: () => this.openModal("calibration") },
       { id: "cle-r-test", label: "Test Suite", title: "Diagnostic Test Cuts", icon: "pattern", fn: () => this.openModal("test") },
       { id: "cle-r-rec", label: "Job Recovery", title: "Job Crash Recovery (-5 lines lookback)", icon: "recovery", fn: () => this.openModal("recovery") }
@@ -3569,6 +3996,112 @@ class CLEBridge {
           </div>
         </div>
       `;
+    } else if (type === 'tools') {
+      title = '🔧 Tool Library & Tool Changes (Spindles & Lasers)';
+      const tools = this.toolLibrary.tools;
+      const ts = this.toolLibrary.toolsetter;
+
+      bodyHtml = `
+        <div style="display:flex; justify-content:space-between; align-items:center; background:var(--paper); padding:10px 14px; border-radius:6px; border:1px solid var(--line); margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+          <div>
+            <span style="font-weight:700; color:var(--accent);">Tool Library:</span>
+            <span style="font-size:11px; color:var(--ink-2); margin-left:6px;">${tools.length} Tools Configured (Endmills, V-Bits, Lasers)</span>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button class="cle-btn" id="cle-tl-btn-add" style="background:var(--ok); color:#fff; font-weight:700;">+ Add New Tool</button>
+            <button class="cle-btn" id="cle-tl-btn-save-vault">Save to Vault</button>
+          </div>
+        </div>
+
+        <!-- Tool Change & Toolsetter Mode Configuration -->
+        <div class="cle-joycon-panel" style="padding:10px 12px; margin-bottom:12px;">
+          <div class="cle-joycon-title" style="margin-bottom:8px;">Tool Change Mode &amp; Toolsetter Setup (MTC / ATC)</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; font-size:11px;">
+            <div>
+              <div class="cle-form-row" style="grid-template-columns:140px 1fr; margin-bottom:6px;">
+                <label>Change Mode:</label>
+                <select class="cle-select" id="cle-ts-mode" style="padding:3px 6px;">
+                  <option value="mtc_probe" ${ts.mode==='mtc_probe'?'selected':''}>Manual Tool Change + Touch-Plate (MTC Probe)</option>
+                  <option value="mtc_fixed" ${ts.mode==='mtc_fixed'?'selected':''}>Manual Fixed-Length Stop Ring</option>
+                  <option value="atc_rack" ${ts.mode==='atc_rack'?'selected':''}>Automated Tool Changer (ATC Rack Slots)</option>
+                </select>
+              </div>
+              <div class="cle-form-row" style="grid-template-columns:140px 1fr; margin-bottom:6px;">
+                <label>Park Pos (G53 XYZ):</label>
+                <div style="display:flex; gap:4px;">
+                  <input class="cle-input" id="cle-ts-park-x" type="number" value="${ts.parkPosition.X}" style="width:50px; padding:2px 4px;">
+                  <input class="cle-input" id="cle-ts-park-y" type="number" value="${ts.parkPosition.Y}" style="width:50px; padding:2px 4px;">
+                  <input class="cle-input" id="cle-ts-park-z" type="number" value="${ts.parkPosition.Z}" style="width:50px; padding:2px 4px;">
+                </div>
+              </div>
+            </div>
+            <div>
+              <div class="cle-form-row" style="grid-template-columns:140px 1fr; margin-bottom:6px;">
+                <label>Toolsetter (G53 XY):</label>
+                <div style="display:flex; gap:4px;">
+                  <input class="cle-input" id="cle-ts-pos-x" type="number" value="${ts.setterPosition.X}" style="width:60px; padding:2px 4px;">
+                  <input class="cle-input" id="cle-ts-pos-y" type="number" value="${ts.setterPosition.Y}" style="width:60px; padding:2px 4px;">
+                </div>
+              </div>
+              <div class="cle-form-row" style="grid-template-columns:140px 1fr; margin-bottom:6px;">
+                <label>Plate Thickness (mm):</label>
+                <input class="cle-input" id="cle-ts-thick" type="number" step="0.1" value="${ts.touchPlateThicknessMm}" style="width:80px; padding:2px 4px;">
+              </div>
+            </div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+            <button class="cle-btn" id="cle-ts-save-btn" style="font-size:11px;">Update Toolsetter Config</button>
+          </div>
+        </div>
+
+        <!-- Tools Table -->
+        <div style="max-height:280px; overflow-y:auto; border:1px solid var(--line); border-radius:6px;">
+          <table class="cle-table">
+            <thead>
+              <tr>
+                <th>T#</th>
+                <th>Tool Name</th>
+                <th>Type</th>
+                <th>Geometry / Laser Specs</th>
+                <th>Assigned Head</th>
+                <th>Feeds &amp; Speeds</th>
+                <th>Tool Change Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${tools.map(t => {
+                const isLaser = (t.type === 'laser');
+                const specs = isLaser
+                  ? `<strong>${t.opticalWatts}W Optical</strong> (${t.electricalWatts}W Draw, ${t.efficiencyPct}%)<br><span style="font-size:10px; color:var(--ink-3);">Focal: ${t.focalDistanceMm}mm | ${t.pwmFrequencyHz}Hz</span>`
+                  : `Ø${t.diameter}mm (Flute: ${t.fluteLength || '--'}mm)`;
+                const head = isLaser
+                  ? `<span class="cle-badge" style="background:#e34c26; color:#fff;">Laser ${t.laserNumber || 1}</span>`
+                  : `<span class="cle-badge" style="background:var(--accent); color:var(--on-accent);">Spindle ${t.spindleNumber || 1}</span>`;
+                const feeds = isLaser
+                  ? `Feed: ${t.feedXY} mm/min`
+                  : `RPM: ${t.spindleRPM || 12000}<br>F: ${t.feedXY} / P: ${t.plungeZ}`;
+
+                return `
+                  <tr>
+                    <td><strong>T${t.number}</strong></td>
+                    <td><strong>${t.name}</strong></td>
+                    <td><span style="text-transform:uppercase; font-size:10px; font-weight:700;">${t.type}</span></td>
+                    <td style="font-size:11px;">${specs}</td>
+                    <td>${head}</td>
+                    <td style="font-size:11px; font-family:var(--f-mono);">${feeds}</td>
+                    <td>
+                      <div style="display:flex; gap:4px;">
+                        <button class="cle-btn" onclick="window.CLE.toolLibrary.executeLiveToolChange(${t.number})" style="background:var(--ok); color:#fff; padding:2px 8px; font-weight:600;">Change (T${t.number})</button>
+                        <button class="cle-btn danger" onclick="window.CLE.deleteToolFromUI(${t.number})" style="padding:2px 6px;">&times;</button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
     }
 
     modal.innerHTML = `
@@ -3773,6 +4306,104 @@ class CLEBridge {
           this.openModal('machines');
         }
       };
+    } else if (type === 'tools') {
+      // Save Toolsetter Config
+      document.getElementById('cle-ts-save-btn').onclick = () => {
+        const mode = document.getElementById('cle-ts-mode').value;
+        const parkX = parseFloat(document.getElementById('cle-ts-park-x').value) || 10.0;
+        const parkY = parseFloat(document.getElementById('cle-ts-park-y').value) || 10.0;
+        const parkZ = parseFloat(document.getElementById('cle-ts-park-z').value) || -5.0;
+        const posX = parseFloat(document.getElementById('cle-ts-pos-x').value) || 25.0;
+        const posY = parseFloat(document.getElementById('cle-ts-pos-y').value) || 25.0;
+        const thick = parseFloat(document.getElementById('cle-ts-thick').value) || 15.0;
+
+        this.toolLibrary.saveToolsetterConfig({
+          ...this.toolLibrary.toolsetter,
+          mode,
+          parkPosition: { X: parkX, Y: parkY, Z: parkZ },
+          setterPosition: { X: posX, Y: posY, Z: parkZ },
+          touchPlateThicknessMm: thick
+        });
+      };
+
+      // Add New Tool Button (Spindle or Laser with efficiency & optical/electrical W)
+      document.getElementById('cle-tl-btn-add').onclick = () => {
+        const isLaser = confirm('Click OK for Laser Tool, or Cancel for Spindle/Router Tool.');
+        if (isLaser) {
+          const name = prompt('Enter Laser Tool Name:', 'Atomstack A70 70W');
+          if (!name) return;
+          const optW = parseFloat(prompt('Optical Output Power (Watts to Ztop):', '70')) || 70;
+          const elecW = parseFloat(prompt('Electrical Power Consumption Draw (Watts):', '160')) || 160;
+          const focalMm = parseFloat(prompt('Focal Distance (mm from cone tip to Ztop):', '30')) || 30;
+          const pwmHz = parseInt(prompt('PWM Frequency (2500 - 20000 Hz):', '5000'), 10) || 5000;
+          const feed = parseFloat(prompt('Feed Speed (mm/min):', '8000')) || 8000;
+          const effPct = Math.round((optW / elecW) * 10000) / 100;
+          const nextNum = (this.toolLibrary.tools.length > 0) ? Math.max(...this.toolLibrary.tools.map(t => t.number)) + 1 : 1;
+
+          this.toolLibrary.addOrUpdateTool({
+            number: nextNum,
+            name,
+            type: 'laser',
+            diameter: 0.08,
+            laserNumber: (this.toolLibrary.tools.filter(t => t.type === 'laser').length + 1),
+            laserType: `${optW}W Diode (gpio.2)`,
+            opticalWatts: optW,
+            electricalWatts: elecW,
+            efficiencyPct: effPct,
+            pwmFrequencyHz: pwmHz,
+            focalDistanceMm: focalMm,
+            feedXY: feed,
+            plungeZ: 500,
+            changeMode: 'mtc_fixed',
+            atcSlot: nextNum,
+            notes: `Optical: ${optW}W, Electrical: ${elecW}W (${effPct}% efficiency)`
+          });
+          this.openModal('tools');
+        } else {
+          const name = prompt('Enter Spindle Tool Name:', '1/4" 2-Flute Carbide Endmill');
+          if (!name) return;
+          const dia = parseFloat(prompt('Tool Diameter (mm):', '6.35')) || 6.35;
+          const spindleNum = parseInt(prompt('Spindle Select (1=Stock 500W, 2=800W Router, 3=1.5kW VFD):', '1'), 10) || 1;
+          const rpm = parseInt(prompt('Spindle RPM:', '12000'), 10) || 12000;
+          const feed = parseFloat(prompt('Feed Rate XY (mm/min):', '1800')) || 1800;
+          const plunge = parseFloat(prompt('Plunge Rate Z (mm/min):', '400')) || 400;
+          const nextNum = (this.toolLibrary.tools.length > 0) ? Math.max(...this.toolLibrary.tools.map(t => t.number)) + 1 : 1;
+
+          this.toolLibrary.addOrUpdateTool({
+            number: nextNum,
+            name,
+            type: 'flat',
+            diameter: dia,
+            fluteLength: 22.0,
+            overallLength: 50.0,
+            flutes: 2,
+            spindleNumber: spindleNum,
+            spindleRPM: rpm,
+            feedXY: feed,
+            plungeZ: plunge,
+            stepoverPct: 40,
+            passDepth: 1.5,
+            changeMode: 'mtc_probe',
+            atcSlot: nextNum,
+            notes: `Spindle ${spindleNum} bit`
+          });
+          this.openModal('tools');
+        }
+      };
+
+      // Save to Vault Button
+      document.getElementById('cle-tl-btn-save-vault').onclick = async () => {
+        this.toolLibrary.saveTools();
+        await this.vault.saveControllerProfile('tool_library_backup', { tools: this.toolLibrary.tools });
+        this.notify('Tool Library saved to Vault & storage.', 'ok');
+      };
+    }
+  }
+
+  deleteToolFromUI(toolNumber) {
+    if (confirm(`Are you sure you want to delete Tool T${toolNumber}?`)) {
+      this.toolLibrary.deleteTool(toolNumber);
+      this.openModal('tools');
     }
   }
 

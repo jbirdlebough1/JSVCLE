@@ -17,7 +17,7 @@ from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 PORT = 8765
-PROJECT_ROOT = Path("D:/CLEJS")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = PROJECT_ROOT / "tools"
 VAULT_DIR = PROJECT_ROOT / "vault"
 PROJECTS_DIR = VAULT_DIR / "projects"

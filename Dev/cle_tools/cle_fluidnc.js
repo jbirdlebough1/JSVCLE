@@ -64,11 +64,60 @@ export class CLEFluidNCClient {
     this.softLimits.maxY = (mach.travelY || 500.0) - clY;
     this.softLimits.minZ = mach.safeLimitZ !== undefined ? mach.safeLimitZ : 0.1;
     this.softLimits.maxZ = mach.travelZ || 100.0;
-    if (mach.spindleMaxRPM) this.spindleRPM = mach.spindleMaxRPM;
+    
+    // Configure Active Tool Head (Spindle vs Laser)
+    if (mach.activeHead === 'laser') {
+      const laser = (mach.lasers && mach.lasers[mach.activeLaserIndex || 0]) || null;
+      this.activeToolType = 'laser';
+      this.activeLaser = laser;
+      this.laserActive = false;
+      this.spindleActive = false;
+    } else {
+      const spindle = (mach.spindles && mach.spindles[mach.activeSpindleIndex || 0]) || null;
+      this.activeToolType = 'spindle';
+      this.activeSpindle = spindle;
+      if (spindle && spindle.maxRPM) this.spindleRPM = spindle.maxRPM;
+      this.spindleActive = false;
+      this.laserActive = false;
+    }
+
     if (mach.wifiIP) {
       this.ip = mach.wifiIP;
       localStorage.setItem('cle.fluidnc.ip', mach.wifiIP);
     }
+  }
+
+  // Move Z to laser focal point (distance from output cone to workpiece Ztop)
+  autoFocusLaser() {
+    if (!this.isConnected) {
+      this.bridge.notify('Connect to FluidNC first.', 'error');
+      return;
+    }
+    const laser = this.activeLaser || this.bridge.vault.getActiveLaser();
+    const focalDist = laser.focalDistanceMm || 30.0;
+    this.sendGCode('G90');
+    this.sendGCode(`G0 Z${focalDist.toFixed(2)} F800`);
+    this.bridge.notify(`Positioned Z to laser focal point: ${focalDist}mm above Ztop (${laser.name})`, 'ok');
+  }
+
+  // Calculate & Set Laser Power with optical watts and electrical draw
+  setLaserPower(pct) {
+    const laser = this.activeLaser || this.bridge.vault.getActiveLaser();
+    const clampedPct = Math.max(0, Math.min(100, pct));
+    const opticalWatts = ((clampedPct / 100) * (laser.opticalWatts || 70.0)).toFixed(1);
+    const electricalWatts = ((clampedPct / 100) * (laser.electricalWatts || 160.0)).toFixed(1);
+    const pwmVal = Math.round((clampedPct / 100) * 1000);
+
+    this.laserPowerPct = clampedPct;
+    if (this.laserActive && this.isConnected) {
+      this.sendGCode(`M3 S${pwmVal}`);
+    }
+    return {
+      percent: clampedPct,
+      opticalWatts,
+      electricalWatts,
+      pwmVal
+    };
   }
 
   // Read machine settings & type via G-code variables ($$ and $I)

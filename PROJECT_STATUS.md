@@ -110,3 +110,9 @@ When an AI agent opens this repository in a new session:
   - Machine card shows active device name, `USB List`, `WiFi Setup`, `Machine Gcode`, `FluidNC`.
   - Button labeled `Manual Control of <Machine Name>`.
   - JumpStart native notifications via `xe.toast(...)`.
+- [x] **Tool Library & Automated/Manual Tool Changes (MTC & ATC)**:
+  - Custom hardware support: TwoTrees TTC6050 with MKS DLC32 MAX 4-axis, CL57 closed-loop drivers, and VTA102 40K encoders.
+  - Multi-Spindle Support: 3 interchangeable spindles (Stock 500W DC 12k RPM, 800W Router 24k RPM, 1.5kW VFD 24k RPM).
+  - Laser Head Tool Integration: Atomstack/IKIER A70 (70W optical output to Ztop, 160W electrical consumption, 43.75% efficiency, 30mm focal distance) and 20W precision diode (120W electrical consumption, 20mm focal distance). Configurable PWM frequency 2,500Hz - 20,000Hz.
+  - Toolsetter Touch-Off Probe Cycle: Generates safe G-code for MTC with touch-plate probing (`G38.2`), fixed collet stop rings, and ATC rack slots.
+  - Tool Library UI: Interactive modal to add/edit/delete tools, save to Vault, and execute live tool changes directly over FluidNC.
