@@ -1,0 +1,6 @@
+# Temporary files from Upstream check
+.jumpstart3d-*.htm
+
+# System and editor files
+.DS_Store
+Thumbs.db
