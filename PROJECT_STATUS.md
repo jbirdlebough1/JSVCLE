@@ -23,7 +23,7 @@
 - **Key Architecture Rules**:
   1. Direct integration into JumpStart's native DOM and Three.js runtime with zero disturbance to Max S.'s core code.
   2. Upstream JumpStart tracking isolated in `JSoriginal/` via `update_jumpstart.sh` (daily 8:00 AM check via automated task).
-  3. Single-point non-invasive hook at the bottom of `Dev/index.htm` loading modular extensions.
+  3. Single-point non-invasive hook at the bottom of `Dev/index.htm` loading modular extensions via universal `cle_bundle.js`.
   4. Minimal Python server (`tools/CLE_server.py`) handling OS-level PrusaSlicer CLI execution and disk vault sync.
   5. Zero session information loss: every build/milestone syncs Antigravity JSONL session transcripts to `sessions/<conversation-id>/` via `save_checkpoint.sh` and commits to git.
 
@@ -42,7 +42,7 @@ When an AI agent opens this repository in a new session:
 
 | Conversation ID | Model | Date Started | Status | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Injected native CLE ribbon tab in Advanced mode wstabs. Created cle_bundle.js for universal Chrome file:// compatibility. |
+| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Added Live Gamepad Remap & Setup menu; integrated native JumpStart camera view rotation (az/el) & pan; built 3D visualizer sliced layer stack HUD with FluidNC SD Card upload. |
 
 ---
 
@@ -52,12 +52,20 @@ When an AI agent opens this repository in a new session:
 - [x] Established `sessions/` directory to archive complete Antigravity transcript logs (`transcript.jsonl` and `transcript_full.jsonl`).
 - [x] Standardized on pure **Bash** scripts (`save_checkpoint.sh`, `update_jumpstart.sh`, `cle_start.sh`).
 - [x] Codified full RWX permission directive for local tools without prompting.
-- [x] **Chrome `file:///` Compatibility**: Bundled all CLE logic into `Dev/cle_tools/cle_bundle.js` using standard `<script>` tag, eliminating CORS module failures on local file loads.
-- [x] **Native Advanced Mode CLE Tab**: Added `"cle"` to `wstabs` (`Design`, `3D Print Sim`, `Simulate`, `CLE`) in JumpStart's Advanced mode ribbon navigation.
-- [x] **Ribbon Router Integration**: Wired `Vr === "cle"` to `window.CLE.renderAdvancedRibbon(...)` rendering native JumpStart buttons for:
-  - Machine: USB Serial, WiFi/WS, FluidTouch 7" Head, Zero All
-  - Controller: Nintendo Switch Mode toggle (Design 3D / Run Pendant), Button Remap
-  - Rotary & Slicer: 4th Axis Rotary (A) stock visualizer, Prusa Slicer CLI
-  - CLE Tools: Vault, Calibration, Test Suite, Job Recovery
-  - Safety: FEED HOLD (!)
-  - Real-time DRO: Live X, Y, Z, A coordinate bar
+- [x] **Chrome `file:///` Offline Compatibility**: Bundled all CLE logic into `Dev/cle_tools/cle_bundle.js` with standard `<script>` tag.
+- [x] **Native Advanced Mode CLE Tab**: Added `"cle"` to `wstabs` (`Design`, `3D Print Sim`, `Simulate`, `CLE`).
+- [x] **Interactive Gamepad Setup & Remap Interface**:
+  - Live analog stick gauges (LX, LY, RX, RY) moving in real-time.
+  - Live button monitor strip turning green on button press.
+  - Interactive button remapping dropdowns, invert axis toggles, and deadzone/sensitivity sliders.
+- [x] **Native Three.js Camera Control Fixed**:
+  - Hooked directly into JumpStart's `app.vp.view.az` and `app.vp.view.el` for spherical orbit.
+  - Hooked into `app.vp.panBy(dx, dy)` and `app.vp.view.dist` for panning and smooth zoom.
+- [x] **Continuous 3D Visualizer Sliced Stack**:
+  - Dual-engine slicing (PrusaSlicer CLI on CL3 + Native JS Slicer in browser).
+  - Renders 3D layer toolpaths directly in Three.js viewport with color elevation gradient.
+  - Floating layer slider HUD (`[ < ] [ Layer N / Total ] [ > ] [ Show All ]`).
+- [x] **Multi-Mode Export & SD Card Transfer**:
+  - Export `.NC` / `.gcode` download.
+  - Direct HTTP upload to FluidNC / FluidTouch 7" local SD card storage (`/upload`).
+  - Mode presets: CNC Milling/Carving, Laser Vector/Raster, 3D Print Sim.
