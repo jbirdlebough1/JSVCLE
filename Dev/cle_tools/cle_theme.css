@@ -279,3 +279,55 @@
   color: var(--accent);
 }
 
+/* Remap Table & Vault Cards */
+.cle-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.cle-table th {
+  text-align: left;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.cle-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line-2);
+  vertical-align: middle;
+}
+.cle-table tr:hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.cle-vault-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.cle-vault-card:hover {
+  border-color: var(--accent);
+}
+
+.cle-axis-meter {
+  height: 6px;
+  background: var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+.cle-axis-meter-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.05s ease;
+}
+
+

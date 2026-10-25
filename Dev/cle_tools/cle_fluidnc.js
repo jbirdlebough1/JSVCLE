@@ -50,6 +50,38 @@ export class CLEFluidNCClient {
     this.pollTimer = null;
     this.sendQueue = [];
     this.isStreaming = false;
+    this.detectedSettings = {};
+    this.isQueryingSettings = false;
+  }
+
+  // Applies Machine Profile (Like LightBurn & MillMage Devices)
+  applyMachineProfile(mach) {
+    if (!mach) return;
+    this.machineProfile = mach;
+    const clX = mach.clearanceX || 5.0;
+    const clY = mach.clearanceY || 5.0;
+    this.softLimits.maxX = (mach.travelX || 600.0) - clX;
+    this.softLimits.maxY = (mach.travelY || 500.0) - clY;
+    this.softLimits.minZ = mach.safeLimitZ !== undefined ? mach.safeLimitZ : 0.1;
+    this.softLimits.maxZ = mach.travelZ || 100.0;
+    if (mach.spindleMaxRPM) this.spindleRPM = mach.spindleMaxRPM;
+    if (mach.wifiIP) {
+      this.ip = mach.wifiIP;
+      localStorage.setItem('cle.fluidnc.ip', mach.wifiIP);
+    }
+  }
+
+  // Read machine settings & type via G-code variables ($$ and $I)
+  queryDeviceSettings() {
+    if (!this.isConnected) {
+      this.bridge.notify('Connect to FluidNC / machine first via USB or WiFi.', 'error');
+      return;
+    }
+    this.detectedSettings = {};
+    this.isQueryingSettings = true;
+    this.bridge.notify('Querying machine parameters via G-code variables ($$, $I)...');
+    this.sendImmediate('$I');
+    this.sendImmediate('$$');
   }
 
   // --- Web Serial Connection ---
@@ -124,6 +156,10 @@ export class CLEFluidNCClient {
   }
 
   disconnect() {
+    if (this.isStreaming && this.bridge.recovery) {
+      this.bridge.recovery.markJobHung(this.streamLineIndex, 'Connection to FluidNC disconnected unexpectedly.');
+    }
+    this.isStreaming = false;
     this.isConnected = false;
     this.connectionType = 'none';
     if (this.pollTimer) clearInterval(this.pollTimer);
@@ -163,13 +199,172 @@ export class CLEFluidNCClient {
         this.parseStatusReport(trimmed);
       } else if (trimmed === 'ok') {
         this.onCommandAck();
+        if (this.isQueryingSettings && Object.keys(this.detectedSettings).length > 2) {
+          this.finishSettingsQuery();
+        }
+        if (this.isDumpingYaml && this.yamlDumpBuffer.length > 50) {
+          this.isDumpingYaml = false;
+          this.applyYamlCapabilityModel(this.yamlDumpBuffer, 'Flash ($Config/Dump)');
+        }
       } else if (trimmed) {
+        if (this.isDumpingYaml) {
+          this.yamlDumpBuffer += line + '\n';
+        }
         this.logConsole(`[RECV] ${trimmed}`);
+        if (trimmed.startsWith('$') || trimmed.startsWith('[')) {
+          this.parseDeviceSettingLine(trimmed);
+        }
         if (trimmed.startsWith('error:')) {
           this.bridge.notify(`FluidNC ${trimmed}`, 'error');
         }
       }
     }
+  }
+
+  parseDeviceSettingLine(line) {
+    const sMatch = line.match(/^\$(\d+)=([-\d.]+)/);
+    if (sMatch) {
+      const param = parseInt(sMatch[1], 10);
+      const val = parseFloat(sMatch[2]);
+      if (param === 130) this.detectedSettings.travelX = val;
+      else if (param === 131) this.detectedSettings.travelY = val;
+      else if (param === 132) this.detectedSettings.travelZ = val;
+      else if (param === 100) this.detectedSettings.stepsX = val;
+      else if (param === 101) this.detectedSettings.stepsY = val;
+      else if (param === 102) this.detectedSettings.stepsZ = val;
+      else if (param === 110) this.detectedSettings.maxRateX = val;
+      else if (param === 111) this.detectedSettings.maxRateY = val;
+      else if (param === 112) this.detectedSettings.maxRateZ = val;
+      else if (param === 30) this.detectedSettings.spindleMaxRPM = val;
+      else if (param === 32) this.detectedSettings.laserMode = (val === 1);
+    }
+    const verMatch = line.match(/\[VER:([^:]+):([^\]]+)\]/);
+    if (verMatch) {
+      this.detectedSettings.firmware = `${verMatch[2]} v${verMatch[1]}`;
+    }
+  }
+
+  finishSettingsQuery() {
+    this.isQueryingSettings = false;
+    const d = this.detectedSettings;
+    const curMach = this.bridge.vault.getActiveMachine();
+    if (d.travelX) curMach.travelX = d.travelX;
+    if (d.travelY) curMach.travelY = d.travelY;
+    if (d.travelZ) curMach.travelZ = d.travelZ;
+    if (d.maxRateXY) curMach.maxRateXY = d.maxRateXY;
+    if (d.spindleMaxRPM) curMach.spindleMaxRPM = d.spindleMaxRPM;
+    if (d.laserMode !== undefined) curMach.type = d.laserMode ? 'laser' : 'cnc';
+    if (d.firmware) curMach.firmware = d.firmware;
+
+    this.applyMachineProfile(curMach);
+    this.bridge.vault.saveMachine(curMach);
+    this.bridge.notify(`Auto-configured ${curMach.name} from G-code variables! Travel: ${curMach.travelX}x${curMach.travelY}mm, ${curMach.type.toUpperCase()}`, 'ok');
+  }
+
+  // --- Read Full Capability Model from FluidNC Flash config.yaml ---
+  async requestConfigYaml() {
+    this.bridge.notify('Requesting FluidNC flash config.yaml capability model...');
+    
+    // 1. Try HTTP fetch if connected over WiFi
+    if (this.connectionType === 'websocket' || this.ip) {
+      try {
+        const resp = await fetch(`http://${this.ip}/files/config.yaml`);
+        if (resp.ok) {
+          const yaml = await resp.text();
+          this.applyYamlCapabilityModel(yaml, 'Flash WiFi');
+          return;
+        }
+      } catch (e) {}
+      try {
+        const resp2 = await fetch(`http://${this.ip}/config.yaml`);
+        if (resp2.ok) {
+          const yaml = await resp2.text();
+          this.applyYamlCapabilityModel(yaml, 'Flash WiFi');
+          return;
+        }
+      } catch (e) {}
+    }
+
+    // 2. Over Serial / WebSocket via $Config/Dump command
+    if (this.isConnected) {
+      this.yamlDumpBuffer = '';
+      this.isDumpingYaml = true;
+      this.sendImmediate('$Config/Dump');
+      this.bridge.notify('Streaming config.yaml from controller ($Config/Dump)...');
+      return;
+    }
+
+    this.bridge.notify('Connect to FluidNC first or click Import Local config.yaml.', 'error');
+  }
+
+  parseFluidNCYaml(yamlText) {
+    const lines = yamlText.split('\n');
+    let currentSection = '';
+    let currentAxis = '';
+    const data = {
+      name: '',
+      board: '',
+      axes: {},
+      laserMaxPwr: 1000,
+      spindleMaxRPM: 12000
+    };
+
+    for (let raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+
+      if (line.startsWith('board:')) data.board = line.split(':')[1].trim();
+      if (line.startsWith('name:')) data.name = line.split(':')[1].trim();
+
+      if (line.startsWith('axes:')) { currentSection = 'axes'; continue; }
+      if (line.startsWith('Laser:')) { currentSection = 'laser'; continue; }
+      if (line.startsWith('pwm:')) { currentSection = 'pwm'; continue; }
+      if (line.startsWith('probe:')) { currentSection = 'probe'; continue; }
+
+      if (currentSection === 'axes') {
+        const axMatch = line.match(/^([xyza]):$/i);
+        if (axMatch) {
+          currentAxis = axMatch[1].toLowerCase();
+          data.axes[currentAxis] = {};
+          continue;
+        }
+        if (currentAxis && line.includes(':')) {
+          const [k, v] = line.split(':').map(s => s.trim());
+          if (k === 'steps_per_mm') data.axes[currentAxis].stepsPerMm = parseFloat(v);
+          if (k === 'max_rate_mm_per_min') data.axes[currentAxis].maxRate = parseFloat(v);
+          if (k === 'max_travel_mm') data.axes[currentAxis].maxTravel = parseFloat(v);
+        }
+      }
+
+      if (currentSection === 'laser' && line.includes('speed_map:')) {
+        const m = line.match(/(\d+)=100/);
+        if (m) data.laserMaxPwr = parseInt(m[1], 10);
+      }
+
+      if (currentSection === 'pwm' && line.includes('speed_map:')) {
+        const m = line.match(/(\d+)=100/);
+        if (m) data.spindleMaxRPM = parseInt(m[1], 10);
+      }
+    }
+    return data;
+  }
+
+  applyYamlCapabilityModel(yamlText, source = 'Flash') {
+    const parsed = this.parseFluidNCYaml(yamlText);
+    const curMach = this.bridge.vault.getActiveMachine();
+    
+    if (parsed.name) curMach.name = parsed.name;
+    if (parsed.axes.x?.maxTravel) curMach.travelX = parsed.axes.x.maxTravel;
+    if (parsed.axes.y?.maxTravel) curMach.travelY = parsed.axes.y.maxTravel;
+    if (parsed.axes.z?.maxTravel) curMach.travelZ = parsed.axes.z.maxTravel;
+    if (parsed.axes.x?.maxRate) curMach.maxRateXY = parsed.axes.x.maxRate;
+    if (parsed.spindleMaxRPM) curMach.spindleMaxRPM = parsed.spindleMaxRPM;
+    if (parsed.laserMaxPwr) curMach.laserMaxPwr = parsed.laserMaxPwr;
+    curMach.firmware = parsed.board ? `FluidNC (${parsed.board})` : 'FluidNC ESP32';
+
+    this.applyMachineProfile(curMach);
+    this.bridge.vault.saveMachine(curMach);
+    this.bridge.notify(`Loaded full capability model from ${source} (${curMach.name})! Travels: ${curMach.travelX}x${curMach.travelY}x${curMach.travelZ}mm`, 'ok');
   }
 
   parseStatusReport(report) {
@@ -427,10 +622,20 @@ export class CLEFluidNCClient {
     window.open(`http://${this.ip}`, '_blank');
   }
 
-  streamGCodeLines(lines) {
+  streamGCode(gcodeText) {
+    const lines = gcodeText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith(';'));
     this.sendQueue = [...lines];
+    this.streamTotalLines = lines.length;
+    this.streamLineIndex = 0;
     this.isStreaming = true;
+    if (this.bridge.recovery) {
+      this.bridge.recovery.startJob('FluidNC_Job', lines);
+    }
     this.sendNextQueued();
+  }
+
+  streamGCodeLines(lines) {
+    this.streamGCode(lines.join('\n'));
   }
 
   sendNextQueued() {
@@ -440,6 +645,10 @@ export class CLEFluidNCClient {
       return;
     }
     const next = this.sendQueue.shift();
+    this.streamLineIndex++;
+    if (this.bridge.recovery) {
+      this.bridge.recovery.advanceLine(this.streamLineIndex, next);
+    }
     if (next && next.trim()) {
       this.sendGCode(next);
     } else {

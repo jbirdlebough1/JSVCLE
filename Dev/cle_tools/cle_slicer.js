@@ -1,7 +1,7 @@
 /**
- * CLEJS - Slicer & Visualizer Subsystem (V2)
- * Dual-Engine (Native JS + PrusaSlicer CLI), 3D Toolpath Stack Visualizer,
- * Multi-Mode Export (3D, CNC, Laser), and FluidNC SD Card Transfer
+ * CLEJS - Slicer & Visualizer Subsystem (V3)
+ * Device-Type-Aware Slicing (Top-Down for CNC/Laser, Bottom-Up for 3D),
+ * Native Three.js Visualizer Stack, Floating Layer HUD, and FluidNC SD Card Export
  */
 
 export class CLESlicerEngine {
@@ -13,37 +13,48 @@ export class CLESlicerEngine {
     this.feedRate = 1500;        // mm/min
     this.spindleRPM = 12000;     // RPM
     this.laserPower = 80;        // %
-    this.mode = 'cnc';           // 'cnc' | 'laser' | '3d'
+    this.mode = 'cnc';           // 'cnc' (top-down) | 'laser' (top-down) | '3d' (bottom-up)
     
-    this.slicedLayers = [];      // Array of layer objects with paths
+    this.slicedLayers = [];      // Array of layer objects
     this.rawGCode = '';
-    this.currentPreviewLayer = 0;
+    this.currentPreviewLayer = -1; // -1 = Show All
     this.visualizerGroup = null;
   }
 
-  // Extracts active CAD geometry or generates a safe sample block if scene is empty
+  // Extracts active CAD geometry from JumpStart scene or generates realistic sample block
   getActiveBodyGeometry() {
     const app = window.app || window.xe;
     const bodies = app?.doc?.bodies || [];
     
-    // If a body exists, try Chisel or scene view mesh
-    for (const b of bodies) {
-      if (!b.hidden && window.__JS3D_CHISEL__) {
-        const tris = window.__JS3D_CHISEL__.bodyTris(b.id);
-        if (tris && tris.length > 0) {
-          return { name: b.name || 'CAD_Body', triangles: tris };
+    // 1. Try extracting actual mesh vertices from JumpStart scene views
+    if (app?.scene?.views) {
+      for (const b of bodies) {
+        if (!b.hidden) {
+          const view = app.scene.views.get(b.id);
+          if (view) {
+            // Check Three.js mesh geometry
+            if (view.mesh?.geometry?.attributes?.position) {
+              const pos = view.mesh.geometry.attributes.position.array;
+              if (pos && pos.length >= 9) {
+                return { name: b.name || 'CAD_Body', triangles: new Float32Array(pos) };
+              }
+            }
+            // Check view.data.vertices
+            if (view.data?.vertices && view.data.vertices.length >= 9) {
+              return { name: b.name || 'CAD_Body', triangles: new Float32Array(view.data.vertices) };
+            }
+          }
         }
       }
     }
 
-    // Fallback Sample 3D Test Object (50x50x15 mm block with chamfer)
-    console.log('[CLE Slicer] No active bodies in scene. Generating sample 3D test part.');
-    const sampleTris = this.generateSampleBoxTriangles(50, 50, 15);
-    return { name: 'Sample_Part_50x50', triangles: sampleTris };
+    // 2. Fallback Sample 3D Test Object (50x40x12 mm rectangular billet with chamfer)
+    console.log('[CLE Slicer] No meshed bodies active. Generating sample 3D test billet.');
+    const sampleTris = this.generateSampleBoxTriangles(50, 40, 12);
+    return { name: 'Sample_Billet_50x40', triangles: sampleTris };
   }
 
   generateSampleBoxTriangles(w, d, h) {
-    // 12 triangles for a simple bounding box
     const x0 = -w/2, x1 = w/2, y0 = -d/2, y1 = d/2, z0 = 0, z1 = h;
     const vertices = [
       // Bottom
@@ -57,14 +68,14 @@ export class CLESlicerEngine {
       // Left
       x0,y0,z0, x0,y1,z1, x0,y0,z1,  x0,y0,z0, x0,y1,z0, x0,y1,z1,
       // Right
-      x1,y0,z0, x1,y0,z1, x1,y1,z1,  x1,y0,z0, x1,y1,z1, x1,y1,z0
+      x1,y0,z0, x1,y1,z1, x1,y1,z0,  x1,y0,z0, x1,y0,z1, x1,y1,z1
     ];
     return new Float32Array(vertices);
   }
 
   trianglesToSTL(triangles, solidName = 'CLEJS_Model') {
     let stl = `solid ${solidName}\n`;
-    const numTriangles = triangles.length / 9;
+    const numTriangles = Math.floor(triangles.length / 9);
     for (let i = 0; i < numTriangles; i++) {
       const idx = i * 9;
       const ax = triangles[idx], ay = triangles[idx+1], az = triangles[idx+2];
@@ -90,11 +101,12 @@ export class CLESlicerEngine {
     return stl;
   }
 
-  // --- Slicing Execution (Attempts Prusa CLI, falls back to Native Slicer) ---
+  // --- Slicing Execution (Device-Type-Aware Order) ---
   async sliceModel(options = {}) {
     this.mode = options.mode || this.mode;
     this.layerHeight = parseFloat(options.layerHeight) || this.layerHeight;
-    this.infillPercent = parseInt(options.infill) || this.infillPercent;
+    this.infillPercent = parseInt(options.infill, 10) || this.infillPercent;
+    this.feedRate = parseInt(options.feedRate, 10) || this.feedRate;
 
     const { name, triangles } = this.getActiveBodyGeometry();
     const stlString = this.trianglesToSTL(triangles, name);
@@ -109,24 +121,24 @@ export class CLESlicerEngine {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stl: stlString,
-          options: { layerHeight: this.layerHeight, infill: this.infillPercent }
+          options: { layerHeight: this.layerHeight, infill: this.infillPercent, mode: this.mode }
         })
       });
       if (resp.ok) {
         const data = await resp.json();
-        if (data.gcode) {
+        if (data.gcode && !data.warning) {
           gcode = data.gcode;
           usedEngine = 'PrusaSlicer CLI (CL3)';
         }
       }
     } catch (e) {
-      console.log('[CLE Slicer] Local CLE_server offline. Slicing with Native In-Browser Engine.');
+      // Offline fallback
     }
 
-    // 2. If PrusaSlicer CLI was unavailable, run Native In-Browser Slicer
+    // 2. Native Device-Type-Aware Slicing
     if (!gcode) {
       gcode = this.sliceNative(triangles, this.layerHeight, this.mode);
-      usedEngine = 'Native CLE JS Slicer';
+      usedEngine = `Native CLE JS (${this.mode.toUpperCase()})`;
     }
 
     this.rawGCode = gcode;
@@ -134,68 +146,119 @@ export class CLESlicerEngine {
     this.renderSlicedStackToVisualizer();
     this.mountLayerHUD();
 
-    this.bridge.notify(`Sliced with ${usedEngine}: ${this.slicedLayers.length} layers generated!`, 'ok');
+    const orderDesc = (this.mode === 'cnc' || this.mode === 'laser') ? 'Top-Down passes' : 'Bottom-Up layers';
+    this.bridge.notify(`Sliced (${usedEngine}): ${this.slicedLayers.length} ${orderDesc} generated!`, 'ok');
     return gcode;
   }
 
-  // Native In-Browser Slicer (Continuous Z contours + hatching)
+  // Native In-Browser Slicer with strict Top-Down (CNC/Laser) vs Bottom-Up (3D) ordering
   sliceNative(triangles, layerH, mode) {
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
     let minZ = Infinity, maxZ = -Infinity;
-    for (let i = 2; i < triangles.length; i += 3) {
-      const z = triangles[i];
-      if (z < minZ) minZ = z;
-      if (z > maxZ) maxZ = z;
-    }
-    if (!isFinite(minZ) || minZ === maxZ) { minZ = 0; maxZ = 15; }
 
-    const numLayers = Math.max(1, Math.ceil((maxZ - minZ) / layerH));
+    for (let i = 0; i < triangles.length; i += 3) {
+      const x = triangles[i], y = triangles[i+1], z = triangles[i+2];
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+
+    if (!isFinite(minX) || minX === maxX) { minX = -25; maxX = 25; }
+    if (!isFinite(minY) || minY === maxY) { minY = -20; maxY = 20; }
+    if (!isFinite(minZ) || minZ === maxZ) { minZ = 0; maxZ = 10; }
+
+    const totalHeight = maxZ - minZ;
+    const numLayers = Math.max(1, Math.ceil(totalHeight / layerH));
     const lines = [];
-    lines.push(`; --- CLEJS Native Slicer Output (${mode.toUpperCase()} Mode) ---`);
-    lines.push(`; Layers: ${numLayers}, Layer Height: ${layerH}mm, Bounds Z: ${minZ.toFixed(2)} to ${maxZ.toFixed(2)}`);
-    lines.push('G21 ; mm mode');
-    lines.push('G90 ; Absolute positioning');
+
+    const isTopDown = (mode === 'cnc' || mode === 'laser');
+
+    lines.push(`; === CLEJS Native Slicer Toolpath ===`);
+    lines.push(`; Device Mode: ${mode.toUpperCase()} (${isTopDown ? 'Top-Down Cutting Order' : 'Bottom-Up Additive Order'})`);
+    lines.push(`; Total Layers/Passes: ${numLayers}, Layer Height: ${layerH}mm`);
+    lines.push(`; Workpiece Bounds: X[${minX.toFixed(2)}, ${maxX.toFixed(2)}] Y[${minY.toFixed(2)}, ${maxY.toFixed(2)}] Z[${minZ.toFixed(2)}, ${maxZ.toFixed(2)}]`);
+    lines.push('G21 ; Millimeters');
+    lines.push('G90 ; Absolute coordinates');
 
     if (mode === 'cnc') {
       lines.push(`M3 S${this.spindleRPM} ; Spindle ON`);
-      lines.push('G0 Z5 F1000 ; Rapid safe clearance');
+      lines.push('G0 Z5.0 F1000 ; Safe clearance plane');
     } else if (mode === 'laser') {
-      lines.push('M5 ; Laser OFF initially');
+      lines.push('M5 ; Laser OFF during initial rapid');
+      lines.push('G0 Z2.0 F1000 ; Focal offset clearance');
     }
 
-    // Waterline slice each layer
-    for (let layer = 0; layer < numLayers; layer++) {
-      const curZ = (minZ + layer * layerH).toFixed(3);
-      lines.push(`; --- LAYER: ${layer} (Z=${curZ}) ---`);
-      
-      if (mode === 'cnc') {
-        lines.push(`G1 Z-${(layer * layerH).toFixed(3)} F300 ; Controlled plunge`);
-        lines.push(`G1 X-25 Y-25 F${this.feedRate}`);
-        lines.push(`G1 X25 Y-25`);
-        lines.push(`G1 X25 Y25`);
-        lines.push(`G1 X-25 Y25`);
-        lines.push(`G1 X-25 Y-25`);
-      } else if (mode === 'laser') {
-        lines.push(`G0 X-25 Y-25`);
-        lines.push(`M3 S${Math.round((this.laserPower/100)*1000)}`);
-        lines.push(`G1 X25 Y-25 F${this.feedRate}`);
-        lines.push(`G1 X25 Y25`);
-        lines.push(`G1 X-25 Y25`);
-        lines.push(`G1 X-25 Y-25`);
-        lines.push('M5');
+    // Infill raster step
+    const stepover = 3.0; // mm
+
+    // --- LOOP OVER LAYERS ---
+    for (let k = 0; k < numLayers; k++) {
+      let curZ, passZ;
+      if (isTopDown) {
+        // TOP-DOWN: Pass 0 is just below surface, each pass steps deeper into material
+        passZ = (maxZ - (k + 1) * layerH);
+        curZ = passZ.toFixed(3);
       } else {
-        // 3D Additive Print mode
+        // BOTTOM-UP: Layer 0 is on the bed, each layer steps higher
+        passZ = (minZ + (k + 1) * layerH);
+        curZ = passZ.toFixed(3);
+      }
+
+      lines.push(`; --- LAYER: ${k} (Z=${curZ}) ---`);
+
+      if (mode === 'cnc') {
+        // CNC MILLING (Top-Down): Safe plunge, perimeter contour, then zigzag clearing pocket
+        lines.push(`G0 X${minX.toFixed(2)} Y${minY.toFixed(2)} F3000`);
+        lines.push(`G1 Z${curZ} F300 ; Plunge to pass depth`);
+        
+        // Perimeter contour cut
+        lines.push(`G1 X${maxX.toFixed(2)} Y${minY.toFixed(2)} F${this.feedRate}`);
+        lines.push(`G1 X${maxX.toFixed(2)} Y${maxY.toFixed(2)}`);
+        lines.push(`G1 X${minX.toFixed(2)} Y${maxY.toFixed(2)}`);
+        lines.push(`G1 X${minX.toFixed(2)} Y${minY.toFixed(2)}`);
+
+        // Zigzag pocket clearing
+        let goingRight = true;
+        for (let y = minY + stepover; y < maxY - stepover/2; y += stepover) {
+          if (goingRight) {
+            lines.push(`G1 X${(maxX - 1).toFixed(2)} Y${y.toFixed(2)}`);
+          } else {
+            lines.push(`G1 X${(minX + 1).toFixed(2)} Y${y.toFixed(2)}`);
+          }
+          goingRight = !goingRight;
+        }
+
+        // Retract slightly between depth passes
+        lines.push(`G0 Z${(passZ + 1.5).toFixed(3)} F1000`);
+
+      } else if (mode === 'laser') {
+        // LASER (Top-Down): Rapid to origin, Laser ON, perimeter burn, Laser OFF
+        lines.push(`G0 X${minX.toFixed(2)} Y${minY.toFixed(2)} Z${curZ} F3000`);
+        const pwr = Math.round((this.laserPower / 100) * 1000);
+        lines.push(`M3 S${pwr} ; Laser ON`);
+        lines.push(`G1 X${maxX.toFixed(2)} Y${minY.toFixed(2)} F${this.feedRate}`);
+        lines.push(`G1 X${maxX.toFixed(2)} Y${maxY.toFixed(2)}`);
+        lines.push(`G1 X${minX.toFixed(2)} Y${maxY.toFixed(2)}`);
+        lines.push(`G1 X${minX.toFixed(2)} Y${minY.toFixed(2)}`);
+        lines.push('M5 ; Laser OFF');
+
+      } else {
+        // 3D PRINT (Bottom-Up): Additive extrusion perimeter + hatch
         lines.push(`G1 Z${curZ} F1000`);
-        lines.push(`G1 X-25 Y-25 E${(layer * 0.5).toFixed(3)} F${this.feedRate}`);
-        lines.push(`G1 X25 Y-25 E${(layer * 0.5 + 0.5).toFixed(3)}`);
-        lines.push(`G1 X25 Y25 E${(layer * 0.5 + 1.0).toFixed(3)}`);
-        lines.push(`G1 X-25 Y25 E${(layer * 0.5 + 1.5).toFixed(3)}`);
-        lines.push(`G1 X-25 Y-25 E${(layer * 0.5 + 2.0).toFixed(3)}`);
+        const eBase = k * 4.0;
+        lines.push(`G1 X${minX.toFixed(2)} Y${minY.toFixed(2)} E${(eBase + 0.5).toFixed(3)} F${this.feedRate}`);
+        lines.push(`G1 X${maxX.toFixed(2)} Y${minY.toFixed(2)} E${(eBase + 1.5).toFixed(3)}`);
+        lines.push(`G1 X${maxX.toFixed(2)} Y${maxY.toFixed(2)} E${(eBase + 2.5).toFixed(3)}`);
+        lines.push(`G1 X${minX.toFixed(2)} Y${maxY.toFixed(2)} E${(eBase + 3.5).toFixed(3)}`);
+        lines.push(`G1 X${minX.toFixed(2)} Y${minY.toFixed(2)} E${(eBase + 4.0).toFixed(3)}`);
       }
     }
 
-    lines.push('G0 Z20 F1000 ; Retract');
-    lines.push(mode === 'laser' ? 'M5' : 'M5 ; Spindle OFF');
-    lines.push('G0 X0 Y0 F3000');
+    // Preamble finish
+    lines.push('G0 Z15.0 F1000 ; Safe retract');
+    lines.push(mode === 'laser' ? 'M5 ; Laser shutdown' : 'M5 ; Spindle OFF');
+    lines.push('G0 X0 Y0 F3000 ; Return to home origin');
     return lines.join('\n');
   }
 
@@ -213,7 +276,9 @@ export class CLESlicerEngine {
         }
         const matchIdx = line.match(/LAYER:\s*(\d+)/);
         const lIdx = matchIdx ? parseInt(matchIdx[1], 10) : this.slicedLayers.length;
-        currentLayer = { index: lIdx, z: curZ, points: [] };
+        const matchZ = line.match(/Z=([-\d.]+)/);
+        const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
+        currentLayer = { index: lIdx, z: lZ, points: [] };
         continue;
       }
 
@@ -234,22 +299,31 @@ export class CLESlicerEngine {
     }
   }
 
-  // --- Render Sliced Toolpath Stack in Three.js Visualizer ---
+  // --- Render Sliced Toolpath Stack in JumpStart's Native Three.js Viewport ---
   renderSlicedStackToVisualizer() {
     const app = window.app || window.xe;
-    if (!app || !app.scene) return;
+    if (!app) return;
+
+    // JumpStart attaches Three.js Scene to app.vp.scene
+    const threeScene = (app.vp && app.vp.scene) || app.scene;
+    if (!threeScene || !threeScene.add) {
+      console.warn('[CLE Slicer] Could not locate Three.js scene.');
+      return;
+    }
 
     const THREE = window.THREE || (app.vp && app.vp.THREE) || null;
     if (!THREE) return;
 
+    // Clean up previous visualizer group
     if (this.visualizerGroup) {
-      app.scene.remove(this.visualizerGroup);
+      threeScene.remove(this.visualizerGroup);
     }
 
     this.visualizerGroup = new THREE.Group();
     this.visualizerGroup.name = 'CLE_Sliced_Toolpath_Stack';
 
     const numLayers = this.slicedLayers.length;
+    const isTopDown = (this.mode === 'cnc' || this.mode === 'laser');
 
     this.slicedLayers.forEach((layer, lIdx) => {
       if (layer.points.length < 2) return;
@@ -257,9 +331,16 @@ export class CLESlicerEngine {
       const positions = [];
       const colors = [];
 
-      // Color gradient by layer elevation
-      const hue = (lIdx / (numLayers || 1)) * 0.7; // Blue to Red
-      const color = new THREE.Color().setHSL(hue, 1.0, 0.55);
+      // Color coding:
+      // 3D (bottom-up): blue at base -> red at top
+      // CNC/Laser (top-down): bright green at surface -> deep red at deepest cut
+      let hue;
+      if (isTopDown) {
+        hue = 0.33 - (lIdx / (numLayers || 1)) * 0.33; // 0.33 (green) down to 0.0 (red)
+      } else {
+        hue = (lIdx / (numLayers || 1)) * 0.7; // 0.0 to 0.7
+      }
+      const color = new THREE.Color().setHSL(Math.max(0, hue), 1.0, 0.55);
 
       for (let i = 0; i < layer.points.length - 1; i++) {
         const p1 = layer.points[i];
@@ -268,7 +349,8 @@ export class CLESlicerEngine {
         positions.push(p2.x, p2.y, p2.z);
 
         if (p2.isRapid) {
-          colors.push(0.3, 0.8, 0.3, 0.3, 0.8, 0.3); // Green for rapids
+          // Rapid traverse in faint cyan/yellow
+          colors.push(0.3, 0.8, 0.9, 0.3, 0.8, 0.9);
         } else {
           colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
         }
@@ -286,16 +368,39 @@ export class CLESlicerEngine {
       });
 
       const lineMesh = new THREE.LineSegments(geom, mat);
-      lineMesh.userData = { layerIndex: lIdx };
+      lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z };
       this.visualizerGroup.add(lineMesh);
     });
 
-    app.scene.add(this.visualizerGroup);
+    threeScene.add(this.visualizerGroup);
+
+    // Trigger JumpStart viewport redraw
     if (app.vp) {
       app.vp.dirty = true;
-      app.vp.request && app.vp.request();
+      if (app.vp.request) app.vp.request();
     }
     console.log(`[CLE Slicer] Rendered ${numLayers} toolpath layers into Three.js scene.`);
+  }
+
+  // Filter layer visibility according to scrubbed layer index
+  setPreviewLayer(targetIndex) {
+    this.currentPreviewLayer = targetIndex;
+    if (!this.visualizerGroup) return;
+
+    const isTopDown = (this.mode === 'cnc' || this.mode === 'laser');
+
+    this.visualizerGroup.children.forEach(mesh => {
+      const lIdx = mesh.userData.layerIndex;
+      if (targetIndex === -1) {
+        mesh.visible = true; // Show all
+      } else {
+        // Show progression up to current layer
+        mesh.visible = (lIdx <= targetIndex);
+      }
+    });
+
+    const app = window.app || window.xe;
+    if (app?.vp?.request) app.vp.request();
   }
 
   // Floating Layer & Export HUD
@@ -306,98 +411,100 @@ export class CLESlicerEngine {
       hud.id = 'cle-slicer-hud';
       hud.style.cssText = `
         position: fixed;
-        bottom: 70px;
+        bottom: 75px;
         left: 50%;
         transform: translateX(-50%);
-        background: var(--block);
-        color: var(--block-ink);
+        background: var(--panel);
+        color: var(--ink);
         padding: 8px 16px;
-        border-radius: var(--r);
-        border: 1px solid var(--accent);
+        border-radius: 8px;
+        border: 1px solid var(--line);
         box-shadow: 0 8px 24px var(--shadow);
         display: flex;
         align-items: center;
         gap: 12px;
-        font: 12px/1 var(--f-ui);
         z-index: 1000;
+        font-family: var(--f);
+        font-size: 12px;
       `;
       document.body.appendChild(hud);
     }
 
-    const maxL = Math.max(0, this.slicedLayers.length - 1);
+    const numLayers = this.slicedLayers.length;
+    const isTopDown = (this.mode === 'cnc' || this.mode === 'laser');
+    const modeLabel = isTopDown ? `${this.mode.toUpperCase()}: Top-Down` : '3D: Bottom-Up';
+
     hud.innerHTML = `
-      <span style="font-weight:700; color:var(--accent);">CLE Sliced Stack:</span>
-      <button class="cle-btn" id="cle-hud-prev">&larr;</button>
-      <input type="range" id="cle-hud-slider" min="0" max="${maxL}" value="${maxL}" style="width:140px; cursor:pointer;">
-      <span id="cle-hud-label" style="min-width:70px; font-family:var(--f-mono);">L: ${maxL} / ${maxL}</span>
-      <button class="cle-btn" id="cle-hud-next">&rarr;</button>
+      <div style="font-weight:700; color:var(--accent);">${modeLabel}</div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <button class="cle-btn" id="cle-hud-prev" style="padding:2px 8px;">&larr;</button>
+        <span id="cle-hud-label" style="font-family:var(--f-mono); min-width:120px; text-align:center;">
+          All (${numLayers} passes)
+        </span>
+        <button class="cle-btn" id="cle-hud-next" style="padding:2px 8px;">&rarr;</button>
+      </div>
+      <input type="range" id="cle-hud-slider" min="-1" max="${numLayers - 1}" value="-1" style="width:140px;">
       <button class="cle-btn" id="cle-hud-all">Show All</button>
-      <div style="height:18px; width:1px; background:rgba(255,255,255,0.2);"></div>
-      <button class="cle-btn" id="cle-hud-export">Export .NC</button>
-      <button class="cle-btn" id="cle-hud-stream">Stream to FluidNC</button>
-      <button class="cle-btn" id="cle-hud-sd">Upload to SD Card</button>
-      <button class="cle-modal-close" id="cle-hud-close" style="font-size:16px;">&times;</button>
+      <div style="border-left:1px solid var(--line); height:18px;"></div>
+      <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600;">Export .NC</button>
+      <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600;">To SD Card</button>
+      <button class="cle-btn" id="cle-hud-close" style="padding:2px 6px;">&times;</button>
     `;
+
+    hud.style.display = 'flex';
 
     const slider = document.getElementById('cle-hud-slider');
     const label = document.getElementById('cle-hud-label');
 
-    const updateVisibility = (targetIdx) => {
-      if (!this.visualizerGroup) return;
-      this.visualizerGroup.children.forEach(mesh => {
-        mesh.visible = mesh.userData.layerIndex <= targetIdx;
-      });
-      const app = window.app || window.xe;
-      if (app?.vp) { app.vp.dirty = true; app.vp.request?.(); }
+    const updateHUD = (val) => {
+      slider.value = val;
+      this.setPreviewLayer(parseInt(val, 10));
+      if (val == -1) {
+        label.textContent = `All (${numLayers} passes)`;
+      } else {
+        const curL = this.slicedLayers[val];
+        label.textContent = `Pass ${parseInt(val, 10) + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm)`;
+      }
     };
 
-    slider.oninput = (e) => {
-      const val = parseInt(e.target.value, 10);
-      label.textContent = `L: ${val} / ${maxL}`;
-      updateVisibility(val);
-    };
-
-    document.getElementById('cle-hud-all').onclick = () => {
-      slider.value = maxL;
-      label.textContent = `L: ${maxL} / ${maxL}`;
-      updateVisibility(maxL);
-    };
-
+    slider.oninput = (e) => updateHUD(e.target.value);
     document.getElementById('cle-hud-prev').onclick = () => {
-      slider.value = Math.max(0, parseInt(slider.value, 10) - 1);
-      label.textContent = `L: ${slider.value} / ${maxL}`;
-      updateVisibility(parseInt(slider.value, 10));
+      let cur = parseInt(slider.value, 10);
+      if (cur > 0) updateHUD(cur - 1);
+      else if (cur === -1) updateHUD(numLayers - 1);
     };
-
     document.getElementById('cle-hud-next').onclick = () => {
-      slider.value = Math.min(maxL, parseInt(slider.value, 10) + 1);
-      label.textContent = `L: ${slider.value} / ${maxL}`;
-      updateVisibility(parseInt(slider.value, 10));
+      let cur = parseInt(slider.value, 10);
+      if (cur < numLayers - 1) updateHUD(cur + 1);
     };
-
-    document.getElementById('cle-hud-export').onclick = () => this.downloadGCode();
-    document.getElementById('cle-hud-stream').onclick = () => {
-      this.bridge.fluidnc.streamGCodeLines(this.rawGCode.split('\n'));
-    };
-    document.getElementById('cle-hud-sd').onclick = () => {
-      const name = prompt('Enter filename to save on FluidNC / FluidTouch SD Card:', 'job.gcode');
-      if (name) this.bridge.fluidnc.uploadFileToSD(name, this.rawGCode);
-    };
-    document.getElementById('cle-hud-close').onclick = () => hud.remove();
+    document.getElementById('cle-hud-all').onclick = () => updateHUD(-1);
+    document.getElementById('cle-hud-export').onclick = () => this.exportGCodeFile();
+    document.getElementById('cle-hud-upload').onclick = () => this.uploadGCodeToSD();
+    document.getElementById('cle-hud-close').onclick = () => { hud.style.display = 'none'; };
   }
 
-  downloadGCode(filename = 'cle_toolpaths.nc') {
+  exportGCodeFile() {
     if (!this.rawGCode) {
-      this.bridge.notify('No toolpath generated to export.', 'error');
+      this.bridge.notify('Slice a model first before exporting.', 'error');
       return;
     }
     const blob = new Blob([this.rawGCode], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
+    a.href = URL.createObjectURL(blob);
+    const projName = window.xe?.doc?.name || 'JumpStart_Part';
+    a.download = `${projName}_${this.mode}.nc`;
     a.click();
-    URL.revokeObjectURL(url);
-    this.bridge.notify(`Exported G-Code file: ${filename}`, 'ok');
+    this.bridge.notify(`Exported ${projName}_${this.mode}.nc`, 'ok');
+  }
+
+  async uploadGCodeToSD() {
+    if (!this.rawGCode) {
+      this.bridge.notify('Slice a model first before uploading.', 'error');
+      return;
+    }
+    const projName = window.xe?.doc?.name || 'JumpStart_Part';
+    const filename = `${projName}_${this.mode}.nc`;
+    this.bridge.notify(`Uploading ${filename} to FluidNC SD Card...`);
+    await this.bridge.fluidnc.uploadFileToSD(filename, this.rawGCode);
   }
 }

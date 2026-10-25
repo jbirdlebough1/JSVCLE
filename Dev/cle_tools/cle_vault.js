@@ -1,13 +1,23 @@
 /**
- * CLEJS - Vault Subsystem
- * Tools, Materials, Feeds & Speeds, Machine Profiles, and G-Code Macros
+ * CLEJS - Vault Subsystem (V3 - MEAGCLE Architecture)
+ * Design & Machine State Git Vault, Project Check-In / Version Recall,
+ * User Controller Profiles, Tools, Materials, Feeds & Speeds, and Macros
  */
 
 export class CLEVault {
   constructor(bridge) {
     this.bridge = bridge;
+    this.serverUrl = 'http://127.0.0.1:8765';
     this.storageKey = 'cle.vault.data';
+    this.localSnapshotsKey = 'cle.vault.local_snapshots';
     this.data = this.loadVault();
+  }
+
+  // Current JumpStart Project Name
+  getActiveProjectName() {
+    const app = window.app || window.xe;
+    const name = app?.doc?.name || document.title || 'JumpStart_Project';
+    return name.replace(/[^\w\s-]/g, '').trim() || 'JumpStart_Project';
   }
 
   getDefaults() {
@@ -42,21 +52,9 @@ export class CLEVault {
         }
       ],
       macros: [
-        {
-          id: 'macro-probe',
-          name: 'Probe Z (Touch Plate)',
-          gcode: 'G21 G91\nG38.2 Z-30 F75\nG92 Z15.0\nG0 Z5'
-        },
-        {
-          id: 'macro-park',
-          name: 'Park Machine Rear',
-          gcode: 'G21 G90\nG0 Z20 F800\nG0 X10 Y480 F4000'
-        },
-        {
-          id: 'macro-laser-tick',
-          name: 'Laser Alignment Pulse (1 sec, 5%)',
-          gcode: 'M3 S50\nG4 P1\nM5'
-        }
+        { id: 'macro-probe', name: 'Probe Z (Touch Plate)', gcode: 'G21 G91\nG38.2 Z-30 F75\nG92 Z15.0\nG0 Z5' },
+        { id: 'macro-park', name: 'Park Machine Rear', gcode: 'G21 G90\nG0 Z20 F800\nG0 X10 Y480 F4000' },
+        { id: 'macro-laser-tick', name: 'Laser Alignment Pulse (1 sec, 5%)', gcode: 'M3 S50\nG4 P1\nM5' }
       ]
     };
   }
@@ -66,7 +64,7 @@ export class CLEVault {
       const saved = localStorage.getItem(this.storageKey);
       if (saved) return JSON.parse(saved);
     } catch (e) {
-      console.warn('[CLE Vault] Error loading vault from localStorage:', e);
+      console.warn('[CLE Vault] Error loading vault data:', e);
     }
     return this.getDefaults();
   }
@@ -74,31 +72,395 @@ export class CLEVault {
   saveVault() {
     try {
       localStorage.setItem(this.storageKey, JSON.stringify(this.data, null, 2));
-      // Trigger sync to CLE_server.py disk if available
       this.syncToServer();
     } catch (e) {
       console.error('[CLE Vault] Error saving vault:', e);
     }
   }
 
-  saveMacro(name, gcode) {
-    this.data.macros.push({
-      id: `macro-${Date.now()}`,
-      name,
-      gcode
-    });
-    this.saveVault();
-    this.bridge.notify(`Saved macro: ${name}`, 'ok');
-  }
-
   async syncToServer() {
     try {
-      await fetch('http://127.0.0.1:8765/api/vault/sync', {
+      await fetch(`${this.serverUrl}/api/vault/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(this.data)
       });
     } catch {}
   }
-}
 
+  // --- MEAGCLE Design & Machine State Git Vault Engine ---
+
+  async getVaultStatus(projectName = this.getActiveProjectName()) {
+    try {
+      const resp = await fetch(`${this.serverUrl}/api/vault/status?project=${encodeURIComponent(projectName)}`);
+      if (resp.ok) return await resp.json();
+    } catch (e) {
+      // Offline fallback
+    }
+    return {
+      status: 'offline',
+      project_name: projectName,
+      project_dir: `D:/CLEJS/vault/projects/${projectName}`,
+      has_repo: false,
+      git_available: false
+    };
+  }
+
+  async getVaultHistory(projectName = this.getActiveProjectName(), query = '') {
+    try {
+      const resp = await fetch(`${this.serverUrl}/api/vault/history?project=${encodeURIComponent(projectName)}&query=${encodeURIComponent(query)}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        return data.history || [];
+      }
+    } catch (e) {
+      // Offline fallback: check localStorage snapshots
+    }
+    return this.getLocalSnapshots(projectName, query);
+  }
+
+  async takeSnapshot(description, tags = []) {
+    const projectName = this.getActiveProjectName();
+    const app = window.app || window.xe;
+
+    // Gather full project state
+    const payloadData = {
+      doc: app?.doc ? JSON.parse(JSON.stringify(app.doc)) : {},
+      slicer: {
+        mode: this.bridge.slicer?.mode,
+        layerHeight: this.bridge.slicer?.layerHeight,
+        infill: this.bridge.slicer?.infillPercent,
+        feedRate: this.bridge.slicer?.feedRate,
+        rawGCode: this.bridge.slicer?.rawGCode
+      },
+      profile: this.bridge.gamepad?.mapping,
+      machine: {
+        wpos: this.bridge.fluidnc?.wpos,
+        softLimits: this.bridge.fluidnc?.softLimits
+      },
+      tags
+    };
+
+    // 1. Try Git Vault via CLE_server
+    try {
+      const resp = await fetch(`${this.serverUrl}/api/vault/snapshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: projectName,
+          description,
+          tags,
+          data: payloadData
+        })
+      });
+      if (resp.ok) {
+        const result = await resp.json();
+        this.saveLocalSnapshot(projectName, description, payloadData, result.short_hash || 'HEAD');
+        return result;
+      }
+    } catch (e) {
+      // Server offline fallback
+    }
+
+    // 2. Offline fallback snapshot
+    const fallbackHash = Math.random().toString(36).substring(2, 9);
+    this.saveLocalSnapshot(projectName, description, payloadData, fallbackHash);
+    return {
+      status: 'ok',
+      short_hash: fallbackHash,
+      message: description,
+      date: 'just now',
+      offline: true
+    };
+  }
+
+  async restoreSnapshot(commitHash) {
+    const projectName = this.getActiveProjectName();
+    let restoredData = null;
+
+    // 1. Try server restore
+    try {
+      const resp = await fetch(`${this.serverUrl}/api/vault/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project: projectName, commit_hash: commitHash })
+      });
+      if (resp.ok) {
+        const result = await resp.json();
+        restoredData = result.data;
+      }
+    } catch (e) {
+      // Offline fallback
+    }
+
+    if (!restoredData) {
+      restoredData = this.getLocalSnapshotData(projectName, commitHash);
+    }
+
+    if (!restoredData) {
+      throw new Error(`Could not locate snapshot data for ${commitHash}`);
+    }
+
+    // Apply restored project state to JumpStart
+    const app = window.app || window.xe;
+    if (restoredData.doc && app?.doc) {
+      try {
+        // Restore document in JumpStart
+        Object.assign(app.doc, restoredData.doc);
+        if (app.refreshUI) app.refreshUI('load');
+        if (app.vp?.request) app.vp.request();
+      } catch (err) {
+        console.warn('[CLE Vault] Document reload warning:', err);
+      }
+    }
+
+    // Restore controller profile
+    if (restoredData.profile && this.bridge.gamepad) {
+      this.bridge.gamepad.mapping = restoredData.profile;
+      this.bridge.gamepad.saveMapping();
+    }
+
+    // Restore slicer settings
+    if (restoredData.slicer && this.bridge.slicer) {
+      Object.assign(this.bridge.slicer, restoredData.slicer);
+    }
+
+    return { status: 'ok', restored_hash: commitHash };
+  }
+
+  // Local snapshot fallback helpers
+  saveLocalSnapshot(projectName, desc, data, hash) {
+    try {
+      const raw = localStorage.getItem(this.localSnapshotsKey) || '{}';
+      const store = JSON.parse(raw);
+      if (!store[projectName]) store[projectName] = [];
+      store[projectName].unshift({
+        commit_hash: hash,
+        short_hash: hash.substring(0, 7),
+        author: 'CLE Operator',
+        date: new Date().toLocaleTimeString(),
+        message: desc,
+        data
+      });
+      // Cap at 30 revisions
+      if (store[projectName].length > 30) store[projectName].pop();
+      localStorage.setItem(this.localSnapshotsKey, JSON.stringify(store));
+    } catch {}
+  }
+
+  getLocalSnapshots(projectName, query = '') {
+    try {
+      const raw = localStorage.getItem(this.localSnapshotsKey) || '{}';
+      const store = JSON.parse(raw);
+      const list = store[projectName] || [];
+      const q = query.toLowerCase();
+      return list.filter(c => !q || c.message.toLowerCase().includes(q) || c.short_hash.toLowerCase().includes(q));
+    } catch {
+      return [];
+    }
+  }
+
+  getLocalSnapshotData(projectName, hash) {
+    try {
+      const raw = localStorage.getItem(this.localSnapshotsKey) || '{}';
+      const store = JSON.parse(raw);
+      const list = store[projectName] || [];
+      const item = list.find(c => c.commit_hash === hash || c.short_hash === hash);
+      return item ? item.data : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // --- Controller User Profiles in CLE-Vault ---
+  async saveControllerProfile(name, mapping) {
+    try {
+      await fetch(`${this.serverUrl}/api/vault/profile/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, mapping })
+      });
+    } catch {}
+    // Also save locally
+    try {
+      const savedProfiles = JSON.parse(localStorage.getItem('cle.vault.controller_profiles') || '{}');
+      savedProfiles[name] = mapping;
+      localStorage.setItem('cle.vault.controller_profiles', JSON.stringify(savedProfiles));
+    } catch {}
+    this.bridge.notify(`Profile "${name}" saved to CLE-Vault.`, 'ok');
+  }
+
+  async getControllerProfiles() {
+    let profiles = [];
+    try {
+      const resp = await fetch(`${this.serverUrl}/api/vault/profiles`);
+      if (resp.ok) {
+        const data = await resp.json();
+        profiles = data.profiles || [];
+      }
+    } catch {}
+    
+    // Merge local profiles
+    try {
+      const local = JSON.parse(localStorage.getItem('cle.vault.controller_profiles') || '{}');
+      for (const [k, v] of Object.entries(local)) {
+        if (!profiles.some(p => p.name === k)) {
+          profiles.push({ name: k, profile: v });
+        }
+      }
+    } catch {}
+    return profiles;
+  }
+
+  // --- Devices & Machine Profiles (Like LightBurn & MillMage) ---
+  getDefaultMachines() {
+    return [
+      {
+        id: 'ttc6050_cnc',
+        name: 'TwoTrees TTC6050 CNC (FluidNC)',
+        type: 'cnc',
+        travelX: 600,
+        travelY: 500,
+        travelZ: 100,
+        travelA: 360,
+        safeLimitZ: 0.1,
+        clearanceX: 5.0,
+        clearanceY: 5.0,
+        maxRateXY: 5000,
+        maxRateZ: 1000,
+        maxRateA: 3000,
+        spindleMaxRPM: 24000,
+        laserMaxPwr: 1000,
+        wifiIP: '192.168.1.150',
+        firmware: 'FluidNC',
+        notes: 'Main 600x500 CNC mill with ESP32 FluidNC + FluidTouch 7" screen'
+      },
+      {
+        id: 'ttc6050_laser',
+        name: 'TwoTrees 20W Diode Laser (FluidNC)',
+        type: 'laser',
+        travelX: 600,
+        travelY: 500,
+        travelZ: 100,
+        travelA: 0,
+        safeLimitZ: 0.1,
+        clearanceX: 5.0,
+        clearanceY: 5.0,
+        maxRateXY: 8000,
+        maxRateZ: 1000,
+        maxRateA: 0,
+        spindleMaxRPM: 0,
+        laserMaxPwr: 1000,
+        wifiIP: '192.168.1.150',
+        firmware: 'FluidNC',
+        notes: '20W Diode Laser Module with air assist'
+      },
+      {
+        id: 'ttc6050_rotary',
+        name: 'TwoTrees TTC6050 4-Axis Rotary (FluidNC)',
+        type: 'rotary',
+        travelX: 600,
+        travelY: 100,
+        travelZ: 100,
+        travelA: 360,
+        safeLimitZ: 0.1,
+        clearanceX: 5.0,
+        clearanceY: 5.0,
+        maxRateXY: 3000,
+        maxRateZ: 1000,
+        maxRateA: 3000,
+        spindleMaxRPM: 24000,
+        laserMaxPwr: 0,
+        wifiIP: '192.168.1.150',
+        firmware: 'FluidNC',
+        notes: 'Cylindrical 4th axis carving with 80mm chuck'
+      }
+    ];
+  }
+
+  getActiveMachine() {
+    const list = this.getMachinesSync();
+    const activeId = localStorage.getItem('cle.vault.active_machine_id');
+    const found = list.find(m => m.id === activeId);
+    return found || list[0] || this.getDefaultMachines()[0];
+  }
+
+  setActiveMachine(machineId) {
+    const list = this.getMachinesSync();
+    const found = list.find(m => m.id === machineId);
+    if (!found) return;
+    localStorage.setItem('cle.vault.active_machine_id', machineId);
+    if (this.bridge.fluidnc) {
+      this.bridge.fluidnc.applyMachineProfile(found);
+    }
+    this.bridge.machineName = found.name;
+    this.bridge.notify(`Switched active machine to: ${found.name}`, 'ok');
+  }
+
+  getMachinesSync() {
+    try {
+      const raw = localStorage.getItem('cle.vault.machines');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return this.getDefaultMachines();
+  }
+
+  async getMachines() {
+    let machines = [];
+    try {
+      const resp = await fetch(`${this.serverUrl}/api/vault/machines`);
+      if (resp.ok) {
+        const data = await resp.json();
+        machines = data.machines || [];
+      }
+    } catch {}
+
+    const localList = this.getMachinesSync();
+    for (const m of localList) {
+      if (!machines.some(x => x.id === m.id)) {
+        machines.push(m);
+      }
+    }
+
+    if (machines.length === 0) {
+      machines = this.getDefaultMachines();
+    }
+    localStorage.setItem('cle.vault.machines', JSON.stringify(machines));
+    return machines;
+  }
+
+  async saveMachine(machine) {
+    if (!machine.id) {
+      machine.id = 'mach_' + Date.now();
+    }
+    try {
+      await fetch(`${this.serverUrl}/api/vault/machine/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machine })
+      });
+    } catch {}
+
+    const list = this.getMachinesSync().filter(m => m.id !== machine.id);
+    list.push(machine);
+    localStorage.setItem('cle.vault.machines', JSON.stringify(list));
+    this.bridge.notify(`Machine profile "${machine.name}" saved to Vault.`, 'ok');
+  }
+
+  async deleteMachine(machineId) {
+    try {
+      await fetch(`${this.serverUrl}/api/vault/machine/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: machineId })
+      });
+    } catch {}
+
+    const list = this.getMachinesSync().filter(m => m.id !== machineId);
+    localStorage.setItem('cle.vault.machines', JSON.stringify(list));
+    this.bridge.notify(`Machine profile removed from Vault.`);
+  }
+}

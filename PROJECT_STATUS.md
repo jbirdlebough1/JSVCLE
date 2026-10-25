@@ -42,7 +42,7 @@ When an AI agent opens this repository in a new session:
 
 | Conversation ID | Model | Date Started | Status | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Built Generic Camera Subsystem (USB webcam auto-enumeration, Logitech C270 720p/30fps, open Wi-Fi/IP MJPEG stream), optical crosshairs/reticles (digital edge finder with WCS zeroing), workpiece snapshot capture, and viewport PiP docking. Full Manual CNC/Laser Control Center, Bed Safety Soft-Limits, D-Pad integration, and Sliced Stack Visualizer. |
+| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Full device-type aware Slicing (Top-Down for CNC/Laser, Bottom-Up for 3D), MEAGCLE Git Design Vault, Job Crash Recovery (-5 lines lookback), Multiple Machine Profiles (LightBurn/MillMage Devices model), FluidNC Flash config.yaml & G-code ($$, $I) capability detection, Joystick Mode ribbon redesign, and interactive Switch controller remap table. |
 
 ---
 
@@ -80,3 +80,33 @@ When an AI agent opens this repository in a new session:
   - Optical WCS Zeroing: Sets WCS zero at optical crosshair location (`G10 L20 P1`) accounting for configurable camera-to-spindle/laser offsets.
   - One-click Workpiece Snapshot capture: Exports timestamped 1280x720 PNG directly to disk.
   - Viewport Picture-in-Picture Docking: Floats live video feed into bottom-right of 3D scene.
+- [x] **Devices & Multiple Machine Profiles (LightBurn / MillMage Model)**:
+  - Supports multiple machine profiles (TwoTrees TTC6050 CNC, Diode Laser 20W, 4-Axis Rotary, Custom CNC Router).
+  - Automatically queries and reads parameters via G-code variables (`$$` and `$I`).
+  - Directly reads FluidNC's full capability model from flash `config.yaml` (`$Config/Dump` over serial/WS or HTTP `/files/config.yaml`), and imports disk `config.yaml`.
+  - Machine profile updates bed bounds, soft-limits, max feeds, and storage targets (FluidNC ESP32 SD & FluidTouch 7" Display SD).
+- [x] **Interactive Gamepad Remap Table & User Profiles**:
+  - Full remap table for all Switch buttons and axes (Left/Right sticks, D-Pad cross, face buttons, triggers).
+  - Real-time deflection meters for all axes 0..5 (solves Switch axis 3/5 right stick pan up/down).
+  - Mutually exclusive single-active D-Pad cross cluster.
+  - Saves and loads custom profiles directly to/from CLE-Vault (`vault/profiles/<name>.json`).
+- [x] **MEAGCLE-Style Design & Machine State Git Vault**:
+  - Project name dynamically derived from JumpStart project name (`window.xe?.doc?.name`).
+  - Check-in snapshots with description & tags, committed directly to local Git repository in `vault/projects/<name>/`.
+  - Full version history timeline with one-click **Restore** (includes safety checkpoint before restore).
+  - Check-in captures JumpStart document state, slicer settings, controller profiles, and machine state.
+- [x] **Job Crash & Power-Loss Recovery (-5 Lines Lookback)**:
+  - Tracks live streaming G-code lines and modal states ($X, Y, Z, A, F, S$).
+  - Detects job hangs, disconnects, or pauses.
+  - Safe recovery routine resumes from **-5 G-code lines before the hang**: Safe Z lift -> rapid traverse XY -> spindle/laser spinup with 2s dwell -> plunge to cut depth -> stream remainder.
+- [x] **Device-Type-Aware Slicing Order (Top-Down for CNC/Laser, Bottom-Up for 3D)**:
+  - CNC and Laser modes slice and cut **TOP-DOWN** into material.
+  - 3D Additive Print mode builds **BOTTOM-UP** from bed.
+  - Direct Three.js visualizer rendering with `app.vp.scene.add()` and `app.vp.request()`.
+  - Floating Layer HUD slider with directional progression and direct FluidNC SD card transfer.
+- [x] **Ribbon Harmonization**:
+  - Removed "Zero All".
+  - Renamed ribbon card to **`JOYSTICK MODE`**.
+  - Machine card shows active device name, `USB List`, `WiFi Setup`, `Machine Gcode`, `FluidNC`.
+  - Button labeled `Manual Control of <Machine Name>`.
+  - JumpStart native notifications via `xe.toast(...)`.
