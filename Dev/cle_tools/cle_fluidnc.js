@@ -15,7 +15,12 @@ export class CLEFluidNCClient {
     this.writer = null;
     this.socket = null;
     const cachedIp = localStorage.getItem('cle.fluidnc.ip');
-    this.ip = (cachedIp && cachedIp !== '192.168.1.100' && cachedIp !== '192.168.1.150' && cachedIp !== '192.168.12.150') ? cachedIp : '192.168.12.158';
+    if (!cachedIp || cachedIp === '192.168.1.100' || cachedIp === '192.168.1.150' || cachedIp === '192.168.12.150') {
+      this.ip = '192.168.12.158';
+      localStorage.setItem('cle.fluidnc.ip', '192.168.12.158');
+    } else {
+      this.ip = cachedIp.trim();
+    }
     this.baud = 115200;
     
     // Status State
@@ -194,16 +199,20 @@ export class CLEFluidNCClient {
 
   // --- WebSocket Connection (FluidTouch 7" Head / FluidNC) ---
   connectWebSocket(ip = this.ip) {
-    this.ip = (ip || '192.168.12.158').trim();
-    localStorage.setItem('cle.fluidnc.ip', this.ip);
+    let cleanIp = (ip || this.ip || '192.168.12.158').trim();
+    if (cleanIp === '192.168.12.150' || cleanIp === '192.168.1.150' || cleanIp === '192.168.1.100') {
+      cleanIp = '192.168.12.158';
+    }
+    this.ip = cleanIp;
+    localStorage.setItem('cle.fluidnc.ip', cleanIp);
     if (this.bridge && this.bridge.vault) {
       const mach = this.bridge.vault.getActiveMachine();
-      if (mach && mach.wifiIP !== this.ip) {
-        mach.wifiIP = this.ip;
+      if (mach && mach.wifiIP !== cleanIp) {
+        mach.wifiIP = cleanIp;
         this.bridge.vault.saveMachine(mach);
       }
     }
-    const wsUrl = `ws://${this.ip}:81`;
+    const wsUrl = `ws://${cleanIp}:81`;
     try {
       this.socket = new WebSocket(wsUrl);
       this.socket.onopen = () => {

@@ -48,7 +48,8 @@ export class CLEVault {
           maxRateXY: 5000,
           maxRateZ: 1000,
           maxRateA: 3000,
-          spindleMaxRPM: 24000
+          spindleMaxRPM: 24000,
+          wifiIP: '192.168.12.158'
         }
       ],
       macros: [
@@ -466,13 +467,21 @@ export class CLEVault {
       if (mach.spoilboardOffsetX === undefined) mach.spoilboardOffsetX = 0.0;
       if (mach.spoilboardOffsetY === undefined) mach.spoilboardOffsetY = 0.0;
 
-      // Ensure accurate FluidTouch / FluidNC WiFi IP
+      // Clean up legacy/stale IPs (.150, .100, etc.) from localStorage
       const savedFluidIp = localStorage.getItem('cle.fluidnc.ip');
-      if (savedFluidIp && savedFluidIp.trim()) {
-        mach.wifiIP = savedFluidIp.trim();
-      } else if (!mach.wifiIP || mach.wifiIP === '192.168.1.150' || mach.wifiIP === '192.168.12.150' || mach.wifiIP === '192.168.1.100') {
-        mach.wifiIP = '192.168.12.158';
+      if (savedFluidIp && (savedFluidIp === '192.168.12.150' || savedFluidIp === '192.168.1.150' || savedFluidIp === '192.168.1.100')) {
         localStorage.setItem('cle.fluidnc.ip', '192.168.12.158');
+      }
+
+      // Ensure valid WiFi IP without overwriting user custom IP
+      if (!mach.wifiIP || mach.wifiIP === '192.168.1.150' || mach.wifiIP === '192.168.12.150' || mach.wifiIP === '192.168.1.100') {
+        const currentSaved = localStorage.getItem('cle.fluidnc.ip');
+        mach.wifiIP = (currentSaved && currentSaved !== '192.168.12.150' && currentSaved !== '192.168.1.150' && currentSaved !== '192.168.1.100')
+          ? currentSaved.trim()
+          : '192.168.12.158';
+        localStorage.setItem('cle.fluidnc.ip', mach.wifiIP);
+      } else {
+        localStorage.setItem('cle.fluidnc.ip', mach.wifiIP);
       }
     }
     return mach;
@@ -483,6 +492,12 @@ export class CLEVault {
     const found = list.find(m => m.id === machineId);
     if (!found) return;
     localStorage.setItem('cle.vault.active_machine_id', machineId);
+    if (found.wifiIP) {
+      localStorage.setItem('cle.fluidnc.ip', found.wifiIP);
+      if (this.bridge.fluidnc) {
+        this.bridge.fluidnc.ip = found.wifiIP;
+      }
+    }
     if (this.bridge.fluidnc) {
       this.bridge.fluidnc.applyMachineProfile(found);
     }
@@ -528,6 +543,11 @@ export class CLEVault {
     if (machines.length === 0) {
       machines = this.getDefaultMachines();
     }
+    machines.forEach(m => {
+      if (!m.wifiIP || m.wifiIP === '192.168.1.150' || m.wifiIP === '192.168.12.150' || m.wifiIP === '192.168.1.100') {
+        m.wifiIP = '192.168.12.158';
+      }
+    });
     localStorage.setItem('cle.vault.machines', JSON.stringify(machines));
     return machines;
   }
@@ -536,6 +556,10 @@ export class CLEVault {
     if (!machine.id) {
       machine.id = 'mach_' + Date.now();
     }
+    if (machine.wifiIP === '192.168.12.150' || machine.wifiIP === '192.168.1.150' || machine.wifiIP === '192.168.1.100' || !machine.wifiIP) {
+      machine.wifiIP = '192.168.12.158';
+    }
+
     try {
       await fetch(`${this.serverUrl}/api/vault/machine/save`, {
         method: 'POST',
@@ -544,9 +568,21 @@ export class CLEVault {
       });
     } catch {}
 
-    const list = this.getMachinesSync().filter(m => m.id !== machine.id);
-    list.push(machine);
+    const list = this.getMachinesSync();
+    const idx = list.findIndex(m => m.id === machine.id);
+    if (idx >= 0) {
+      list[idx] = machine;
+    } else {
+      list.push(machine);
+    }
     localStorage.setItem('cle.vault.machines', JSON.stringify(list));
+    localStorage.setItem('cle.vault.active_machine_id', machine.id);
+    localStorage.setItem('cle.fluidnc.ip', machine.wifiIP);
+
+    if (this.bridge && this.bridge.fluidnc) {
+      this.bridge.fluidnc.ip = machine.wifiIP;
+      this.bridge.fluidnc.applyMachineProfile(machine);
+    }
     this.bridge.notify(`Machine profile "${machine.name}" saved to Vault.`, 'ok');
   }
 

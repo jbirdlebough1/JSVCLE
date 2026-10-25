@@ -134,14 +134,23 @@ class CLEBridge {
       { id: "cle-r-devices", label: "Devices", title: "Select or Configure Machine Profiles (Like LightBurn/MillMage)", icon: "features", fn: () => this.openModal("machines") },
       { id: "cle-r-serial", label: "USB List", title: "Select & Connect USB Serial COM Port to FluidNC", icon: "drive", fn: () => this.fluidnc.connectSerial() },
       { id: "cle-r-ws", label: "WiFi Setup", title: "Configure FluidTouch 7\" / FluidNC WiFi IP & WebSocket", icon: "motion", fn: async () => {
-          const currentIp = this.fluidnc.ip || activeMach.wifiIP || '192.168.12.158';
+          const mach = this.vault.getActiveMachine();
+          let currentIp = this.fluidnc.ip || mach?.wifiIP || '192.168.12.158';
+          if (currentIp === '192.168.12.150' || currentIp === '192.168.1.150' || currentIp === '192.168.1.100') {
+            currentIp = '192.168.12.158';
+          }
           const ip = prompt("Enter FluidTouch 7\" / FluidNC IP:", currentIp);
           if (ip && ip.trim()) {
-            const cleanIp = ip.trim();
+            let cleanIp = ip.trim();
+            if (cleanIp === '192.168.12.150' || cleanIp === '192.168.1.150' || cleanIp === '192.168.1.100') {
+              cleanIp = '192.168.12.158';
+            }
             this.fluidnc.ip = cleanIp;
             localStorage.setItem('cle.fluidnc.ip', cleanIp);
-            activeMach.wifiIP = cleanIp;
-            await this.vault.saveMachine(activeMach);
+            if (mach) {
+              mach.wifiIP = cleanIp;
+              await this.vault.saveMachine(mach);
+            }
             this.fluidnc.connectWebSocket(cleanIp);
           }
       }},
@@ -1093,7 +1102,7 @@ class CLEBridge {
       };
 
       document.getElementById('cle-mach-btn-save').onclick = async () => {
-        const curMach = this.vault.getMachinesSync().find(x => x.id === selector.value) || { id: 'mach_' + Date.now() };
+        const curMach = this.vault.getMachinesSync().find(x => x.id === selector.value) || { id: selector.value || ('mach_' + Date.now()) };
         curMach.name = document.getElementById('cle-m-name').value.trim() || 'CNC Device';
         curMach.type = document.getElementById('cle-m-type').value;
         curMach.travelX = parseFloat(document.getElementById('cle-m-tx').value) || 600;
@@ -1110,9 +1119,17 @@ class CLEBridge {
         curMach.clearanceY = curMach.clearanceX;
         curMach.maxRateXY = parseFloat(document.getElementById('cle-m-maxfeed').value) || 5000;
         curMach.spindleMaxRPM = parseFloat(document.getElementById('cle-m-rpm').value) || 24000;
-        curMach.wifiIP = document.getElementById('cle-m-ip').value.trim() || '192.168.12.158';
+        let newIp = document.getElementById('cle-m-ip').value.trim() || '192.168.12.158';
+        if (newIp === '192.168.12.150' || newIp === '192.168.1.150' || newIp === '192.168.1.100') {
+          newIp = '192.168.12.158';
+        }
+        curMach.wifiIP = newIp;
 
         await this.vault.saveMachine(curMach);
+        this.vault.setActiveMachine(curMach.id);
+        this.fluidnc.ip = newIp;
+        localStorage.setItem('cle.fluidnc.ip', newIp);
+
         if (this.bed) this.bed.rebuild();
         this.openModal('machines');
       };
