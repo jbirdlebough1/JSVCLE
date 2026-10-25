@@ -30,14 +30,13 @@ async def run():
             checks = [
                 ("typeof THREE", False),
                 ("Boolean(window.CLE.bed && window.CLE.bed.bedGroup && window.CLE.bed.bedGroup.parent)", False),
-                ("(() => { const slab = window.CLE.bed.bedGroup.getObjectByName('CLE_Spoilboard_Slab'); return { color: slab.material.color.getHexString(), opacity: slab.material.opacity, transparent: slab.material.transparent }; })()", False),
-                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_Bed_Grid_Major_Green_Squares'))", False),
-                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_Machine_Tool_Lines_XYZ'))", False),
-                ("(() => { return window.CLE.bed.bedGroup.getObjectByName('CLE_Live_Toolhead_Cursor').getObjectByName('CLE_Tool_Tip_Lines_XYZ') !== null; })()", False),
-                ("(() => { return app.vp.grid ? app.vp.grid.visible : 'no-grid'; })()", False),
-                ("(() => { return Boolean(window.CLE.slicer.visualizerGroup && window.CLE.slicer.visualizerGroup.parent); })()", False),
-                ("(() => { const vg = window.CLE.slicer.visualizerGroup; return { hasLines: vg.children.some(c => c.type === 'LineSegments'), hasPoints: vg.children.some(c => c.type === 'Points'), hasOrangePlane: vg.children.some(c => c.name === 'CLE_CNC_Top_Start_Surface') }; })()", False),
-                ("(() => { window.CLE.openManualControlCenter(); window.CLE.fluidnc.connectionType = 'websocket'; window.CLE.fluidnc.updateConnectionUI(true); return document.getElementById('cle-man-conn-status').textContent; })()", False)
+                ("(() => { return { camTarget: [app.vp.view.target.x, app.vp.view.target.y, app.vp.view.target.z], gridVisible: app.vp.grid ? app.vp.grid.visible : false }; })()", False),
+                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_MM_LB_Tool_Lines_Overlay'))", False),
+                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_T1_Bed_Boundary'))", False),
+                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_T2_Keepout_Buffer'))", False),
+                ("Boolean(window.CLE.bed.bedGroup.getObjectByName('CLE_Clamp_Keepout_Zones'))", False),
+                ("(() => { const slab = window.CLE.bed.bedGroup.getObjectByName('CLE_Spoilboard_Slab'); return { renderOrder: slab.renderOrder, opacity: slab.material.opacity }; })()", False),
+                ("(() => { window.CLE.bed.toggle(); const hidden = !window.CLE.bed.bedGroup.visible; window.CLE.bed.toggle(); const shown = window.CLE.bed.bedGroup.visible; return { toggleHides: hidden, toggleShows: shown }; })()", False)
             ]
             for idx, (c, await_promise) in enumerate(checks, start=10):
                 await ws.send(json.dumps({

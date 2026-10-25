@@ -87,26 +87,18 @@ export class CLEBedVisualizer {
 
     this.buildSpoilboardSlab(THREE);
     this.buildGridAndExtrusionFrame(THREE);
+    this.buildMMLBKeepOutToolLines(THREE);
     this.buildMachineOriginToolLines(THREE);
     this.buildMillimeterRulers(THREE);
     this.buildToolheadCursor(THREE);
 
     container.add(this.bedGroup);
 
-    // Hide JumpStart's default small infinite gray grid so the medium blue bed with green squares pops
-    const app = window.app || window.xe;
-    if (app && app.vp && app.vp.grid) {
-      app.vp.grid.visible = false;
-    }
-
-    // Smoothly frame the view so the 600x500mm bed is centered in view
-    this.fitBedView();
-
     this.requestRender();
-    console.log('[CLE Bed] Mounted medium blue bed with light green squares and X,Y,Z tool lines.');
+    console.log('[CLE Bed] Mounted MM/LB tool line overlay and medium blue bed on top of normal display.');
   }
 
-  // Centering & Framing: Centers camera on bed center (300, 250, 0)
+  // Centering & Framing: Centers camera on bed center (300, 250, 0) - only on explicit user request (Fit Bed)
   fitBedView() {
     const app = window.app || window.xe;
     if (!app || !app.vp || !app.vp.view) return;
@@ -117,41 +109,42 @@ export class CLEBedVisualizer {
     app.vp.view.az = 0.45;
     app.vp.view.el = 0.55;
     if (app.vp.updateCamera) app.vp.updateCamera();
+    this.requestRender();
   }
 
-  // 1. Spoilboard Slab: Medium Blue Translucent Bed & High-Contrast Outline
+  // 1. Spoilboard Slab: Medium Blue Translucent Bed Underlay
   buildSpoilboardSlab(THREE) {
     const { spoilboardX, spoilboardY, spoilboardThickness, spoilboardOffsetX, spoilboardOffsetY } = this.config;
 
-    // Medium Blue Translucent Bed Slab
+    // Medium Blue Translucent Bed Slab - rendered with depthWrite: false and renderOrder: -20 so it never occludes normal CAD bodies
     const slabGeo = new THREE.BoxGeometry(spoilboardX, spoilboardY, spoilboardThickness);
     const slabMat = new THREE.MeshStandardMaterial({
       color: 0x1d4ed8, // Medium Royal Blue
       roughness: 0.25,
       metalness: 0.15,
       transparent: true,
-      opacity: 0.38,
+      opacity: 0.32,
       side: THREE.DoubleSide,
       depthWrite: false
     });
 
     const slab = new THREE.Mesh(slabGeo, slabMat);
-    // Center of slab: top surface sits flush at Z = 0.00
+    // Center of slab: sits below Z = 0.00
     slab.position.set(
       spoilboardOffsetX + spoilboardX / 2,
       spoilboardOffsetY + spoilboardY / 2,
       -spoilboardThickness / 2
     );
-    slab.receiveShadow = true;
+    slab.renderOrder = -20;
     slab.name = 'CLE_Spoilboard_Slab';
     this.bedGroup.add(slab);
 
-    // Polished top bed plane surface for vivid translucency
+    // Polished top bed plane surface placed slightly below Z=0 (Z = -0.05mm) so normal CAD models sit cleanly on top
     const topPlaneGeo = new THREE.PlaneGeometry(spoilboardX, spoilboardY);
     const topPlaneMat = new THREE.MeshBasicMaterial({
       color: 0x2563eb, // Vibrant medium blue top face
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.38,
       side: THREE.DoubleSide,
       depthWrite: false
     });
@@ -159,39 +152,11 @@ export class CLEBedVisualizer {
     topPlaneMesh.position.set(
       spoilboardOffsetX + spoilboardX / 2,
       spoilboardOffsetY + spoilboardY / 2,
-      0.03
+      -0.05
     );
+    topPlaneMesh.renderOrder = -20;
     topPlaneMesh.name = 'CLE_Bed_Top_Plane';
     this.bedGroup.add(topPlaneMesh);
-
-    // High-Contrast Spoilboard 3D Box Outline (600x500x20mm)
-    const edgesGeo = new THREE.EdgesGeometry(slabGeo);
-    const edgesMat = new THREE.LineBasicMaterial({
-      color: 0x38bdf8, // Bright cyan perimeter outline
-      linewidth: 2,
-      transparent: true,
-      opacity: 0.95
-    });
-    const slabEdges = new THREE.LineSegments(edgesGeo, edgesMat);
-    slab.add(slabEdges);
-
-    // Spoilboard Top Surface Perimeter Outline (Z = 0.08mm)
-    const x0 = spoilboardOffsetX;
-    const x1 = spoilboardOffsetX + spoilboardX;
-    const y0 = spoilboardOffsetY;
-    const y1 = spoilboardOffsetY + spoilboardY;
-    const topPts = [
-      x0, y0, 0.08,  x1, y0, 0.08,
-      x1, y0, 0.08,  x1, y1, 0.08,
-      x1, y1, 0.08,  x0, y1, 0.08,
-      x0, y1, 0.08,  x0, y0, 0.08
-    ];
-    const topGeo = new THREE.BufferGeometry();
-    topGeo.setAttribute('position', new THREE.Float32BufferAttribute(topPts, 3));
-    const topMat = new THREE.LineBasicMaterial({ color: 0x60a5fa, linewidth: 3, transparent: true, opacity: 1.0 });
-    const topBorder = new THREE.LineSegments(topGeo, topMat);
-    topBorder.name = 'CLE_Spoilboard_Top_Border';
-    this.bedGroup.add(topBorder);
   }
 
   // 2. Light Green Squares Surface Grid & Machine Travel Limits Volume (600x500x100mm)
@@ -200,8 +165,8 @@ export class CLEBedVisualizer {
 
     const minorPts = [];
     const majorPts = [];
-    const zMinor = 0.08;
-    const zMajor = 0.10;
+    const zMinor = -0.03;
+    const zMajor = -0.02;
 
     const x0 = spoilboardOffsetX;
     const x1 = spoilboardOffsetX + spoilboardX;
@@ -237,10 +202,11 @@ export class CLEBedVisualizer {
       const minMat = new THREE.LineBasicMaterial({
         color: 0x4ade80, // Bright Light Green
         transparent: true,
-        opacity: 0.60,
+        opacity: 0.50,
         depthWrite: false
       });
       const minLines = new THREE.LineSegments(minGeo, minMat);
+      minLines.renderOrder = -15;
       minLines.name = 'CLE_Bed_Grid_Minor_Green';
       this.bedGroup.add(minLines);
     }
@@ -252,40 +218,129 @@ export class CLEBedVisualizer {
       const majMat = new THREE.LineBasicMaterial({
         color: 0x22c55e, // Vibrant Green Squares
         transparent: true,
-        opacity: 0.95,
+        opacity: 0.85,
         linewidth: 2,
         depthWrite: false
       });
       const majLines = new THREE.LineSegments(majGeo, majMat);
+      majLines.renderOrder = -15;
       majLines.name = 'CLE_Bed_Grid_Major_Green_Squares';
       this.bedGroup.add(majLines);
     }
+  }
 
-    // 3D Physical Travel Volume Frame (600x500x100mm)
+  // 3. MillMage / LightBurn Tool Lines (T1 Bed Boundary, T2 Soft-Limit Keep-Out Margins & Clamp Keepouts)
+  // Non-cutting reference tool lines rendered on top of normal display ("where no actual tool exists but good for keep outs etc.")
+  buildMMLBKeepOutToolLines(THREE) {
+    const { travelX, travelY, travelZ } = this.config;
     const tz = travelZ || 100;
+    const zToolLine = 0.05;
+
+    const toolLayerGroup = new THREE.Group();
+    toolLayerGroup.name = 'CLE_MM_LB_Tool_Lines_Overlay';
+
+    // --- T1: Work Area Perimeter Tool Line (600x500mm Boundary) ---
+    const t1Pts = [
+      0, 0, zToolLine,  travelX, 0, zToolLine,
+      travelX, 0, zToolLine,  travelX, travelY, zToolLine,
+      travelX, travelY, zToolLine,  0, travelY, zToolLine,
+      0, travelY, zToolLine,  0, 0, zToolLine
+    ];
+    const t1Geo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(t1Pts, 3));
+    const t1Mat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2, depthTest: false, transparent: true, opacity: 0.95 });
+    const t1Line = new THREE.LineSegments(t1Geo, t1Mat);
+    t1Line.renderOrder = 50;
+    t1Line.name = 'CLE_T1_Bed_Boundary';
+    toolLayerGroup.add(t1Line);
+
+    // --- T2: Soft-Limit Keep-Out Margin (5mm Inset around Perimeter) ---
+    const margin = 5.0;
+    const t2Pts = [
+      margin, margin, zToolLine,  travelX - margin, margin, zToolLine,
+      travelX - margin, margin, zToolLine,  travelX - margin, travelY - margin, zToolLine,
+      travelX - margin, travelY - margin, zToolLine,  margin, travelY - margin, zToolLine,
+      margin, travelY - margin, zToolLine,  margin, margin, zToolLine
+    ];
+    const t2Geo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(t2Pts, 3));
+    const t2Mat = new THREE.LineDashedMaterial({
+      color: 0xf59e0b, // Amber Warning Tool Line
+      dashSize: 6,
+      gapSize: 4,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.90
+    });
+    const t2Line = new THREE.LineSegments(t2Geo, t2Mat);
+    t2Line.computeLineDistances();
+    t2Line.renderOrder = 55;
+    t2Line.name = 'CLE_T2_Keepout_Buffer';
+    toolLayerGroup.add(t2Line);
+
+    // --- Hold-Down Clamp Keep-Out Zones (4 Corners: 40x40mm) ---
+    const clampSize = 40.0;
+    const corners = [
+      { x0: 0, y0: 0, x1: clampSize, y1: clampSize, labelPos: [20, 20] },
+      { x0: travelX - clampSize, y0: 0, x1: travelX, y1: clampSize, labelPos: [travelX - 20, 20] },
+      { x0: 0, y0: travelY - clampSize, x1: clampSize, y1: travelY, labelPos: [20, travelY - 20] },
+      { x0: travelX - clampSize, y0: travelY - clampSize, x1: travelX, y1: travelY, labelPos: [travelX - 20, travelY - 20] }
+    ];
+
+    const clampPts = [];
+    corners.forEach(c => {
+      // Box outline
+      clampPts.push(c.x0, c.y0, zToolLine,  c.x1, c.y0, zToolLine);
+      clampPts.push(c.x1, c.y0, zToolLine,  c.x1, c.y1, zToolLine);
+      clampPts.push(c.x1, c.y1, zToolLine,  c.x0, c.y1, zToolLine);
+      clampPts.push(c.x0, c.y1, zToolLine,  c.x0, c.y0, zToolLine);
+      // Diagonal cross-hatch (keep-out marker)
+      clampPts.push(c.x0, c.y0, zToolLine,  c.x1, c.y1, zToolLine);
+      clampPts.push(c.x1, c.y0, zToolLine,  c.x0, c.y1, zToolLine);
+    });
+
+    const clampGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(clampPts, 3));
+    const clampMat = new THREE.LineDashedMaterial({
+      color: 0xef4444, // Red Clamp Keepout
+      dashSize: 4,
+      gapSize: 3,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.85
+    });
+    const clampSegments = new THREE.LineSegments(clampGeo, clampMat);
+    clampSegments.computeLineDistances();
+    clampSegments.renderOrder = 60;
+    clampSegments.name = 'CLE_Clamp_Keepout_Zones';
+    toolLayerGroup.add(clampSegments);
+
+    // Corner Keep-Out Badge Sprite
+    const clampBadge = this.createNumberLabelSprite(THREE, 'CLAMP KEEPOUT', '#ef4444');
+    clampBadge.position.set(22, 22, zToolLine + 1.0);
+    clampBadge.scale.set(24, 10, 1);
+    clampBadge.renderOrder = 65;
+    toolLayerGroup.add(clampBadge);
+
+    // 3D Travel Volume Frame (600x500x100mm)
     const travelBoxPts = [
-      // Base rectangle
-      0, 0, zMajor,  travelX, 0, zMajor,
-      travelX, 0, zMajor,  travelX, travelY, zMajor,
-      travelX, travelY, zMajor,  0, travelY, zMajor,
-      0, travelY, zMajor,  0, 0, zMajor,
-      // Top rectangle at Z = travelZ
+      0, 0, zToolLine,  travelX, 0, zToolLine,
+      travelX, 0, zToolLine,  travelX, travelY, zToolLine,
+      travelX, travelY, zToolLine,  0, travelY, zToolLine,
+      0, travelY, zToolLine,  0, 0, zToolLine,
       0, 0, tz,  travelX, 0, tz,
       travelX, 0, tz,  travelX, travelY, tz,
       travelX, travelY, tz,  0, travelY, tz,
       0, travelY, tz,  0, 0, tz,
-      // 4 vertical corner posts
-      0, 0, zMajor,  0, 0, tz,
-      travelX, 0, zMajor,  travelX, 0, tz,
-      travelX, travelY, zMajor,  travelX, travelY, tz,
-      0, travelY, zMajor,  0, travelY, tz
+      0, 0, zToolLine,  0, 0, tz,
+      travelX, 0, zToolLine,  travelX, 0, tz,
+      travelX, travelY, zToolLine,  travelX, travelY, tz,
+      0, travelY, zToolLine,  0, travelY, tz
     ];
-    const travelGeo = new THREE.BufferGeometry();
-    travelGeo.setAttribute('position', new THREE.Float32BufferAttribute(travelBoxPts, 3));
-    const travelMat = new THREE.LineBasicMaterial({ color: 0xd946ef, linewidth: 2, transparent: true, opacity: 0.85 });
+    const travelGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(travelBoxPts, 3));
+    const travelMat = new THREE.LineBasicMaterial({ color: 0xd946ef, linewidth: 2, transparent: true, opacity: 0.70 });
     const travelFrame = new THREE.LineSegments(travelGeo, travelMat);
     travelFrame.name = 'CLE_Machine_Travel_Volume_Box';
-    this.bedGroup.add(travelFrame);
+    toolLayerGroup.add(travelFrame);
+
+    this.bedGroup.add(toolLayerGroup);
   }
 
   // 3. Machine Tool Lines (X, Y, Z Axes Marker at Bed Origin)

@@ -22,9 +22,7 @@ export class CLESlicerEngine {
   }
 
   init() {
-    if (!this.slicedLayers || this.slicedLayers.length === 0) {
-      this.generateDefaultSampleSlices();
-    }
+    // Slicer is ready for user-triggered slicing; does not overwrite normal visualizer display on startup
   }
 
   // Generates high-visibility default sample slices on the TTC6050 bed so slices are immediately visible
@@ -591,37 +589,9 @@ export class CLESlicerEngine {
       const modeBorder = new THREE.LineSegments(modeBorderGeo, modeBorderMat);
       modeBorder.position.set(stockCx, stockCy, modePlaneZ);
       this.visualizerGroup.add(modeBorder);
-
-      // Smoothly frame camera on sliced workpiece
-      if (app.vp && app.vp.view) {
-        app.vp.view.target.set(stockCx, stockCy, stockCz);
-        const maxSpan = Math.max(stockW, stockD, stockH, 50);
-        app.vp.view.dist = Math.max(120, maxSpan * 2.2);
-        if (app.vp.updateCamera) app.vp.updateCamera();
-      }
     }
 
     container.add(this.visualizerGroup);
-
-    // Make JumpStart CAD bodies translucent with depthWrite disabled so toolpath stack is 100% visible
-    if (app.scene && app.scene.views) {
-      for (const [id, view] of app.scene.views) {
-        if (view.mesh && view.mesh.material) {
-          const mats = Array.isArray(view.mesh.material) ? view.mesh.material : [view.mesh.material];
-          mats.forEach(m => {
-            if (m._cleOrigOpacity === undefined) {
-              m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
-              m._cleOrigTransparent = m.transparent || false;
-              m._cleOrigDepthWrite = m.depthWrite !== undefined ? m.depthWrite : true;
-            }
-            m.transparent = true;
-            m.opacity = 0.25;
-            m.depthWrite = false;
-            m.needsUpdate = true;
-          });
-        }
-      }
-    }
 
     // Set Gamepad mode to Design so left joystick immediately orbits the 3D scene around the slices!
     if (this.bridge.gamepad) {
