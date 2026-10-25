@@ -2,7 +2,12 @@
 # CLEJS Daily JumpStart Upstream Tracking Script
 set -e
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if (pwd -W) >/dev/null 2>&1; then
+    PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -W)"
+else
+    PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
 ORIGINAL="$PROJECT_ROOT/JSoriginal/index.htm"
 DEV="$PROJECT_ROOT/Dev/index.htm"
 HISTORY="$PROJECT_ROOT/JSoriginal_history"

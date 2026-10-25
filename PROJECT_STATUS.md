@@ -4,10 +4,10 @@
 1. **Free / Open-Source Only:**
    - Free and open-source software only. Never use paid tools.
    - Install all tools exclusively to `D:\CLEJS\tools` to keep drive `C:` as free as possible.
-2. **Local Execution on CL3 & Pre-Approved Local Tooling:**
+2. **Local Execution on CL3 & Full RWX Pre-Approval:**
    - Execute all workloads, builds, and tools locally on the **CL3** server (Intel Core i9, 24 threads, 32GB RAM).
-   - **Pre-Approval Granted:** Bash, Python, Git, and all local CLI tools on CL3 are permanently pre-approved and executed directly without asking for permission.
-   - **Cross-Platform Standard:** Use **Bash** (`.sh`) as the primary scripting standard across all environments (no PowerShell).
+   - **Full RWX Granted:** All local tools (Bash, Python, Git, etc.) have full Read, Write, and Execute (RWX) permissions across `D:\`. Never ask for permission for local tools unless explicitly requiring a write to `C:`.
+   - **Cross-Platform Standard:** Use **Bash** (`.sh`) exclusively across all environments (no PowerShell).
 3. **No Paid Services / Prefer Local Tools:**
    - Never use or integrate paid third-party APIs/services. Use free or open-source solutions only.
    - Preference is strictly for local tools running on CL3.
@@ -42,7 +42,7 @@ When an AI agent opens this repository in a new session:
 
 | Conversation ID | Model | Date Started | Status | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Migrated fully to Bash standard (`save_checkpoint.sh`, `update_jumpstart.sh`, `cle_start.sh`). Pre-approval confirmed for Bash/Python. |
+| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Migrated fully to pure Bash standard. Full RWX confirmed for CL3 local tools without asking (C: drive protected). All initial build phases verified. |
 
 ---
 
@@ -50,8 +50,8 @@ When an AI agent opens this repository in a new session:
 
 - [x] Initialized Git repository with primary branch `CLEJS`.
 - [x] Established `sessions/` directory to archive complete Antigravity transcript logs (`transcript.jsonl` and `transcript_full.jsonl`).
-- [x] Standardized on **Bash** scripts (`save_checkpoint.sh`, `update_jumpstart.sh`, `cle_start.sh`).
-- [x] Confirmed pre-approval for Bash, Python, and local tools on CL3 without asking.
+- [x] Standardized on pure **Bash** scripts (`save_checkpoint.sh`, `update_jumpstart.sh`, `cle_start.sh`).
+- [x] Codified full RWX permission directive for local tools without prompting.
 - [x] Created `PROJECT_STATUS.md` ledger for zero-loss crash recovery.
 - [x] Created `D:\CLEJS\tools` directory for local tool installs.
 - [x] **Phase 1: Nintendo Switch Gamepad Subsystem (`cle_gamepad.js`)**:
