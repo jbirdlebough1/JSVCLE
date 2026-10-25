@@ -1,6 +1,7 @@
 /**
- * CLEJS - FluidNC & FluidTouch 7" Controller Bridge
- * Real-time streaming, Web Serial, WebSocket, Status Polling & FluidTouch Head Integration
+ * CLEJS - FluidNC & FluidTouch 7" Controller Bridge (V2)
+ * Real-time streaming, Web Serial, WebSocket, Status Polling,
+ * FluidTouch Head Integration, and SD Card File Transfer
  */
 
 export class CLEFluidNCClient {
@@ -53,7 +54,7 @@ export class CLEFluidNCClient {
 
   async startSerialReadLoop() {
     const textDecoder = new TextDecoderStream();
-    const readableStreamClosed = this.port.readable.pipeTo(textDecoder.writable);
+    this.port.readable.pipeTo(textDecoder.writable).catch(()=>{});
     this.reader = textDecoder.readable.getReader();
     try {
       while (true) {
@@ -72,7 +73,7 @@ export class CLEFluidNCClient {
   connectWebSocket(ip = this.ip) {
     this.ip = ip;
     localStorage.setItem('cle.fluidnc.ip', ip);
-    const wsUrl = `ws://${this.ip}:81`; // FluidNC standard websocket port
+    const wsUrl = `ws://${this.ip}:81`;
     try {
       this.socket = new WebSocket(wsUrl);
       this.socket.onopen = () => {
@@ -128,7 +129,7 @@ export class CLEFluidNCClient {
   handleIncomingData(chunk) {
     this.buffer += chunk;
     const lines = this.buffer.split('\n');
-    this.buffer = lines.pop(); // Keep partial line
+    this.buffer = lines.pop();
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -142,7 +143,6 @@ export class CLEFluidNCClient {
     }
   }
 
-  // Parses: <Idle|MPos:0.000,0.000,0.000,0.000|WPos:0.000,0.000,0.000,0.000|FS:500,12000>
   parseStatusReport(report) {
     const body = report.slice(1, -1);
     const parts = body.split('|');
@@ -172,16 +172,15 @@ export class CLEFluidNCClient {
   }
 
   updateDRO() {
-    const xVal = document.getElementById('cle-dro-x');
-    const yVal = document.getElementById('cle-dro-y');
-    const zVal = document.getElementById('cle-dro-z');
-    const aVal = document.getElementById('cle-dro-a');
-    if (xVal) xVal.textContent = this.wpos.X.toFixed(2);
-    if (yVal) yVal.textContent = this.wpos.Y.toFixed(2);
-    if (zVal) zVal.textContent = this.wpos.Z.toFixed(2);
-    if (aVal) aVal.textContent = this.wpos.A.toFixed(1);
+    const updateVal = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    };
+    updateVal('cle-dro-x', this.wpos.X.toFixed(2));
+    updateVal('cle-dro-y', this.wpos.Y.toFixed(2));
+    updateVal('cle-dro-z', this.wpos.Z.toFixed(2));
+    updateVal('cle-dro-a', this.wpos.A.toFixed(1));
 
-    // Keep active session recovery tracker updated
     if (this.bridge.recovery) {
       this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
     }
@@ -258,5 +257,46 @@ export class CLEFluidNCClient {
       this.sendNextQueued();
     }
   }
-}
 
+  // --- FluidNC & FluidTouch SD Card File Management ---
+  async uploadFileToSD(filename, gcodeText) {
+    this.bridge.notify(`Uploading ${filename} to FluidNC SD Card...`, 'ok');
+    try {
+      const formData = new FormData();
+      const blob = new Blob([gcodeText], { type: 'text/plain' });
+      formData.append('data', blob, filename);
+
+      const resp = await fetch(`http://${this.ip}/upload`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (resp.ok) {
+        this.bridge.notify(`File ${filename} uploaded to SD Card!`, 'ok');
+      } else {
+        throw new Error(`Upload returned status ${resp.status}`);
+      }
+    } catch (e) {
+      console.warn('[CLE FluidNC] Direct HTTP upload failed (may need CORS or local network). Falling back to macro: ', e);
+      // Fallback: If HTTP upload fails over browser sandbox, allow downloading or streaming
+      this.bridge.notify(`Could not direct upload to http://${this.ip}/upload. Check network connection or use Export .NC`, 'error');
+    }
+  }
+
+  async listSDFiles() {
+    try {
+      const resp = await fetch(`http://${this.ip}/files?path=/sd`);
+      if (resp.ok) {
+        return await resp.json();
+      }
+    } catch (e) {
+      console.warn('[CLE FluidNC] Failed to list SD files:', e);
+    }
+    return [];
+  }
+
+  runJobFromSD(filename) {
+    this.sendGCode(`$SD/Run=${filename}`);
+    this.bridge.notify(`Running job from SD: ${filename}`, 'ok');
+  }
+}

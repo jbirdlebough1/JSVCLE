@@ -44,3 +44,4 @@ with open(bundle_path, 'w', encoding='utf-8') as f:
     f.write("\n".join(combined_code))
 
 print(f"Created bundle: {bundle_path} ({os.path.getsize(bundle_path)} bytes)")
+
