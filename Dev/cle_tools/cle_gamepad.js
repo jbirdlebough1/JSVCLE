@@ -148,8 +148,32 @@ export class CLEGamepadEngine {
     return sign * ((Math.abs(val) - dz) / (1 - dz));
   }
 
-  toggleMode() {
+  async toggleMode() {
     this.mode = this.mode === 'design' ? 'manual' : 'design';
+    this.updateModeUI();
+
+    if (this.mode === 'manual') {
+      // Connect to device if not connected
+      if (this.bridge.fluidnc && !this.bridge.fluidnc.isConnected) {
+        this.bridge.notify('Connecting to machine device...', 'info');
+        await this.bridge.fluidnc.autoConnect();
+      }
+      // Show device card for control
+      await this.bridge.openManualControlCenter();
+      // Auto-start camera if available
+      if (this.bridge.camera) {
+        await this.bridge.camera.autoStartIfAvailable();
+      }
+      this.bridge.notify('Entered MANUAL CNC/LASER MODE. Machine control card active.', 'ok');
+    } else {
+      // Returned to Design 3D Mode
+      const hub = document.getElementById('cle-manual-hub');
+      if (hub) hub.style.display = 'none';
+      this.bridge.notify('Entered DESIGN 3D VIEWPORT MODE');
+    }
+  }
+
+  updateModeUI() {
     const modeBtn = document.getElementById('cle-gp-mode-toggle');
     const ribbonBtn = document.getElementById('cle-r-gp-mode');
     const label = this.mode === 'design' ? 'Mode: Design 3D' : 'Mode: Manual CNC/Laser';
@@ -160,15 +184,8 @@ export class CLEGamepadEngine {
     }
     if (ribbonBtn) {
       const span = ribbonBtn.querySelector('span');
-      if (span) span.textContent = this.mode === 'design' ? 'Design 3D' : 'Manual CNC/Laser';
+      if (span) span.textContent = this.mode === 'design' ? 'Design Mode' : 'Manual Mode';
       ribbonBtn.setAttribute('aria-pressed', this.mode === 'manual' ? 'true' : 'false');
-    }
-
-    if (this.mode === 'manual') {
-      this.bridge.openManualControlCenter();
-      this.bridge.notify('Entered MANUAL CNC/LASER MODE. Soft-limits active (Z >= 0.1mm)', 'ok');
-    } else {
-      this.bridge.notify('Entered DESIGN 3D VIEWPORT MODE');
     }
   }
 

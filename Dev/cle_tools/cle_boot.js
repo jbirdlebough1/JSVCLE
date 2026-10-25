@@ -125,11 +125,36 @@ class CLEBridge {
       { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "inspect", fn: () => this.fluidnc.openFluidTouchWebGUI() }
     ]);
 
-    // 2. JOYSTICK MODE Section
+    // 2. JOYSTICK MODE Section (Defaults to Design Mode; switching to Manual connects & opens Control Card)
     m("JOYSTICK MODE", "", [
-      { id: "cle-r-gp-mode", label: this.gamepad.mode === "design" ? "Design 3D" : "Manual CNC/Laser", title: "Toggle Switch Controller Mode", icon: "motion", pressed: this.gamepad.mode === "manual", fn: () => this.gamepad.toggleMode() },
-      { id: "cle-r-manual-hub", label: `Manual Control of ${activeMach.name}`, title: "Open Live Manual Control Center, Remote Camera Feed & Soft-Limits", icon: "inspect", fn: () => this.openManualControlCenter() },
-      { id: "cle-r-gp-remap", label: "Controller Setup", title: "Configure Switch Controller Buttons, Axes & Remap Table", icon: "settings", fn: () => this.openModal("gamepad") }
+      { 
+        id: "cle-r-gp-mode", 
+        label: this.gamepad.mode === "design" ? "Design Mode" : "Manual Mode", 
+        title: this.gamepad.mode === "design" ? "Click to switch to Manual Mode (Connects to device & opens Control Card)" : "Active in Manual Mode (Click to return to Design 3D Mode)", 
+        icon: "motion", 
+        pressed: this.gamepad.mode === "manual", 
+        fn: () => this.gamepad.toggleMode() 
+      },
+      { 
+        id: "cle-r-manual-hub", 
+        label: `Control Card (${activeMach.name})`, 
+        title: `Open Device Control Card for ${activeMach.name} (DRO, Spindle/Laser, Camera)`, 
+        icon: "inspect", 
+        fn: async () => {
+          this.gamepad.mode = "manual";
+          this.gamepad.updateModeUI();
+          if (this.fluidnc && !this.fluidnc.isConnected) await this.fluidnc.autoConnect();
+          await this.openManualControlCenter();
+          if (this.camera) await this.camera.autoStartIfAvailable();
+        } 
+      },
+      { 
+        id: "cle-r-gp-remap", 
+        label: "Controller Setup", 
+        title: "Configure Switch Controller Buttons, Axes & Live Switch Indicators", 
+        icon: "settings", 
+        fn: () => this.openModal("gamepad") 
+      }
     ]);
 
     // 3. 4th Axis & Slicer
@@ -174,6 +199,9 @@ class CLEBridge {
     let hub = document.getElementById('cle-manual-hub');
     if (hub) {
       hub.style.display = 'flex';
+      if (this.camera && !this.camera.isActive) {
+        this.camera.autoStartIfAvailable();
+      }
       return;
     }
 
@@ -311,6 +339,11 @@ class CLEBridge {
       devSelect.innerHTML = '<option value="">Default USB Video Device</option>';
     }
 
+    // Camera if exists should always be started
+    if (this.camera && !this.camera.isActive) {
+      this.camera.autoStartIfAvailable();
+    }
+
     // Wire Events
     document.getElementById('cle-man-close').onclick = () => { hub.style.display = 'none'; };
     
@@ -400,6 +433,11 @@ class CLEBridge {
       title = 'Nintendo Switch Controller Setup & Remap Table';
       const m = this.gamepad.mapping;
       bodyHtml = `
+        <!-- Vault Parameter Save Confirmation Notice -->
+        <div id="cle-vault-status-notice" style="display:none; padding:8px 12px; background:rgba(57, 211, 83, 0.15); border:1px solid var(--ok); border-radius:6px; margin-bottom:8px; font-size:11px; color:var(--ok); font-weight:600; align-items:center; gap:8px;">
+          <span>✔ CLE-Vault:</span> <span id="cle-vault-status-text">Parameters saved successfully.</span>
+        </div>
+
         <div style="background:var(--paper); padding:10px 14px; border-radius:6px; border:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
           <div>
             <strong>Controller: </strong><span id="cle-modal-gp-name" style="color:var(--accent);">Detecting...</span>
@@ -410,6 +448,40 @@ class CLEBridge {
             <select class="cle-select" id="cle-gp-vault-profiles" style="font-size:11px; padding:3px 6px;">
               <option value="">Load Vault Profile...</option>
             </select>
+          </div>
+        </div>
+
+        <!-- Live Controller Switch & Button States Strip -->
+        <div class="cle-joycon-panel" style="padding:8px 12px; margin-top:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="font-size:10px; font-weight:700; text-transform:uppercase; color:var(--ink-2); letter-spacing:0.5px;">Active Controller Switch &amp; Button States:</span>
+            <span id="cle-active-btn-summary" style="font-size:10px; font-family:var(--f-mono); color:var(--ink-3);">All Switches Idle</span>
+          </div>
+          <div id="cle-switch-indicators" style="display:flex; flex-wrap:wrap; gap:5px; font-family:var(--f-mono); font-size:10px;">
+            ${[
+              { id: 0, label: 'B (0)' },
+              { id: 1, label: 'A (1)' },
+              { id: 2, label: 'Y (2)' },
+              { id: 3, label: 'X (3)' },
+              { id: 4, label: 'L (4)' },
+              { id: 5, label: 'R (5)' },
+              { id: 6, label: 'ZL (6)' },
+              { id: 7, label: 'ZR (7)' },
+              { id: 8, label: 'Minus - (8)' },
+              { id: 9, label: 'Plus + (9)' },
+              { id: 10, label: 'L3 (10)' },
+              { id: 11, label: 'R3 (11)' },
+              { id: 12, label: 'D-Up ↑ (12)' },
+              { id: 13, label: 'D-Dn ↓ (13)' },
+              { id: 14, label: 'D-Lf ← (14)' },
+              { id: 15, label: 'D-Rt → (15)' },
+              { id: 16, label: 'Home (16)' },
+              { id: 17, label: 'Capture (17)' }
+            ].map(b => `
+              <span id="cle-btn-tag-${b.id}" class="cle-switch-pill" style="padding:3px 8px; border-radius:4px; background:var(--panel-2); border:1px solid var(--line); color:var(--ink-2); font-weight:600; transition:all 0.08s ease;">
+                ${b.label}
+              </span>
+            `).join('')}
           </div>
         </div>
 
@@ -831,7 +903,12 @@ class CLEBridge {
     this.activeModal = overlay;
 
     document.getElementById('cle-modal-close-btn').onclick = () => this.closeModal();
-    document.getElementById('cle-modal-save-btn').onclick = () => this.closeModal();
+    document.getElementById('cle-modal-save-btn').onclick = () => {
+      if (type === 'gamepad') {
+        this.saveGamepadSettingsFromModal();
+      }
+      this.closeModal();
+    };
 
     // Wire Modal Logic
     if (type === 'gamepad') {
@@ -842,6 +919,7 @@ class CLEBridge {
         const name = document.getElementById('cle-gp-profile-name').value.trim() || 'Custom_Profile';
         this.saveGamepadSettingsFromModal();
         await this.vault.saveControllerProfile(name, this.gamepad.mapping);
+        this.showVaultSaveNotice(`Parameters & profile "${name}" saved to CLE-Vault.`);
         this.loadVaultProfilesList();
       };
 
@@ -1240,6 +1318,40 @@ class CLEBridge {
       else if (dpad.dpadRight) activeDir = 'RIGHT →';
       if (dpadLabel) dpadLabel.textContent = activeDir;
 
+      // Real-time Button & Switch State Indicators (0..17)
+      const btnNames = ['B', 'A', 'Y', 'X', 'L', 'R', 'ZL', 'ZR', 'Minus -', 'Plus +', 'L3', 'R3', 'D-Up ↑', 'D-Dn ↓', 'D-Lf ←', 'D-Rt →', 'Home', 'Capture'];
+      const activeBtns = [];
+      for (let b = 0; b < 18; b++) {
+        const btnObj = gp.buttons[b];
+        const isPressed = btnObj && (btnObj.pressed || btnObj.value > 0.4);
+        const tagEl = document.getElementById(`cle-btn-tag-${b}`);
+        if (tagEl) {
+          if (isPressed) {
+            tagEl.style.background = 'var(--ok)';
+            tagEl.style.color = '#fff';
+            tagEl.style.borderColor = 'var(--ok)';
+            tagEl.style.boxShadow = '0 0 8px rgba(57, 211, 83, 0.6)';
+            activeBtns.push(btnNames[b] || `Btn ${b}`);
+          } else {
+            tagEl.style.background = 'var(--panel-2)';
+            tagEl.style.color = 'var(--ink-2)';
+            tagEl.style.borderColor = 'var(--line)';
+            tagEl.style.boxShadow = 'none';
+          }
+        }
+      }
+
+      const summaryEl = document.getElementById('cle-active-btn-summary');
+      if (summaryEl) {
+        if (activeBtns.length > 0) {
+          summaryEl.textContent = `Active Switches: ${activeBtns.join(', ')}`;
+          summaryEl.style.color = 'var(--ok)';
+        } else {
+          summaryEl.textContent = 'All Switches Idle';
+          summaryEl.style.color = 'var(--ink-3)';
+        }
+      }
+
       const updateTag = (id, active) => {
         const el = document.getElementById(id);
         if (el) {
@@ -1252,6 +1364,20 @@ class CLEBridge {
       updateTag('cle-dpad-left-tag', dpad.dpadLeft);
       updateTag('cle-dpad-right-tag', dpad.dpadRight);
     };
+  }
+
+  showVaultSaveNotice(msg) {
+    this.notify(`✔ Vault: ${msg}`, 'ok');
+    const noticeEl = document.getElementById('cle-vault-status-notice');
+    const textEl = document.getElementById('cle-vault-status-text');
+    if (noticeEl && textEl) {
+      textEl.textContent = msg;
+      noticeEl.style.display = 'flex';
+      clearTimeout(this._vaultNoticeTimer);
+      this._vaultNoticeTimer = setTimeout(() => {
+        if (noticeEl) noticeEl.style.display = 'none';
+      }, 4500);
+    }
   }
 
   saveGamepadSettingsFromModal() {
@@ -1269,7 +1395,10 @@ class CLEBridge {
     m.design.invertRX = document.getElementById('cfg-inv-rx').checked;
     m.design.invertRY = document.getElementById('cfg-inv-ry').checked;
 
-    this.gamepad.saveMapping();
+    const profName = (document.getElementById('cle-gp-profile-name')?.value || m.profileName || 'Nintendo Switch Pro').trim();
+    this.gamepad.saveMapping(profName);
+    this.vault.saveControllerProfile(profName, m);
+    this.showVaultSaveNotice(`Parameter changes & profile "${profName}" saved to CLE-Vault.`);
   }
 
   closeModal() {

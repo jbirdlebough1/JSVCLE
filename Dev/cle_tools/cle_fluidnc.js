@@ -133,6 +133,22 @@ export class CLEFluidNCClient {
     this.sendImmediate('$$');
   }
 
+  // Auto-connect to active machine device (WebSocket / IP)
+  async autoConnect() {
+    if (this.isConnected) return true;
+    const mach = this.bridge.vault ? this.bridge.vault.getActiveMachine() : null;
+    const ip = (mach && mach.wifiIP) ? mach.wifiIP : this.ip;
+    if (ip && ip !== 'none' && ip.trim().length > 0) {
+      try {
+        this.connectWebSocket(ip.trim());
+        return true;
+      } catch (e) {
+        console.warn('[CLE FluidNC] WebSocket auto-connect error:', e);
+      }
+    }
+    return false;
+  }
+
   // --- Web Serial Connection ---
   async connectSerial() {
     if (!('serial' in navigator)) {

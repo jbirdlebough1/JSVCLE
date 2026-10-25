@@ -17,6 +17,26 @@ export class CLECameraEngine {
     this.docked = false; // Viewport corner dock toggle
   }
 
+  get isActive() {
+    return this.activeType !== 'none' && (this.stream !== null || this.activeType === 'wifi');
+  }
+
+  // Automatically start USB camera if any video input exists
+  async autoStartIfAvailable() {
+    if (this.isActive) return true;
+    try {
+      const devices = await this.getAvailableDevices();
+      if (devices && devices.length > 0) {
+        const logi = devices.find(d => /logi|c270|webcam/i.test(d.label));
+        const devId = logi ? logi.deviceId : (this.selectedDeviceId || devices[0].deviceId);
+        return await this.startUSBCamera(devId);
+      }
+    } catch (e) {
+      console.warn('[CLE Camera] Auto-start check error:', e);
+    }
+    return false;
+  }
+
   // Enumerate all available USB video inputs on the system
   async getAvailableDevices() {
     try {
