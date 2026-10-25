@@ -545,18 +545,9 @@ export class CLESlicerEngine {
       }
     }
 
-    if (app?.vp) {
-      app.vp.dirty = true;
-      if (app.vp.request) app.vp.request();
-    }
-  }
-            }
-          });
-        }
-      }
-    }
     const hud = document.getElementById('cle-slicer-hud');
     if (hud) hud.style.display = 'none';
+
     if (app?.vp) {
       app.vp.dirty = true;
       if (app.vp.request) app.vp.request();

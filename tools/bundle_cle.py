@@ -51,3 +51,12 @@ with open(bundle_path, 'w', encoding='utf-8') as f:
 
 print(f"Created bundle: {bundle_path} ({os.path.getsize(bundle_path)} bytes)")
 
+# Auto-validate bundle syntax and execution with Node.js
+import subprocess
+try:
+    res = subprocess.run(['node', os.path.join(script_dir, 'test_runtime.js')], capture_output=True, text=True, check=True)
+    print("Bundle runtime validation: PASSED")
+except Exception as e:
+    print(f"Bundle runtime validation: FAILED ({e})")
+    sys.exit(1)
+

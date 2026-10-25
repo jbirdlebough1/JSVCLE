@@ -131,15 +131,15 @@ class CLEBridge {
 
     // 1. Machine Section (Devices like LightBurn / MillMage)
     m(activeMach.name, "", [
-      { id: "cle-r-devices", label: "Devices", title: "Select or Configure Machine Profiles (Like LightBurn/MillMage)", icon: "settings", fn: () => this.openModal("machines") },
+      { id: "cle-r-devices", label: "Devices", title: "Select or Configure Machine Profiles (Like LightBurn/MillMage)", icon: "features", fn: () => this.openModal("machines") },
       { id: "cle-r-serial", label: "USB List", title: "Select & Connect USB Serial COM Port to FluidNC", icon: "drive", fn: () => this.fluidnc.connectSerial() },
       { id: "cle-r-ws", label: "WiFi Setup", title: "Configure FluidTouch 7\" / FluidNC WiFi IP & WebSocket", icon: "motion", fn: () => {
           const ip = prompt("Enter FluidTouch 7\" / FluidNC IP:", this.fluidnc.ip);
           if (ip) this.fluidnc.connectWebSocket(ip);
       }},
       { id: "cle-r-connect", label: "Connect", title: "Direct Machine Connect / Disconnect", icon: "drive", pressed: this.fluidnc.isConnected, fn: () => this.connectActiveMachine() },
-      { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "inspect", fn: () => this.fluidnc.openFluidTouchWebGUI() },
-      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Rulers", icon: "inspect", pressed: this.bed ? this.bed.visible : true, fn: () => this.bed && this.bed.toggle() }
+      { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "motion", fn: () => this.fluidnc.openFluidTouchWebGUI() },
+      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Rulers", icon: "dim", pressed: this.bed ? this.bed.visible : true, fn: () => this.bed && this.bed.toggle() }
     ]);
 
     // 2. JOYSTICK MODE Section (Defaults to Design Mode; has dedicated Manual Mode button)
@@ -156,7 +156,7 @@ class CLEBridge {
         id: "cle-r-gp-manual", 
         label: "Manual Mode", 
         title: "Switch to Manual CNC/Laser Control (Connects to device, opens Control Card & starts camera)", 
-        icon: "inspect", 
+        icon: "drive", 
         pressed: this.gamepad.mode === "manual", 
         fn: () => this.gamepad.setMode('manual') 
       },
@@ -164,7 +164,7 @@ class CLEBridge {
         id: "cle-r-gp-remap", 
         label: "Controller Setup", 
         title: "Configure Switch Controller Buttons, Axes & Live Switch Indicators", 
-        icon: "settings", 
+        icon: "features", 
         fn: () => this.openModal("gamepad") 
       }
     ]);
@@ -178,10 +178,10 @@ class CLEBridge {
     // 4. Tools Section
     m("CLE Tools", "", [
       { id: "cle-r-vault", label: "Vault", title: "MEAGCLE Design & Machine State Git Vault", icon: "box", fn: () => this.openModal("vault") },
-      { id: "cle-r-tools", label: "Tool Library", title: "Tool Library & Manual/Automated Tool Changes", icon: "inspect", fn: () => this.openModal("tools") },
-      { id: "cle-r-cal", label: "Calibration", title: "Steps/mm, Laser & Backlash Calibration", icon: "inspect", fn: () => this.openModal("calibration") },
+      { id: "cle-r-tools", label: "Tool Library", title: "Tool Library & Manual/Automated Tool Changes", icon: "features", fn: () => this.openModal("tools") },
+      { id: "cle-r-cal", label: "Calibration", title: "Steps/mm, Laser & Backlash Calibration", icon: "dim", fn: () => this.openModal("calibration") },
       { id: "cle-r-test", label: "Test Suite", title: "Diagnostic Test Cuts", icon: "pattern", fn: () => this.openModal("test") },
-      { id: "cle-r-rec", label: "Job Recovery", title: "Job Crash Recovery (-5 lines lookback)", icon: "recovery", fn: () => this.openModal("recovery") }
+      { id: "cle-r-rec", label: "Job Recovery", title: "Job Crash Recovery (-5 lines lookback)", icon: "pattern", fn: () => this.openModal("recovery") }
     ]);
 
     // 5. Safety

@@ -13,6 +13,13 @@ if ! command -v python >/dev/null 2>&1; then
     PYTHON_CMD="python3"
 fi
 
+NODE_CMD="node"
+if ! command -v node >/dev/null 2>&1; then
+    if command -v node.exe >/dev/null 2>&1; then
+        NODE_CMD="node.exe"
+    fi
+fi
+
 echo -e "\033[0;34m==========================================\033[0m"
 echo -e "\033[0;34m       CLEJS Initial Build Test Suite     \033[0m"
 echo -e "\033[0;34m==========================================\033[0m"
@@ -48,6 +55,15 @@ assert len(content) > 100, 'File too small'
         exit 1
     fi
 done
+
+# Verify bundle runtime evaluation and window.CLE initialization in mock browser
+echo "  Testing bundle runtime initialization in Node..."
+(cd "$PROJECT_ROOT/tools" && $NODE_CMD test_runtime.js) >/dev/null 2>&1 || {
+    echo "  [FAIL] cle_bundle.js runtime execution error!"
+    (cd "$PROJECT_ROOT/tools" && $NODE_CMD test_runtime.js)
+    exit 1
+}
+echo "  [OK] cle_bundle.js parsed and window.CLE initialized successfully!"
 
 # 2. Test CSS stylesheet
 echo -e "\n\033[0;33m[Test 2/5] Checking cle_theme.css integrity...\033[0m"
