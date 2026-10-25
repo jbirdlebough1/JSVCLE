@@ -1,5 +1,20 @@
 # CLEJS Project Status & Recovery Ledger
 
+## Primary Project Directives (Strict Enforcement)
+1. **Free / Open-Source Only & Explicit Permission:**
+   - Never download or recommend paid software. Free and open-source software only.
+   - Always ask for explicit permission before downloading or installing any program/dependency.
+   - Install all tools exclusively to `D:\CLEJS\tools` to keep drive `C:` as free as possible.
+2. **Local Execution on CL3:**
+   - Execute all workloads, builds, and tools locally on the **CL3** server (Intel Core i9, 24 threads, 32GB RAM).
+3. **No Paid Services / Prefer Local Tools:**
+   - Never use or integrate paid third-party APIs/services. Use free or open-source solutions only.
+   - Preference is strictly for local tools running on CL3.
+4. **Google Gemini Pro Account Only:**
+   - Use only the user's prepaid Google Gemini Pro account—no exceptions.
+
+---
+
 ## 1. Project Overview & Architecture
 - **Project Name**: CLEJS (Continuous 3D CNC / Laser / Engraver JumpStart Extension)
 - **Active Git Branch**: `CLEJS`
@@ -26,7 +41,7 @@ When an AI agent opens this repository in a new session:
 
 | Conversation ID | Model | Date Started | Status | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Project initialization, git setup, zero-loss logging protocol. |
+| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Project initialization, git setup, zero-loss logging protocol, strict directives established. |
 
 ---
 
@@ -36,6 +51,8 @@ When an AI agent opens this repository in a new session:
 - [x] Established `sessions/` directory to archive complete Antigravity transcript logs (`transcript.jsonl` and `transcript_full.jsonl`).
 - [x] Created `PROJECT_STATUS.md` ledger for zero-loss crash recovery.
 - [x] Created `Save-CLEJSCheckpoint.ps1` for automated sync-and-commit workflows.
+- [x] Created `D:\CLEJS\tools` directory for local tool installs.
+- [x] Codified Primary Project Directives into project documentation and git ledger.
 - [ ] Determine baseline for `Dev/index.htm`: keep v2.7.2 baseline or update baseline to newly released upstream v2.7.4.
 - [ ] Implement foundational machine profiles in `Dev/cle_tools/` (TTC6050, FluidNC protocol definitions).
 - [ ] Scaffold Three.js canvas vertex access in `Dev/slicer/`.

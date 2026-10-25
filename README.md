@@ -1,5 +1,20 @@
 # CLEJS Project
 
+## Primary Project Directives
+1. **Free / Open-Source Only & Explicit Permission:**
+   - No paid software or tools. Free and open-source only.
+   - Always request explicit permission before downloading/installing any program.
+   - Install all tools exclusively in `D:\CLEJS\tools` to keep drive `C:` clean.
+2. **Local Execution on CL3:**
+   - Execute all workloads, builds, and tools locally on the **CL3** server (i9, 24 threads, 32GB RAM).
+3. **No Paid Services / Prefer Local Tools:**
+   - No paid third-party web services or APIs.
+   - All tools and processing prefer local execution on CL3.
+4. **Google Gemini Pro Account Exclusively:**
+   - Use only the user's prepaid Google Gemini Pro account—no exceptions.
+
+---
+
 ## 1. Directory Structure
 
 ```text
@@ -8,11 +23,15 @@ D:\CLEJS\
 │   └── index.htm        <-- Updated when the daily upstream check finds a change
 │
 ├── Dev\                 <-- Active Working Directory
-│   ├── index.htm        <-- Development copy of JumpStart 2.7.2
+│   ├── index.htm        <-- Development copy of JumpStart
 │   ├── cle_tools\       <-- Modular CLE additions (FluidNC/TTC6050, tool library)
 │   └── slicer\          <-- Continuous 3D CNC / Laser slicer logic
+├── tools\               <-- Local tool installations (keeps C: free)
+├── sessions\            <-- Permanent Antigravity session transcript archive
 ├── JSoriginal_history\  <-- Dated prior versions saved before upstream replacement
 ├── upstream-reports\    <-- Daily upstream-vs-Dev comparison tables
+├── PROJECT_STATUS.md    <-- Recovery ledger for zero information loss
+├── Save-CLEJSCheckpoint.ps1 <-- Automated sync and git commit script
 └── Update-JumpStart.ps1 <-- Scheduled ClassyApps upstream check
 ```
 

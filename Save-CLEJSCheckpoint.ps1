@@ -52,3 +52,4 @@ if ($status) {
 } else {
     Write-Host "[CLEJS] Working tree clean, nothing to commit." -ForegroundColor Yellow
 }
+
