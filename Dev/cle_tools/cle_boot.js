@@ -66,7 +66,6 @@ class CLEBridge {
     console.log('[CLEJS] Initializing extension harness...');
     this.mountTopbarControls();
     this.mountRibbon();
-    // Allow Three.js scene to render first, then attach rotary
     setTimeout(() => {
       this.rotary.initVisualizer();
     }, 1500);
@@ -75,10 +74,10 @@ class CLEBridge {
   mountTopbarControls() {
     const topbar = document.querySelector('.topbar');
     if (!topbar) {
-      console.warn('[CLEJS] Topbar not found, retrying...');
-      setTimeout(() => this.mountTopbarControls(), 500);
+      setTimeout(() => this.mountTopbarControls(), 400);
       return;
     }
+    if (document.getElementById('cle-main-btn')) return;
 
     const btn = document.createElement('button');
     btn.className = 'cle-top-btn';
@@ -92,6 +91,7 @@ class CLEBridge {
   }
 
   mountRibbon() {
+    if (document.getElementById('cle-ribbon')) return;
     const appEl = document.getElementById('app') || document.body;
     const ribbon = document.createElement('div');
     ribbon.id = 'cle-ribbon';
@@ -143,7 +143,6 @@ class CLEBridge {
       <button class="cle-btn danger" id="cle-btn-estop">FEED HOLD (!)</button>
     `;
 
-    // Insert ribbon after topbar
     const topbar = document.querySelector('.topbar');
     if (topbar && topbar.nextSibling) {
       topbar.parentNode.insertBefore(ribbon, topbar.nextSibling);
@@ -154,6 +153,61 @@ class CLEBridge {
     this.wireRibbonEvents();
   }
 
+  // Native JumpStart Advanced Ribbon Renderer (When "CLE" tab in wstabs is clicked)
+  renderAdvancedRibbon(m, s, n) {
+    // 1. Machine Section
+    m("Machine", "", [
+      { id: "cle-r-serial", label: "USB Serial", title: "Connect to FluidNC via USB Serial", icon: "drive", fn: () => this.fluidnc.connectSerial() },
+      { id: "cle-r-ws", label: "WiFi / WS", title: "Connect to FluidNC via WiFi / WebSocket", icon: "motion", fn: () => {
+          const ip = prompt("Enter FluidTouch / FluidNC IP:", this.fluidnc.ip);
+          if (ip) this.fluidnc.connectWebSocket(ip);
+      }},
+      { id: "cle-r-fluidtouch", label: "FluidTouch 7\"", title: "Open FluidTouch 7' Web GUI", icon: "render", fn: () => this.fluidnc.openFluidTouchWebGUI() },
+      { id: "cle-r-zero", label: "Zero All", title: "Zero All Axes (G10 L20 P1)", icon: "origin", fn: () => this.fluidnc.zeroAxis("ALL") }
+    ]);
+
+    // 2. Controller Section
+    m("Switch Pad", "", [
+      { id: "cle-r-gp-mode", label: this.gamepad.mode === "design" ? "Design 3D" : "Run Pendant", title: "Toggle Switch Controller Mode", icon: "motion", pressed: this.gamepad.mode === "run", fn: () => this.gamepad.toggleMode() },
+      { id: "cle-r-gp-remap", label: "Remap Pad", title: "Configure Switch Controller Buttons", icon: "settings", fn: () => this.openModal("gamepad") }
+    ]);
+
+    // 3. 4th Axis & Slicer
+    m("Rotary & Slicer", "", [
+      { id: "cle-r-rotary", label: "4th Axis (A)", title: "Toggle 4th Axis Rotary Stock in 3D View", icon: "lathe", pressed: this.rotary.enabled, fn: () => this.rotary.toggle() },
+      { id: "cle-r-slicer", label: "Prusa Slicer", title: "PrusaSlicer CLI Integration", icon: "printer3d", fn: () => this.openModal("slicer") }
+    ]);
+
+    // 4. Tools Section
+    m("CLE Tools", "", [
+      { id: "cle-r-vault", label: "Vault", title: "Tools, Materials & Machine Profiles", icon: "box", fn: () => this.openModal("vault") },
+      { id: "cle-r-cal", label: "Calibration", title: "Steps/mm, Laser & Backlash", icon: "inspect", fn: () => this.openModal("calibration") },
+      { id: "cle-r-test", label: "Test Suite", title: "Diagnostic Test Cuts", icon: "pattern", fn: () => this.openModal("test") },
+      { id: "cle-r-rec", label: "Job Recovery", title: "Power-loss & Crash Recovery", icon: "recovery", fn: () => this.openModal("recovery") }
+    ]);
+
+    // 5. Safety
+    m("Safety", "", [
+      { id: "cle-r-estop", label: "FEED HOLD (!)", title: "Emergency Feed Hold", icon: "clearSim", cls: "danger", fn: () => this.fluidnc.sendImmediate("!") }
+    ]);
+
+    // Append DRO Bar
+    const droDiv = document.createElement("div");
+    droDiv.className = "cle-group";
+    droDiv.style.marginLeft = "auto";
+    droDiv.style.alignSelf = "center";
+    droDiv.innerHTML = `
+      <span class="cle-group-label">DRO (WCS)</span>
+      <div class="cle-dro-bar">
+        <span class="cle-dro-axis"><span class="cle-dro-name">X</span><span class="cle-dro-val" id="cle-dro-x">${this.fluidnc.wpos.X.toFixed(2)}</span></span>
+        <span class="cle-dro-axis"><span class="cle-dro-name">Y</span><span class="cle-dro-val" id="cle-dro-y">${this.fluidnc.wpos.Y.toFixed(2)}</span></span>
+        <span class="cle-dro-axis"><span class="cle-dro-name">Z</span><span class="cle-dro-val" id="cle-dro-z">${this.fluidnc.wpos.Z.toFixed(2)}</span></span>
+        <span class="cle-dro-axis"><span class="cle-dro-name">A</span><span class="cle-dro-val" id="cle-dro-a">${this.fluidnc.wpos.A.toFixed(1)}</span></span>
+      </div>
+    `;
+    s.append(droDiv);
+  }
+
   toggleRibbon() {
     const r = document.getElementById('cle-ribbon');
     if (r) {
@@ -162,48 +216,36 @@ class CLEBridge {
   }
 
   wireRibbonEvents() {
-    // Machine connections
-    document.getElementById('cle-conn-serial').onclick = () => {
+    const bindClick = (id, fn) => {
+      const el = document.getElementById(id);
+      if (el) el.onclick = fn;
+    };
+
+    bindClick('cle-conn-serial', () => {
       if (this.fluidnc.isConnected) this.fluidnc.disconnect();
       else this.fluidnc.connectSerial();
-    };
-    document.getElementById('cle-conn-ws').onclick = () => {
+    });
+    bindClick('cle-conn-ws', () => {
       const ip = prompt('Enter FluidTouch / FluidNC IP Address:', this.fluidnc.ip);
       if (ip) this.fluidnc.connectWebSocket(ip);
-    };
-    document.getElementById('cle-btn-fluidtouch').onclick = () => {
-      this.fluidnc.openFluidTouchWebGUI();
-    };
-
-    // Zeroing & E-stop
-    document.getElementById('cle-zero-all').onclick = () => {
+    });
+    bindClick('cle-btn-fluidtouch', () => this.fluidnc.openFluidTouchWebGUI());
+    bindClick('cle-zero-all', () => {
       this.fluidnc.zeroAxis('ALL');
       this.notify('Zeroed All Axes (G10 L20 P1 X0 Y0 Z0 A0)', 'ok');
-    };
-    document.getElementById('cle-btn-estop').onclick = () => {
+    });
+    bindClick('cle-btn-estop', () => {
       this.fluidnc.sendImmediate('!');
       this.notify('EMERGENCY FEED HOLD SENT (!)', 'error');
-    };
-
-    // Gamepad
-    document.getElementById('cle-gp-mode-toggle').onclick = () => {
-      this.gamepad.toggleMode();
-    };
-    document.getElementById('cle-gp-remap-btn').onclick = () => {
-      this.openModal('gamepad');
-    };
-
-    // Rotary toggle
-    document.getElementById('cle-rotary-toggle').onclick = () => {
-      this.rotary.toggle();
-    };
-
-    // Subsystem modals
-    document.getElementById('cle-btn-slicer').onclick = () => this.openModal('slicer');
-    document.getElementById('cle-btn-vault').onclick = () => this.openModal('vault');
-    document.getElementById('cle-btn-cal').onclick = () => this.openModal('calibration');
-    document.getElementById('cle-btn-test').onclick = () => this.openModal('test');
-    document.getElementById('cle-btn-recovery').onclick = () => this.openModal('recovery');
+    });
+    bindClick('cle-gp-mode-toggle', () => this.gamepad.toggleMode());
+    bindClick('cle-gp-remap-btn', () => this.openModal('gamepad'));
+    bindClick('cle-rotary-toggle', () => this.rotary.toggle());
+    bindClick('cle-btn-slicer', () => this.openModal('slicer'));
+    bindClick('cle-btn-vault', () => this.openModal('vault'));
+    bindClick('cle-btn-cal', () => this.openModal('calibration'));
+    bindClick('cle-btn-test', () => this.openModal('test'));
+    bindClick('cle-btn-recovery', () => this.openModal('recovery'));
   }
 
   openModal(type) {
@@ -359,7 +401,6 @@ class CLEBridge {
     document.getElementById('cle-modal-close-btn').onclick = () => this.closeModal();
     document.getElementById('cle-modal-done-btn').onclick = () => this.closeModal();
 
-    // Wire specific modal events
     if (type === 'calibration') {
       document.getElementById('cal-calc-btn').onclick = () => {
         const ax = document.getElementById('cal-axis').value;
@@ -427,4 +468,3 @@ if (document.readyState === 'loading') {
 } else {
   window.CLE.init();
 }
-

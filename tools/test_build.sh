@@ -8,6 +8,11 @@ else
     PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fi
 
+PYTHON_CMD="python"
+if ! command -v python >/dev/null 2>&1; then
+    PYTHON_CMD="python3"
+fi
+
 echo -e "\033[0;34m==========================================\033[0m"
 echo -e "\033[0;34m       CLEJS Initial Build Test Suite     \033[0m"
 echo -e "\033[0;34m==========================================\033[0m"
@@ -24,11 +29,12 @@ JS_FILES=(
     "$PROJECT_ROOT/Dev/cle_tools/cle_test.js"
     "$PROJECT_ROOT/Dev/cle_tools/cle_recovery.js"
     "$PROJECT_ROOT/Dev/cle_tools/cle_slicer.js"
+    "$PROJECT_ROOT/Dev/cle_tools/cle_bundle.js"
 )
 
 for file in "${JS_FILES[@]}"; do
     if [ -f "$file" ]; then
-        python -c "
+        $PYTHON_CMD -c "
 with open(r'$file', 'r', encoding='utf-8') as f:
     content = f.read()
 assert len(content) > 100, 'File too small'
@@ -50,21 +56,21 @@ else
     exit 1
 fi
 
-# 3. Test Dev/index.htm hook placement
-echo -e "\n\033[0;33m[Test 3/5] Checking Dev/index.htm non-invasive hook...\033[0m"
-python -c "
+# 3. Test Dev/index.htm hook placement & CLE tab
+echo -e "\n\033[0;33m[Test 3/5] Checking Dev/index.htm Advanced mode CLE tab and bundle hook...\033[0m"
+$PYTHON_CMD -c "
 with open(r'$PROJECT_ROOT/Dev/index.htm', 'r', encoding='utf-8') as f:
     text = f.read()
 
-assert 'export{xe as app};window.xe=xe;window.app=xe;' in text, 'App exposure hook missing'
-assert 'cle_tools/cle_boot.js' in text, 'cle_boot.js hook missing'
-assert 'cle_tools/cle_theme.css' in text, 'cle_theme.css hook missing'
-print('  [OK] Dev/index.htm hook verified at exact EOF without corrupting core code.')
+assert '[\"cle\",\"CLE\"]' in text, 'wstabs CLE tab missing'
+assert 'Vr===\"cle\"' in text, 'CLE ribbon router missing'
+assert 'cle_tools/cle_bundle.js' in text, 'cle_bundle.js hook missing'
+print('  [OK] Dev/index.htm verified: wstabs CLE tab, router, and universal bundle hook present.')
 "
 
 # 4. Test CLE_server.py background startup & endpoints
 echo -e "\n\033[0;33m[Test 4/5] Testing CLE_server.py REST endpoints on CL3...\033[0m"
-python "$PROJECT_ROOT/tools/CLE_server.py" > "$PROJECT_ROOT/tools/server_test.log" 2>&1 &
+$PYTHON_CMD "$PROJECT_ROOT/tools/CLE_server.py" > "$PROJECT_ROOT/tools/server_test.log" 2>&1 &
 SERVER_PID=$!
 sleep 1.5
 
@@ -76,11 +82,6 @@ echo "  Status response: $STATUS_JSON"
 VAULT_PAYLOAD='{"test":true,"profile":"TwoTrees TTC6050"}'
 SYNC_RESP=$(curl -s -X POST http://127.0.0.1:8765/api/vault/sync -H "Content-Type: application/json" -d "$VAULT_PAYLOAD")
 echo "  Vault sync response: $SYNC_RESP"
-
-# Verify vault file written to disk
-if [ -f "$PROJECT_ROOT/vault/vault_data.json" ]; then
-    echo "  [OK] Vault file successfully written to disk in vault/vault_data.json"
-fi
 
 # Clean up server
 kill $SERVER_PID || true
