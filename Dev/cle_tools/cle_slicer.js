@@ -290,13 +290,16 @@ export class CLESlicerEngine {
 
     for (const raw of lines) {
       const line = raw.trim();
-      if (line.startsWith('; --- LAYER:')) {
+      if (!line || line.startsWith('; ===') || line.startsWith('; Device')) continue;
+
+      // Layer header detection (; --- LAYER: 0 (Z=8.000) --- or ;LAYER:0 or ;LAYER_CHANGE)
+      if (line.match(/^;\s*(?:---)?\s*LAYER(?:_CHANGE)?[:\s]/i)) {
         if (currentLayer.points.length > 0) {
           this.slicedLayers.push(currentLayer);
         }
-        const matchIdx = line.match(/LAYER:\s*(\d+)/);
+        const matchIdx = line.match(/LAYER(?:_CHANGE)?[:\s]*(\d+)/i);
         const lIdx = matchIdx ? parseInt(matchIdx[1], 10) : this.slicedLayers.length;
-        const matchZ = line.match(/Z=([-\d.]+)/);
+        const matchZ = line.match(/Z=([-\d.]+)/i);
         const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
         currentLayer = { index: lIdx, z: lZ, points: [] };
         continue;
@@ -310,10 +313,20 @@ export class CLESlicerEngine {
       if (matchY) curY = parseFloat(matchY[1]);
       if (matchZ) curZ = parseFloat(matchZ[1]);
 
-      if ((line.startsWith('G1') || line.startsWith('G2') || line.startsWith('G3') || line.startsWith('G0')) && (matchX || matchY)) {
-        currentLayer.points.push({ x: curX, y: curY, z: curZ, isRapid: line.startsWith('G0') });
+      // Move commands (G0 = Rapid, G1/G2/G3 = Cutting Feed)
+      if (line.startsWith('G0') || line.startsWith('G1') || line.startsWith('G2') || line.startsWith('G3')) {
+        const isRapid = line.startsWith('G0');
+        // If this is a Z change move that starts a new cut pass without explicit layer comment
+        if (matchZ && !matchX && !matchY) {
+          if (currentLayer.points.length > 5 && Math.abs(curZ - currentLayer.z) > 0.05) {
+            this.slicedLayers.push(currentLayer);
+            currentLayer = { index: this.slicedLayers.length, z: curZ, points: [] };
+          }
+        }
+        currentLayer.points.push({ x: curX, y: curY, z: curZ, isRapid });
       }
     }
+
     if (currentLayer.points.length > 0) {
       this.slicedLayers.push(currentLayer);
     }
@@ -322,28 +335,31 @@ export class CLESlicerEngine {
   // --- Render Sliced Toolpath Stack in JumpStart's Native Three.js Viewport ---
   renderSlicedStackToVisualizer() {
     const app = window.app || window.xe;
-    if (!app) return;
+    if (!app || !app.vp) return;
 
-    // JumpStart attaches Three.js Scene to app.vp.scene
-    const threeScene = (app.vp && app.vp.scene) || app.scene;
-    if (!threeScene || !threeScene.add) {
-      console.warn('[CLE Slicer] Could not locate Three.js scene.');
+    const THREE = window.THREE;
+    if (!THREE) {
+      console.warn('[CLE Slicer] window.THREE not found.');
       return;
     }
 
-    const THREE = window.THREE || (app.vp && app.vp.THREE) || null;
-    if (!THREE) return;
+    // Prefer app.vp.world (where CAD bodies live), fallback to app.vp.scene
+    const container = app.vp.world || app.vp.scene;
+    if (!container || !container.add) return;
 
     // Clean up previous visualizer group
-    if (this.visualizerGroup) {
-      threeScene.remove(this.visualizerGroup);
-    }
+    this.clearVisualizer();
 
     this.visualizerGroup = new THREE.Group();
     this.visualizerGroup.name = 'CLE_Sliced_Toolpath_Stack';
 
     const numLayers = this.slicedLayers.length;
     const isTopDown = (this.mode === 'cnc' || this.mode === 'laser');
+
+    // Compute entire workpiece toolpath bounding envelope
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
 
     this.slicedLayers.forEach((layer, lIdx) => {
       if (layer.points.length < 2) return;
@@ -352,27 +368,44 @@ export class CLESlicerEngine {
       const colors = [];
 
       // Color coding:
-      // 3D (bottom-up): blue at base -> red at top
-      // CNC/Laser (top-down): bright green at surface -> deep red at deepest cut
-      let hue;
+      // CNC/Laser (top-down): bright neon green at surface -> gold -> deep red at floor
+      // 3D (bottom-up): deep blue at bed -> bright cyan -> vivid red at top
+      let r, g, b;
+      const progress = lIdx / Math.max(1, numLayers - 1);
       if (isTopDown) {
-        hue = 0.33 - (lIdx / (numLayers || 1)) * 0.33; // 0.33 (green) down to 0.0 (red)
+        if (progress < 0.5) {
+          // Green to Gold (0 to 0.5)
+          const t = progress * 2;
+          r = t; g = 1.0; b = 0.2 * (1 - t);
+        } else {
+          // Gold to Red (0.5 to 1.0)
+          const t = (progress - 0.5) * 2;
+          r = 1.0; g = 1.0 - t * 0.8; b = 0.0;
+        }
       } else {
-        hue = (lIdx / (numLayers || 1)) * 0.7; // 0.0 to 0.7
+        r = progress; g = 0.5 + 0.5 * (1 - progress); b = 1.0 - progress;
       }
-      const color = new THREE.Color().setHSL(Math.max(0, hue), 1.0, 0.55);
 
       for (let i = 0; i < layer.points.length - 1; i++) {
         const p1 = layer.points[i];
-        const p2 = layer.points[i+1];
+        const p2 = layer.points[i + 1];
+
+        // Track overall envelope
+        if (p1.x < minX) minX = p1.x; if (p1.x > maxX) maxX = p1.x;
+        if (p1.y < minY) minY = p1.y; if (p1.y > maxY) maxY = p1.y;
+        if (p1.z < minZ) minZ = p1.z; if (p1.z > maxZ) maxZ = p1.z;
+        if (p2.x < minX) minX = p2.x; if (p2.x > maxX) maxX = p2.x;
+        if (p2.y < minY) minY = p2.y; if (p2.y > maxY) maxY = p2.y;
+        if (p2.z < minZ) minZ = p2.z; if (p2.z > maxZ) maxZ = p2.z;
+
         positions.push(p1.x, p1.y, p1.z);
         positions.push(p2.x, p2.y, p2.z);
 
         if (p2.isRapid) {
-          // Rapid traverse in faint cyan/yellow
-          colors.push(0.3, 0.8, 0.9, 0.3, 0.8, 0.9);
+          // Rapid traverse in distinct bright cyan
+          colors.push(0.0, 0.85, 1.0, 0.0, 0.85, 1.0);
         } else {
-          colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+          colors.push(r, g, b, r, g, b);
         }
       }
 
@@ -382,22 +415,75 @@ export class CLESlicerEngine {
 
       const mat = new THREE.LineBasicMaterial({
         vertexColors: true,
-        linewidth: 3,
+        linewidth: 2,
         transparent: true,
-        opacity: 1.0,
+        opacity: 0.95,
         depthTest: false,
         depthWrite: false
       });
 
       const lineMesh = new THREE.LineSegments(geom, mat);
-      lineMesh.renderOrder = 9999;
+      lineMesh.renderOrder = 99999;
       lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z };
       this.visualizerGroup.add(lineMesh);
     });
 
-    threeScene.add(this.visualizerGroup);
+    // Workpiece Material Stock Box & Safe Retract Plane in Millimeters
+    if (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY)) {
+      const stockW = Math.max(10, maxX - minX);
+      const stockD = Math.max(10, maxY - minY);
+      const stockH = Math.max(2, maxZ - minZ);
+      const stockCx = (minX + maxX) / 2;
+      const stockCy = (minY + maxY) / 2;
+      const stockCz = (minZ + maxZ) / 2;
 
-    // Make CAD bodies in JumpStart translucent so toolpaths are vividly visible inside & out
+      // 1. Semi-transparent Stock Billet (Workpiece on Bed)
+      const stockGeo = new THREE.BoxGeometry(stockW, stockD, stockH);
+      const stockMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.18,
+        roughness: 0.7,
+        depthWrite: false
+      });
+      const stockMesh = new THREE.Mesh(stockGeo, stockMat);
+      stockMesh.position.set(stockCx, stockCy, stockCz);
+      stockMesh.renderOrder = 9990;
+      this.visualizerGroup.add(stockMesh);
+
+      // 2. Stock Wireframe Outline
+      const stockEdgeGeo = new THREE.EdgesGeometry(stockGeo);
+      const stockEdgeMat = new THREE.LineBasicMaterial({ color: 0x0284c7, transparent: true, opacity: 0.65 });
+      const stockEdges = new THREE.LineSegments(stockEdgeGeo, stockEdgeMat);
+      stockMesh.add(stockEdges);
+
+      // 3. Safe Clearance / Retract Plane wireframe (Z = maxZ + 5.0mm)
+      const retractZ = maxZ + 5.0;
+      const retPts = [
+        minX - 5, minY - 5, retractZ,
+        maxX + 5, minY - 5, retractZ,
+        maxX + 5, maxY + 5, retractZ,
+        minX - 5, maxY + 5, retractZ,
+        minX - 5, minY - 5, retractZ
+      ];
+      const retGeo = new THREE.BufferGeometry().setFromPoints(retPts.map(p => new THREE.Vector3(p[0]||0, p[1]||0, p[2]||0)));
+      const retMat = new THREE.LineDashedMaterial({ color: 0xf59e0b, dashSize: 4, gapSize: 3, depthTest: false, transparent: true, opacity: 0.7 });
+      const retLine = new THREE.Line(retGeo, retMat);
+      retLine.computeLineDistances();
+      this.visualizerGroup.add(retLine);
+
+      // Smoothly frame camera on sliced workpiece
+      if (app.vp && app.vp.view) {
+        app.vp.view.target.set(stockCx, stockCy, stockCz);
+        const maxSpan = Math.max(stockW, stockD, stockH, 50);
+        app.vp.view.dist = Math.max(120, maxSpan * 2.2);
+        if (app.vp.updateCamera) app.vp.updateCamera();
+      }
+    }
+
+    container.add(this.visualizerGroup);
+
+    // Make JumpStart CAD bodies translucent with depthWrite disabled so toolpath stack is 100% visible
     if (app.scene && app.scene.views) {
       for (const [id, view] of app.scene.views) {
         if (view.mesh && view.mesh.material) {
@@ -406,9 +492,11 @@ export class CLESlicerEngine {
             if (m._cleOrigOpacity === undefined) {
               m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
               m._cleOrigTransparent = m.transparent || false;
+              m._cleOrigDepthWrite = m.depthWrite !== undefined ? m.depthWrite : true;
             }
             m.transparent = true;
-            m.opacity = 0.35;
+            m.opacity = 0.25;
+            m.depthWrite = false;
             m.needsUpdate = true;
           });
         }
@@ -421,22 +509,23 @@ export class CLESlicerEngine {
     }
 
     // Trigger JumpStart viewport redraw
-    if (app.vp) {
-      app.vp.dirty = true;
-      if (app.vp.updateCamera) app.vp.updateCamera();
-      if (app.vp.request) app.vp.request();
-    }
-    console.log(`[CLE Slicer] Rendered ${numLayers} toolpath layers into Three.js scene.`);
+    app.vp.dirty = true;
+    if (app.vp.updateCamera) app.vp.updateCamera();
+    if (app.vp.request) app.vp.request();
+
+    console.log(`[CLE Slicer] Slices rendered: ${numLayers} toolpath passes visible in 3D viewport.`);
   }
 
   clearVisualizer() {
     const app = window.app || window.xe;
     if (this.visualizerGroup) {
-      const threeScene = (app?.vp && app.vp.scene) || app?.scene;
-      if (threeScene) threeScene.remove(this.visualizerGroup);
+      if (this.visualizerGroup.parent) {
+        this.visualizerGroup.parent.remove(this.visualizerGroup);
+      }
       this.visualizerGroup = null;
     }
-    // Restore CAD body opacity
+
+    // Restore CAD body opacity and depthWrite
     if (app?.scene?.views) {
       for (const [id, view] of app.scene.views) {
         if (view.mesh && view.mesh.material) {
@@ -445,9 +534,22 @@ export class CLESlicerEngine {
             if (m._cleOrigOpacity !== undefined) {
               m.opacity = m._cleOrigOpacity;
               m.transparent = m._cleOrigTransparent;
+              m.depthWrite = m._cleOrigDepthWrite !== undefined ? m._cleOrigDepthWrite : true;
               delete m._cleOrigOpacity;
               delete m._cleOrigTransparent;
+              delete m._cleOrigDepthWrite;
               m.needsUpdate = true;
+            }
+          });
+        }
+      }
+    }
+
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
+  }
             }
           });
         }

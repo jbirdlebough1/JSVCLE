@@ -14,6 +14,7 @@ import { CLEJobRecoveryEngine } from './cle_recovery.js';
 import { CLESlicerEngine } from './cle_slicer.js';
 import { CLECameraEngine } from './cle_camera.js';
 import { CLEToolLibrary } from './cle_tool_library.js';
+import { CLEBedVisualizer } from './cle_bed.js';
 
 class CLEBridge {
   constructor() {
@@ -29,6 +30,7 @@ class CLEBridge {
     this.recovery = new CLEJobRecoveryEngine(this);
     this.slicer = new CLESlicerEngine(this);
     this.toolLibrary = new CLEToolLibrary(this);
+    this.bed = new CLEBedVisualizer(this);
 
     this.activeModal = null;
   }
@@ -82,11 +84,25 @@ class CLEBridge {
 
   registerWithJumpStart() {
     const app = window.app || window.xe;
-    if (app) {
+    if (app && app.vp) {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
+      if (this.bed) this.bed.init();
     } else {
       setTimeout(() => this.registerWithJumpStart(), 250);
     }
+  }
+
+  async connectActiveMachine() {
+    if (this.fluidnc.isConnected) {
+      this.fluidnc.disconnect();
+      return;
+    }
+    const mach = this.vault.getActiveMachine();
+    if (mach.wifiIP) {
+      const ok = await this.fluidnc.autoConnect();
+      if (ok) return;
+    }
+    await this.fluidnc.connectSerial();
   }
 
   injectTopBarButton() {
@@ -121,8 +137,9 @@ class CLEBridge {
           const ip = prompt("Enter FluidTouch 7\" / FluidNC IP:", this.fluidnc.ip);
           if (ip) this.fluidnc.connectWebSocket(ip);
       }},
-      { id: "cle-r-gcode", label: "Machine Gcode", title: "Direct Machine G-Code Terminal & Console", icon: "edit", fn: () => this.openManualControlCenter() },
-      { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "inspect", fn: () => this.fluidnc.openFluidTouchWebGUI() }
+      { id: "cle-r-connect", label: "Connect", title: "Direct Machine Connect / Disconnect", icon: "drive", pressed: this.fluidnc.isConnected, fn: () => this.connectActiveMachine() },
+      { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "inspect", fn: () => this.fluidnc.openFluidTouchWebGUI() },
+      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Rulers", icon: "inspect", pressed: this.bed ? this.bed.visible : true, fn: () => this.bed && this.bed.toggle() }
     ]);
 
     // 2. JOYSTICK MODE Section (Defaults to Design Mode; has dedicated Manual Mode button)
@@ -702,9 +719,9 @@ class CLEBridge {
         </div>
 
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-          <!-- Left Column: Work Area & Soft-Limits -->
+          <!-- Left Column: Work Area & Spoilboard Bounds -->
           <div class="cle-joycon-panel">
-            <div class="cle-joycon-title">Work Area (Travels & Bed Bounds)</div>
+            <div class="cle-joycon-title">Work Area &amp; Spoilboard Size</div>
             <div class="cle-form-row">
               <label>Device Name:</label>
               <input class="cle-input" id="cle-m-name" value="${activeMach.name}">
@@ -728,6 +745,25 @@ class CLEBridge {
             <div class="cle-form-row">
               <label>Z Travel (mm):</label>
               <input class="cle-input" id="cle-m-tz" type="number" value="${activeMach.travelZ || 100}">
+            </div>
+            <div class="cle-form-row">
+              <label>Spoilboard Width (X mm):</label>
+              <input class="cle-input" id="cle-m-spoil-x" type="number" value="${activeMach.spoilboardX || activeMach.travelX || 600}" title="Width of spoilboard MDF or fixture slab">
+            </div>
+            <div class="cle-form-row">
+              <label>Spoilboard Depth (Y mm):</label>
+              <input class="cle-input" id="cle-m-spoil-y" type="number" value="${activeMach.spoilboardY || activeMach.travelY || 500}" title="Depth/length of spoilboard MDF or fixture slab">
+            </div>
+            <div class="cle-form-row">
+              <label>Spoilboard Thickness (mm):</label>
+              <input class="cle-input" id="cle-m-spoil-thick" type="number" step="0.5" value="${activeMach.spoilboardThickness !== undefined ? activeMach.spoilboardThickness : 15.0}" title="Thickness of spoilboard slab (placed below Z=0)">
+            </div>
+            <div class="cle-form-row">
+              <label>Spoilboard Offset (X, Y mm):</label>
+              <div style="display:flex; gap:6px;">
+                <input class="cle-input" id="cle-m-spoil-offx" type="number" value="${activeMach.spoilboardOffsetX || 0}" style="width:50%;" title="Offset X from machine 0,0">
+                <input class="cle-input" id="cle-m-spoil-offy" type="number" value="${activeMach.spoilboardOffsetY || 0}" style="width:50%;" title="Offset Y from machine 0,0">
+              </div>
             </div>
             <div class="cle-form-row">
               <label>4th Axis Rotary (A deg):</label>
@@ -989,6 +1025,11 @@ class CLEBridge {
         document.getElementById('cle-m-tx').value = mach.travelX || 600;
         document.getElementById('cle-m-ty').value = mach.travelY || 500;
         document.getElementById('cle-m-tz').value = mach.travelZ || 100;
+        document.getElementById('cle-m-spoil-x').value = mach.spoilboardX || mach.travelX || 600;
+        document.getElementById('cle-m-spoil-y').value = mach.spoilboardY || mach.travelY || 500;
+        document.getElementById('cle-m-spoil-thick').value = mach.spoilboardThickness !== undefined ? mach.spoilboardThickness : 15.0;
+        document.getElementById('cle-m-spoil-offx').value = mach.spoilboardOffsetX || 0;
+        document.getElementById('cle-m-spoil-offy').value = mach.spoilboardOffsetY || 0;
         document.getElementById('cle-m-ta').value = mach.travelA || 360;
         document.getElementById('cle-m-minz').value = mach.safeLimitZ !== undefined ? mach.safeLimitZ : 0.1;
         document.getElementById('cle-m-buffer').value = mach.clearanceX || 5.0;
@@ -1005,6 +1046,7 @@ class CLEBridge {
 
       document.getElementById('cle-mach-btn-activate').onclick = () => {
         this.vault.setActiveMachine(selector.value);
+        if (this.bed) this.bed.rebuild();
         this.closeModal();
       };
 
@@ -1049,6 +1091,11 @@ class CLEBridge {
         curMach.travelX = parseFloat(document.getElementById('cle-m-tx').value) || 600;
         curMach.travelY = parseFloat(document.getElementById('cle-m-ty').value) || 500;
         curMach.travelZ = parseFloat(document.getElementById('cle-m-tz').value) || 100;
+        curMach.spoilboardX = parseFloat(document.getElementById('cle-m-spoil-x').value) || curMach.travelX || 600;
+        curMach.spoilboardY = parseFloat(document.getElementById('cle-m-spoil-y').value) || curMach.travelY || 500;
+        curMach.spoilboardThickness = parseFloat(document.getElementById('cle-m-spoil-thick').value) || 15.0;
+        curMach.spoilboardOffsetX = parseFloat(document.getElementById('cle-m-spoil-offx').value) || 0;
+        curMach.spoilboardOffsetY = parseFloat(document.getElementById('cle-m-spoil-offy').value) || 0;
         curMach.travelA = parseFloat(document.getElementById('cle-m-ta').value) || 360;
         curMach.safeLimitZ = parseFloat(document.getElementById('cle-m-minz').value) || 0.1;
         curMach.clearanceX = parseFloat(document.getElementById('cle-m-buffer').value) || 5.0;
@@ -1058,6 +1105,7 @@ class CLEBridge {
         curMach.wifiIP = document.getElementById('cle-m-ip').value.trim() || '192.168.1.150';
 
         await this.vault.saveMachine(curMach);
+        if (this.bed) this.bed.rebuild();
         this.openModal('machines');
       };
 

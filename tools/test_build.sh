@@ -31,6 +31,7 @@ JS_FILES=(
     "$PROJECT_ROOT/Dev/cle_tools/cle_recovery.js"
     "$PROJECT_ROOT/Dev/cle_tools/cle_slicer.js"
     "$PROJECT_ROOT/Dev/cle_tools/cle_tool_library.js"
+    "$PROJECT_ROOT/Dev/cle_tools/cle_bed.js"
     "$PROJECT_ROOT/Dev/cle_tools/cle_bundle.js"
 )
 

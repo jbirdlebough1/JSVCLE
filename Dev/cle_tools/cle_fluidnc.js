@@ -479,6 +479,11 @@ export class CLEFluidNCClient {
     if (this.bridge.recovery) {
       this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
     }
+
+    // Update 3D Bed Toolhead Cursor in real time
+    if (this.bridge.bed) {
+      this.bridge.bed.updateToolCursor(this.wpos);
+    }
   }
 
   sendImmediate(char) {

@@ -1290,6 +1290,11 @@ class CLEFluidNCClient {
     if (this.bridge.recovery) {
       this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
     }
+
+    // Update 3D Bed Toolhead Cursor in real time
+    if (this.bridge.bed) {
+      this.bridge.bed.updateToolCursor(this.wpos);
+    }
   }
 
   sendImmediate(char) {
@@ -2130,6 +2135,11 @@ class CLEVault {
         travelY: 500,
         travelZ: 100,
         travelA: 10000,
+        spoilboardX: 600,            // Spoilboard Width (mm)
+        spoilboardY: 500,            // Spoilboard Length/Depth (mm)
+        spoilboardThickness: 15.0,   // Spoilboard Thickness (mm, e.g. 15mm MDF)
+        spoilboardOffsetX: 0.0,      // Spoilboard Offset X from Machine 0,0
+        spoilboardOffsetY: 0.0,      // Spoilboard Offset Y from Machine 0,0
         stepsPerMmX: 640.0,
         stepsPerMmY: 640.0,
         stepsPerMmZ: 640.0,
@@ -2256,8 +2266,15 @@ class CLEVault {
   getActiveMachine() {
     const list = this.getMachinesSync();
     const activeId = localStorage.getItem('cle.vault.active_machine_id');
-    const found = list.find(m => m.id === activeId);
-    return found || list[0] || this.getDefaultMachines()[0];
+    const mach = list.find(m => m.id === activeId) || list[0] || this.getDefaultMachines()[0];
+    if (mach) {
+      if (mach.spoilboardX === undefined) mach.spoilboardX = mach.travelX || 600;
+      if (mach.spoilboardY === undefined) mach.spoilboardY = mach.travelY || 500;
+      if (mach.spoilboardThickness === undefined) mach.spoilboardThickness = 15.0;
+      if (mach.spoilboardOffsetX === undefined) mach.spoilboardOffsetX = 0.0;
+      if (mach.spoilboardOffsetY === undefined) mach.spoilboardOffsetY = 0.0;
+    }
+    return mach;
   }
 
   setActiveMachine(machineId) {
@@ -2888,13 +2905,16 @@ class CLESlicerEngine {
 
     for (const raw of lines) {
       const line = raw.trim();
-      if (line.startsWith('; --- LAYER:')) {
+      if (!line || line.startsWith('; ===') || line.startsWith('; Device')) continue;
+
+      // Layer header detection (; --- LAYER: 0 (Z=8.000) --- or ;LAYER:0 or ;LAYER_CHANGE)
+      if (line.match(/^;\s*(?:---)?\s*LAYER(?:_CHANGE)?[:\s]/i)) {
         if (currentLayer.points.length > 0) {
           this.slicedLayers.push(currentLayer);
         }
-        const matchIdx = line.match(/LAYER:\s*(\d+)/);
+        const matchIdx = line.match(/LAYER(?:_CHANGE)?[:\s]*(\d+)/i);
         const lIdx = matchIdx ? parseInt(matchIdx[1], 10) : this.slicedLayers.length;
-        const matchZ = line.match(/Z=([-\d.]+)/);
+        const matchZ = line.match(/Z=([-\d.]+)/i);
         const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
         currentLayer = { index: lIdx, z: lZ, points: [] };
         continue;
@@ -2908,10 +2928,20 @@ class CLESlicerEngine {
       if (matchY) curY = parseFloat(matchY[1]);
       if (matchZ) curZ = parseFloat(matchZ[1]);
 
-      if ((line.startsWith('G1') || line.startsWith('G2') || line.startsWith('G3') || line.startsWith('G0')) && (matchX || matchY)) {
-        currentLayer.points.push({ x: curX, y: curY, z: curZ, isRapid: line.startsWith('G0') });
+      // Move commands (G0 = Rapid, G1/G2/G3 = Cutting Feed)
+      if (line.startsWith('G0') || line.startsWith('G1') || line.startsWith('G2') || line.startsWith('G3')) {
+        const isRapid = line.startsWith('G0');
+        // If this is a Z change move that starts a new cut pass without explicit layer comment
+        if (matchZ && !matchX && !matchY) {
+          if (currentLayer.points.length > 5 && Math.abs(curZ - currentLayer.z) > 0.05) {
+            this.slicedLayers.push(currentLayer);
+            currentLayer = { index: this.slicedLayers.length, z: curZ, points: [] };
+          }
+        }
+        currentLayer.points.push({ x: curX, y: curY, z: curZ, isRapid });
       }
     }
+
     if (currentLayer.points.length > 0) {
       this.slicedLayers.push(currentLayer);
     }
@@ -2920,28 +2950,31 @@ class CLESlicerEngine {
   // --- Render Sliced Toolpath Stack in JumpStart's Native Three.js Viewport ---
   renderSlicedStackToVisualizer() {
     const app = window.app || window.xe;
-    if (!app) return;
+    if (!app || !app.vp) return;
 
-    // JumpStart attaches Three.js Scene to app.vp.scene
-    const threeScene = (app.vp && app.vp.scene) || app.scene;
-    if (!threeScene || !threeScene.add) {
-      console.warn('[CLE Slicer] Could not locate Three.js scene.');
+    const THREE = window.THREE;
+    if (!THREE) {
+      console.warn('[CLE Slicer] window.THREE not found.');
       return;
     }
 
-    const THREE = window.THREE || (app.vp && app.vp.THREE) || null;
-    if (!THREE) return;
+    // Prefer app.vp.world (where CAD bodies live), fallback to app.vp.scene
+    const container = app.vp.world || app.vp.scene;
+    if (!container || !container.add) return;
 
     // Clean up previous visualizer group
-    if (this.visualizerGroup) {
-      threeScene.remove(this.visualizerGroup);
-    }
+    this.clearVisualizer();
 
     this.visualizerGroup = new THREE.Group();
     this.visualizerGroup.name = 'CLE_Sliced_Toolpath_Stack';
 
     const numLayers = this.slicedLayers.length;
     const isTopDown = (this.mode === 'cnc' || this.mode === 'laser');
+
+    // Compute entire workpiece toolpath bounding envelope
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
 
     this.slicedLayers.forEach((layer, lIdx) => {
       if (layer.points.length < 2) return;
@@ -2950,27 +2983,44 @@ class CLESlicerEngine {
       const colors = [];
 
       // Color coding:
-      // 3D (bottom-up): blue at base -> red at top
-      // CNC/Laser (top-down): bright green at surface -> deep red at deepest cut
-      let hue;
+      // CNC/Laser (top-down): bright neon green at surface -> gold -> deep red at floor
+      // 3D (bottom-up): deep blue at bed -> bright cyan -> vivid red at top
+      let r, g, b;
+      const progress = lIdx / Math.max(1, numLayers - 1);
       if (isTopDown) {
-        hue = 0.33 - (lIdx / (numLayers || 1)) * 0.33; // 0.33 (green) down to 0.0 (red)
+        if (progress < 0.5) {
+          // Green to Gold (0 to 0.5)
+          const t = progress * 2;
+          r = t; g = 1.0; b = 0.2 * (1 - t);
+        } else {
+          // Gold to Red (0.5 to 1.0)
+          const t = (progress - 0.5) * 2;
+          r = 1.0; g = 1.0 - t * 0.8; b = 0.0;
+        }
       } else {
-        hue = (lIdx / (numLayers || 1)) * 0.7; // 0.0 to 0.7
+        r = progress; g = 0.5 + 0.5 * (1 - progress); b = 1.0 - progress;
       }
-      const color = new THREE.Color().setHSL(Math.max(0, hue), 1.0, 0.55);
 
       for (let i = 0; i < layer.points.length - 1; i++) {
         const p1 = layer.points[i];
-        const p2 = layer.points[i+1];
+        const p2 = layer.points[i + 1];
+
+        // Track overall envelope
+        if (p1.x < minX) minX = p1.x; if (p1.x > maxX) maxX = p1.x;
+        if (p1.y < minY) minY = p1.y; if (p1.y > maxY) maxY = p1.y;
+        if (p1.z < minZ) minZ = p1.z; if (p1.z > maxZ) maxZ = p1.z;
+        if (p2.x < minX) minX = p2.x; if (p2.x > maxX) maxX = p2.x;
+        if (p2.y < minY) minY = p2.y; if (p2.y > maxY) maxY = p2.y;
+        if (p2.z < minZ) minZ = p2.z; if (p2.z > maxZ) maxZ = p2.z;
+
         positions.push(p1.x, p1.y, p1.z);
         positions.push(p2.x, p2.y, p2.z);
 
         if (p2.isRapid) {
-          // Rapid traverse in faint cyan/yellow
-          colors.push(0.3, 0.8, 0.9, 0.3, 0.8, 0.9);
+          // Rapid traverse in distinct bright cyan
+          colors.push(0.0, 0.85, 1.0, 0.0, 0.85, 1.0);
         } else {
-          colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+          colors.push(r, g, b, r, g, b);
         }
       }
 
@@ -2980,22 +3030,75 @@ class CLESlicerEngine {
 
       const mat = new THREE.LineBasicMaterial({
         vertexColors: true,
-        linewidth: 3,
+        linewidth: 2,
         transparent: true,
-        opacity: 1.0,
+        opacity: 0.95,
         depthTest: false,
         depthWrite: false
       });
 
       const lineMesh = new THREE.LineSegments(geom, mat);
-      lineMesh.renderOrder = 9999;
+      lineMesh.renderOrder = 99999;
       lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z };
       this.visualizerGroup.add(lineMesh);
     });
 
-    threeScene.add(this.visualizerGroup);
+    // Workpiece Material Stock Box & Safe Retract Plane in Millimeters
+    if (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY)) {
+      const stockW = Math.max(10, maxX - minX);
+      const stockD = Math.max(10, maxY - minY);
+      const stockH = Math.max(2, maxZ - minZ);
+      const stockCx = (minX + maxX) / 2;
+      const stockCy = (minY + maxY) / 2;
+      const stockCz = (minZ + maxZ) / 2;
 
-    // Make CAD bodies in JumpStart translucent so toolpaths are vividly visible inside & out
+      // 1. Semi-transparent Stock Billet (Workpiece on Bed)
+      const stockGeo = new THREE.BoxGeometry(stockW, stockD, stockH);
+      const stockMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.18,
+        roughness: 0.7,
+        depthWrite: false
+      });
+      const stockMesh = new THREE.Mesh(stockGeo, stockMat);
+      stockMesh.position.set(stockCx, stockCy, stockCz);
+      stockMesh.renderOrder = 9990;
+      this.visualizerGroup.add(stockMesh);
+
+      // 2. Stock Wireframe Outline
+      const stockEdgeGeo = new THREE.EdgesGeometry(stockGeo);
+      const stockEdgeMat = new THREE.LineBasicMaterial({ color: 0x0284c7, transparent: true, opacity: 0.65 });
+      const stockEdges = new THREE.LineSegments(stockEdgeGeo, stockEdgeMat);
+      stockMesh.add(stockEdges);
+
+      // 3. Safe Clearance / Retract Plane wireframe (Z = maxZ + 5.0mm)
+      const retractZ = maxZ + 5.0;
+      const retPts = [
+        minX - 5, minY - 5, retractZ,
+        maxX + 5, minY - 5, retractZ,
+        maxX + 5, maxY + 5, retractZ,
+        minX - 5, maxY + 5, retractZ,
+        minX - 5, minY - 5, retractZ
+      ];
+      const retGeo = new THREE.BufferGeometry().setFromPoints(retPts.map(p => new THREE.Vector3(p[0]||0, p[1]||0, p[2]||0)));
+      const retMat = new THREE.LineDashedMaterial({ color: 0xf59e0b, dashSize: 4, gapSize: 3, depthTest: false, transparent: true, opacity: 0.7 });
+      const retLine = new THREE.Line(retGeo, retMat);
+      retLine.computeLineDistances();
+      this.visualizerGroup.add(retLine);
+
+      // Smoothly frame camera on sliced workpiece
+      if (app.vp && app.vp.view) {
+        app.vp.view.target.set(stockCx, stockCy, stockCz);
+        const maxSpan = Math.max(stockW, stockD, stockH, 50);
+        app.vp.view.dist = Math.max(120, maxSpan * 2.2);
+        if (app.vp.updateCamera) app.vp.updateCamera();
+      }
+    }
+
+    container.add(this.visualizerGroup);
+
+    // Make JumpStart CAD bodies translucent with depthWrite disabled so toolpath stack is 100% visible
     if (app.scene && app.scene.views) {
       for (const [id, view] of app.scene.views) {
         if (view.mesh && view.mesh.material) {
@@ -3004,9 +3107,11 @@ class CLESlicerEngine {
             if (m._cleOrigOpacity === undefined) {
               m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
               m._cleOrigTransparent = m.transparent || false;
+              m._cleOrigDepthWrite = m.depthWrite !== undefined ? m.depthWrite : true;
             }
             m.transparent = true;
-            m.opacity = 0.35;
+            m.opacity = 0.25;
+            m.depthWrite = false;
             m.needsUpdate = true;
           });
         }
@@ -3019,22 +3124,23 @@ class CLESlicerEngine {
     }
 
     // Trigger JumpStart viewport redraw
-    if (app.vp) {
-      app.vp.dirty = true;
-      if (app.vp.updateCamera) app.vp.updateCamera();
-      if (app.vp.request) app.vp.request();
-    }
-    console.log(`[CLE Slicer] Rendered ${numLayers} toolpath layers into Three.js scene.`);
+    app.vp.dirty = true;
+    if (app.vp.updateCamera) app.vp.updateCamera();
+    if (app.vp.request) app.vp.request();
+
+    console.log(`[CLE Slicer] Slices rendered: ${numLayers} toolpath passes visible in 3D viewport.`);
   }
 
   clearVisualizer() {
     const app = window.app || window.xe;
     if (this.visualizerGroup) {
-      const threeScene = (app?.vp && app.vp.scene) || app?.scene;
-      if (threeScene) threeScene.remove(this.visualizerGroup);
+      if (this.visualizerGroup.parent) {
+        this.visualizerGroup.parent.remove(this.visualizerGroup);
+      }
       this.visualizerGroup = null;
     }
-    // Restore CAD body opacity
+
+    // Restore CAD body opacity and depthWrite
     if (app?.scene?.views) {
       for (const [id, view] of app.scene.views) {
         if (view.mesh && view.mesh.material) {
@@ -3043,9 +3149,22 @@ class CLESlicerEngine {
             if (m._cleOrigOpacity !== undefined) {
               m.opacity = m._cleOrigOpacity;
               m.transparent = m._cleOrigTransparent;
+              m.depthWrite = m._cleOrigDepthWrite !== undefined ? m._cleOrigDepthWrite : true;
               delete m._cleOrigOpacity;
               delete m._cleOrigTransparent;
+              delete m._cleOrigDepthWrite;
               m.needsUpdate = true;
+            }
+          });
+        }
+      }
+    }
+
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
+  }
             }
           });
         }
@@ -3493,6 +3612,492 @@ class CLEToolLibrary {
   }
 }
 
+/* --- Module: cle_bed.js --- */
+/**
+ * CLEJS - Device Bed, Spoilboard, Millimeter Rulers & Live Toolhead Cursor Subsystem
+ * Renders physical machine envelope, spoilboard slab with grid, millimeter ruler graduations,
+ * and live 3D toolhead cursor with projected shadow and DRO coordinates in JumpStart viewport.
+ */
+
+class CLEBedVisualizer {
+  constructor(bridge) {
+    this.bridge = bridge;
+    this.visible = true;
+    this.bedGroup = null;
+    this.cursorGroup = null;
+    this.shadowCrosshair = null;
+    this.coordTag = null;
+    this.rulerSprites = [];
+    this.lastPos = { X: 0, Y: 0, Z: 0, A: 0 };
+    this.activeMachineId = null;
+
+    // Default Spoilboard & Travel Config
+    this.config = {
+      travelX: 600,
+      travelY: 500,
+      travelZ: 100,
+      spoilboardX: 600,
+      spoilboardY: 500,
+      spoilboardThickness: 15.0,
+      spoilboardOffsetX: 0.0,
+      spoilboardOffsetY: 0.0,
+      gridPitch: 10.0,
+      majorGridPitch: 50.0
+    };
+  }
+
+  // Initializes bed visualizer once JumpStart Three.js viewport is ready
+  init() {
+    this.syncWithActiveMachine();
+    this.mountToScene();
+  }
+
+  // Sync dimensions from active machine vault profile
+  syncWithActiveMachine() {
+    if (!this.bridge.vault) return;
+    const mach = this.bridge.vault.getActiveMachine();
+    if (!mach) return;
+
+    this.activeMachineId = mach.id;
+    this.config.travelX = parseFloat(mach.travelX) || 600;
+    this.config.travelY = parseFloat(mach.travelY) || 500;
+    this.config.travelZ = parseFloat(mach.travelZ) || 100;
+
+    this.config.spoilboardX = parseFloat(mach.spoilboardX) || this.config.travelX;
+    this.config.spoilboardY = parseFloat(mach.spoilboardY) || this.config.travelY;
+    this.config.spoilboardThickness = mach.spoilboardThickness !== undefined ? parseFloat(mach.spoilboardThickness) : 15.0;
+    this.config.spoilboardOffsetX = mach.spoilboardOffsetX !== undefined ? parseFloat(mach.spoilboardOffsetX) : 0.0;
+    this.config.spoilboardOffsetY = mach.spoilboardOffsetY !== undefined ? parseFloat(mach.spoilboardOffsetY) : 0.0;
+  }
+
+  // Get Three.js root scene/world container
+  getWorldContainer() {
+    const app = window.app || window.xe;
+    if (!app || !app.vp) return null;
+    // Prefer app.vp.world (holds CAD bodies), fallback to app.vp.scene
+    return app.vp.world || app.vp.scene || null;
+  }
+
+  // Mount bed and cursor to JumpStart Three.js viewport
+  mountToScene() {
+    const container = this.getWorldContainer();
+    const THREE = window.THREE;
+    if (!container || !THREE) {
+      setTimeout(() => this.mountToScene(), 300);
+      return;
+    }
+
+    if (this.bedGroup && this.bedGroup.parent) {
+      this.bedGroup.parent.remove(this.bedGroup);
+    }
+
+    this.bedGroup = new THREE.Group();
+    this.bedGroup.name = 'CLE_Device_Bed_Visualizer';
+    this.bedGroup.visible = this.visible;
+
+    this.buildSpoilboardSlab(THREE);
+    this.buildGridAndExtrusionFrame(THREE);
+    this.buildMillimeterRulers(THREE);
+    this.buildToolheadCursor(THREE);
+
+    container.add(this.bedGroup);
+    this.requestRender();
+    console.log('[CLE Bed] Mounted device bed, spoilboard and rulers to 3D viewport.');
+  }
+
+  // 1. Spoilboard Slab (Physical MDF / Tooling Plate)
+  buildSpoilboardSlab(THREE) {
+    const { spoilboardX, spoilboardY, spoilboardThickness, spoilboardOffsetX, spoilboardOffsetY } = this.config;
+
+    // Solid MDF/Aluminum Base Slab
+    const slabGeo = new THREE.BoxGeometry(spoilboardX, spoilboardY, spoilboardThickness);
+    // Dark engineering slate/MDF tone
+    const slabMat = new THREE.MeshStandardMaterial({
+      color: 0x1e242d,
+      roughness: 0.85,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 0.88,
+      depthWrite: true
+    });
+
+    const slab = new THREE.Mesh(slabGeo, slabMat);
+    // Center of slab: top surface sits flush at Z = 0.00
+    slab.position.set(
+      spoilboardOffsetX + spoilboardX / 2,
+      spoilboardOffsetY + spoilboardY / 2,
+      -spoilboardThickness / 2
+    );
+    slab.receiveShadow = true;
+    slab.name = 'CLE_Spoilboard_Slab';
+    this.bedGroup.add(slab);
+
+    // Subtle edge highlight for spoilboard border
+    const edgesGeo = new THREE.EdgesGeometry(slabGeo);
+    const edgesMat = new THREE.LineBasicMaterial({ color: 0x415065, transparent: true, opacity: 0.6 });
+    const slabEdges = new THREE.LineSegments(edgesGeo, edgesMat);
+    slab.add(slabEdges);
+  }
+
+  // 2. Machine Travel Frame & Millimeter Grid Lines on Spoilboard Surface
+  buildGridAndExtrusionFrame(THREE) {
+    const { travelX, travelY, spoilboardX, spoilboardY, spoilboardOffsetX, spoilboardOffsetY, gridPitch, majorGridPitch } = this.config;
+
+    const minorPts = [];
+    const majorPts = [];
+    const zSurface = 0.04; // Placed right above spoilboard surface to avoid z-fighting
+
+    const x0 = spoilboardOffsetX;
+    const x1 = spoilboardOffsetX + spoilboardX;
+    const y0 = spoilboardOffsetY;
+    const y1 = spoilboardOffsetY + spoilboardY;
+
+    // Grid lines along X (running in Y direction)
+    for (let x = x0; x <= x1 + 0.1; x += gridPitch) {
+      const relX = Math.round(x - x0);
+      const isMajor = (relX % majorGridPitch === 0);
+      const target = isMajor ? majorPts : minorPts;
+      target.push(x, y0, zSurface, x, y1, zSurface);
+    }
+
+    // Grid lines along Y (running in X direction)
+    for (let y = y0; y <= y1 + 0.1; y += gridPitch) {
+      const relY = Math.round(y - y0);
+      const isMajor = (relY % majorGridPitch === 0);
+      const target = isMajor ? majorPts : minorPts;
+      target.push(x0, y, zSurface, x1, y, zSurface);
+    }
+
+    // Minor grid lines
+    if (minorPts.length > 0) {
+      const minGeo = new THREE.BufferGeometry();
+      minGeo.setAttribute('position', new THREE.Float32BufferAttribute(minorPts, 3));
+      const minMat = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.35 });
+      const minLines = new THREE.LineSegments(minGeo, minMat);
+      this.bedGroup.add(minLines);
+    }
+
+    // Major grid lines
+    if (majorPts.length > 0) {
+      const majGeo = new THREE.BufferGeometry();
+      majGeo.setAttribute('position', new THREE.Float32BufferAttribute(majorPts, 3));
+      const majMat = new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.75 });
+      const majLines = new THREE.LineSegments(majGeo, majMat);
+      this.bedGroup.add(majLines);
+    }
+
+    // Physical Machine Travel Limits Wireframe (Extrusion Perimeter)
+    const travelPts = [
+      0, 0, zSurface,
+      travelX, 0, zSurface,
+      travelX, 0, zSurface,
+      travelX, travelY, zSurface,
+      travelX, travelY, zSurface,
+      0, travelY, zSurface,
+      0, travelY, zSurface,
+      0, 0, zSurface
+    ];
+    const travelGeo = new THREE.BufferGeometry();
+    travelGeo.setAttribute('position', new THREE.Float32BufferAttribute(travelPts, 3));
+    const travelMat = new THREE.LineBasicMaterial({ color: 0xe056fd, linewidth: 2, transparent: true, opacity: 0.85 });
+    const travelFrame = new THREE.LineSegments(travelGeo, travelMat);
+    travelFrame.name = 'CLE_Machine_Travel_Limit_Box';
+    this.bedGroup.add(travelFrame);
+  }
+
+  // 3. Millimeter Rulers along X and Y axes with Tick Marks and Numerical Labels
+  buildMillimeterRulers(THREE) {
+    const { travelX, travelY, spoilboardOffsetX, spoilboardOffsetY } = this.config;
+    const zSurface = 0.05;
+
+    const tickPts = [];
+    const rulerColor = 0x94a3b8;
+
+    // Dispose old label sprites
+    this.rulerSprites.forEach(s => {
+      if (s.material && s.material.map) s.material.map.dispose();
+      if (s.material) s.material.dispose();
+    });
+    this.rulerSprites = [];
+
+    // --- X-Axis Ruler (Front edge, Y = spoilboardOffsetY) ---
+    const baseY = spoilboardOffsetY;
+    for (let x = 0; x <= travelX + 0.1; x += 10) {
+      const is100 = (Math.round(x) % 100 === 0);
+      const is50 = (Math.round(x) % 50 === 0);
+      const tickLen = is100 ? 8.0 : (is50 ? 5.5 : 3.0);
+
+      tickPts.push(x, baseY, zSurface, x, baseY - tickLen, zSurface);
+
+      // Create Number Label at 50mm and 100mm marks
+      if (is50 || is100) {
+        const sprite = this.createNumberLabelSprite(THREE, `${Math.round(x)}`);
+        sprite.position.set(x, baseY - tickLen - 6.0, zSurface + 1.0);
+        sprite.scale.set(16, 8, 1);
+        this.bedGroup.add(sprite);
+        this.rulerSprites.push(sprite);
+      }
+    }
+
+    // --- Y-Axis Ruler (Left edge, X = spoilboardOffsetX) ---
+    const baseX = spoilboardOffsetX;
+    for (let y = 0; y <= travelY + 0.1; y += 10) {
+      const is100 = (Math.round(y) % 100 === 0);
+      const is50 = (Math.round(y) % 50 === 0);
+      const tickLen = is100 ? 8.0 : (is50 ? 5.5 : 3.0);
+
+      tickPts.push(baseX, y, zSurface, baseX - tickLen, y, zSurface);
+
+      // Create Number Label at 50mm and 100mm marks
+      if (is50 || is100) {
+        const sprite = this.createNumberLabelSprite(THREE, `${Math.round(y)}`);
+        sprite.position.set(baseX - tickLen - 9.0, y, zSurface + 1.0);
+        sprite.scale.set(16, 8, 1);
+        this.bedGroup.add(sprite);
+        this.rulerSprites.push(sprite);
+      }
+    }
+
+    // Add tick line segments
+    const tickGeo = new THREE.BufferGeometry();
+    tickGeo.setAttribute('position', new THREE.Float32BufferAttribute(tickPts, 3));
+    const tickMat = new THREE.LineBasicMaterial({ color: rulerColor, transparent: true, opacity: 0.85 });
+    const tickSegments = new THREE.LineSegments(tickGeo, tickMat);
+    this.bedGroup.add(tickSegments);
+
+    // Origin Badge (0,0) Marker
+    const originSprite = this.createNumberLabelSprite(THREE, 'X0 Y0 (Origin)', '#38bdf8');
+    originSprite.position.set(baseX - 6.0, baseY - 6.0, zSurface + 1.5);
+    originSprite.scale.set(24, 10, 1);
+    this.bedGroup.add(originSprite);
+    this.rulerSprites.push(originSprite);
+  }
+
+  // Generates high-DPI canvas texture sprite for crisp ruler numbers
+  createNumberLabelSprite(THREE, text, color = '#f8fafc') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+
+    ctx.clearRect(0, 0, 128, 64);
+    ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Shadow for high contrast against any 3D viewport background
+    ctx.shadowColor = 'rgba(0,0,0,0.85)';
+    ctx.shadowBlur = 6;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#0f172a';
+    ctx.strokeText(text, 64, 32);
+
+    ctx.fillStyle = color;
+    ctx.fillText(text, 64, 32);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.renderOrder = 999;
+    return sprite;
+  }
+
+  // 4. Live 3D Toolhead Cursor, Projected Spoilboard Crosshair & Live DRO Coordinates
+  buildToolheadCursor(THREE) {
+    if (this.cursorGroup && this.cursorGroup.parent) {
+      this.cursorGroup.parent.remove(this.cursorGroup);
+    }
+
+    this.cursorGroup = new THREE.Group();
+    this.cursorGroup.name = 'CLE_Live_Toolhead_Cursor';
+
+    const activeHead = this.bridge.vault ? this.bridge.vault.getActiveHead() : { type: 'spindle' };
+
+    if (activeHead.type === 'laser') {
+      // LASER HEAD: Anodized Heatsink Body + Laser Cone Beam
+      const headMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, metalness: 0.6, roughness: 0.3 });
+      const headMesh = new THREE.Mesh(new THREE.BoxGeometry(16, 16, 26), headMat);
+      headMesh.position.set(0, 0, 15);
+      this.cursorGroup.add(headMesh);
+
+      // Laser focal cone beam (translucent violet/red)
+      const beamMat = new THREE.MeshBasicMaterial({
+        color: 0xec4899,
+        transparent: true,
+        opacity: 0.45,
+        depthWrite: false
+      });
+      const beamCone = new THREE.Mesh(new THREE.ConeGeometry(5, 12, 16, 1, true), beamMat);
+      beamCone.position.set(0, 0, 6);
+      beamCone.rotation.x = Math.PI;
+      this.cursorGroup.add(beamCone);
+    } else {
+      // SPINDLE HEAD: ER11/ER16 Collet Nut + Carbide Endmill Bit
+      const colletMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.8, roughness: 0.2 });
+      const colletMesh = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 4.5, 12, 16), colletMat);
+      colletMesh.position.set(0, 0, 10);
+      colletMesh.rotation.x = Math.PI / 2;
+      this.cursorGroup.add(colletMesh);
+
+      // Bit shank & flutes pointing down to (0,0,0)
+      const bitMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.1 });
+      const bitMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 12, 12), bitMat);
+      bitMesh.position.set(0, 0, 4);
+      bitMesh.rotation.x = Math.PI / 2;
+      this.cursorGroup.add(bitMesh);
+    }
+
+    // Floating 3D DRO Coordinate Badge
+    this.coordTag = this.createNumberLabelSprite(THREE, 'X0.00 Y0.00 Z0.00', '#38bdf8');
+    this.coordTag.position.set(0, 0, 32);
+    this.coordTag.scale.set(28, 12, 1);
+    this.cursorGroup.add(this.coordTag);
+
+    // Initial position
+    this.cursorGroup.position.set(this.lastPos.X, this.lastPos.Y, this.lastPos.Z);
+    this.bedGroup.add(this.cursorGroup);
+
+    // Projected Crosshair on Spoilboard Surface
+    this.buildShadowCrosshair(THREE);
+  }
+
+  // Projected Shadow Crosshair & Guide Lines to Rulers on Spoilboard
+  buildShadowCrosshair(THREE) {
+    if (this.shadowCrosshair && this.shadowCrosshair.parent) {
+      this.shadowCrosshair.parent.remove(this.shadowCrosshair);
+    }
+
+    this.shadowCrosshair = new THREE.Group();
+    this.shadowCrosshair.name = 'CLE_Spoilboard_Crosshair_Shadow';
+
+    // Concentric Target Ring on Spoilboard Surface
+    const ringGeo = new THREE.RingGeometry(3.0, 4.0, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85,
+      depthTest: false
+    });
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.position.set(0, 0, 0.08);
+    this.shadowCrosshair.add(ringMesh);
+
+    // Dynamic Guide Line Segments to X and Y rulers
+    const guideGeo = new THREE.BufferGeometry();
+    const guidePositions = new Float32Array(12); // 2 lines = 4 points = 12 floats
+    guideGeo.setAttribute('position', new THREE.BufferAttribute(guidePositions, 3));
+    const guideMat = new THREE.LineDashedMaterial({
+      color: 0x0284c7,
+      dashSize: 4,
+      gapSize: 3,
+      transparent: true,
+      opacity: 0.65,
+      depthTest: false
+    });
+    this.guideLines = new THREE.LineSegments(guideGeo, guideMat);
+    this.guideLines.computeLineDistances();
+    this.shadowCrosshair.add(this.guideLines);
+
+    this.bedGroup.add(this.shadowCrosshair);
+    this.updateCrosshairShadow(this.lastPos.X, this.lastPos.Y);
+  }
+
+  // Update Crosshair Position & Projection Lines
+  updateCrosshairShadow(x, y) {
+    if (!this.shadowCrosshair || !this.guideLines) return;
+
+    this.shadowCrosshair.position.set(x, y, 0);
+
+    const posAttr = this.guideLines.geometry.attributes.position;
+    const baseY = this.config.spoilboardOffsetY;
+    const baseX = this.config.spoilboardOffsetX;
+
+    // Line 1: from (x, y) down to front X-axis ruler at (x, baseY)
+    posAttr.setXYZ(0, 0, 0, 0.08);
+    posAttr.setXYZ(1, 0, baseY - y, 0.08);
+
+    // Line 2: from (x, y) left to Y-axis ruler at (baseX, y)
+    posAttr.setXYZ(2, 0, 0, 0.08);
+    posAttr.setXYZ(3, baseX - x, 0, 0.08);
+
+    posAttr.needsUpdate = true;
+    this.guideLines.computeLineDistances();
+  }
+
+  // Live Position Update from FluidNC DRO (wpos or mpos)
+  updateToolCursor(coords) {
+    if (!coords) return;
+    this.lastPos.X = coords.X !== undefined ? coords.X : this.lastPos.X;
+    this.lastPos.Y = coords.Y !== undefined ? coords.Y : this.lastPos.Y;
+    this.lastPos.Z = coords.Z !== undefined ? coords.Z : this.lastPos.Z;
+    if (coords.A !== undefined) this.lastPos.A = coords.A;
+
+    if (this.cursorGroup) {
+      this.cursorGroup.position.set(this.lastPos.X, this.lastPos.Y, this.lastPos.Z);
+    }
+
+    this.updateCrosshairShadow(this.lastPos.X, this.lastPos.Y);
+
+    if (this.coordTag && this.coordTag.material && this.coordTag.material.map) {
+      const text = `X:${this.lastPos.X.toFixed(1)} Y:${this.lastPos.Y.toFixed(1)} Z:${this.lastPos.Z.toFixed(1)}`;
+      this.updateSpriteCanvasText(this.coordTag, text);
+    }
+
+    this.requestRender();
+  }
+
+  // Re-draw text on sprite canvas
+  updateSpriteCanvasText(sprite, text) {
+    const canvas = sprite.material.map.image;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.shadowColor = 'rgba(0,0,0,0.9)';
+    ctx.shadowBlur = 6;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#0284c7';
+    ctx.strokeText(text, canvas.width / 2, canvas.height / 2);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+    sprite.material.map.needsUpdate = true;
+  }
+
+  // Toggle Visibility of Bed & Rulers
+  toggle() {
+    this.visible = !this.visible;
+    if (this.bedGroup) {
+      this.bedGroup.visible = this.visible;
+    }
+    this.requestRender();
+    this.bridge.notify(`Machine Bed & Rulers: ${this.visible ? 'VISIBLE' : 'HIDDEN'}`, 'info');
+    return this.visible;
+  }
+
+  // Full Rebuild when Machine Profile or Spoilboard Size is changed in Vault
+  rebuild() {
+    this.syncWithActiveMachine();
+    this.mountToScene();
+  }
+
+  // Safely request JumpStart viewport frame render
+  requestRender() {
+    const app = window.app || window.xe;
+    if (app && app.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
+  }
+}
+
 /* --- Module: cle_boot.js --- */
 /**
  * CLEJS - Master Extension Bootstrapper (V5)
@@ -3515,6 +4120,7 @@ class CLEBridge {
     this.recovery = new CLEJobRecoveryEngine(this);
     this.slicer = new CLESlicerEngine(this);
     this.toolLibrary = new CLEToolLibrary(this);
+    this.bed = new CLEBedVisualizer(this);
 
     this.activeModal = null;
   }
@@ -3568,11 +4174,25 @@ class CLEBridge {
 
   registerWithJumpStart() {
     const app = window.app || window.xe;
-    if (app) {
+    if (app && app.vp) {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
+      if (this.bed) this.bed.init();
     } else {
       setTimeout(() => this.registerWithJumpStart(), 250);
     }
+  }
+
+  async connectActiveMachine() {
+    if (this.fluidnc.isConnected) {
+      this.fluidnc.disconnect();
+      return;
+    }
+    const mach = this.vault.getActiveMachine();
+    if (mach.wifiIP) {
+      const ok = await this.fluidnc.autoConnect();
+      if (ok) return;
+    }
+    await this.fluidnc.connectSerial();
   }
 
   injectTopBarButton() {
@@ -3607,8 +4227,9 @@ class CLEBridge {
           const ip = prompt("Enter FluidTouch 7\" / FluidNC IP:", this.fluidnc.ip);
           if (ip) this.fluidnc.connectWebSocket(ip);
       }},
-      { id: "cle-r-gcode", label: "Machine Gcode", title: "Direct Machine G-Code Terminal & Console", icon: "edit", fn: () => this.openManualControlCenter() },
-      { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "inspect", fn: () => this.fluidnc.openFluidTouchWebGUI() }
+      { id: "cle-r-connect", label: "Connect", title: "Direct Machine Connect / Disconnect", icon: "drive", pressed: this.fluidnc.isConnected, fn: () => this.connectActiveMachine() },
+      { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "inspect", fn: () => this.fluidnc.openFluidTouchWebGUI() },
+      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Rulers", icon: "inspect", pressed: this.bed ? this.bed.visible : true, fn: () => this.bed && this.bed.toggle() }
     ]);
 
     // 2. JOYSTICK MODE Section (Defaults to Design Mode; has dedicated Manual Mode button)
@@ -4188,9 +4809,9 @@ class CLEBridge {
         </div>
 
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-          <!-- Left Column: Work Area & Soft-Limits -->
+          <!-- Left Column: Work Area & Spoilboard Bounds -->
           <div class="cle-joycon-panel">
-            <div class="cle-joycon-title">Work Area (Travels & Bed Bounds)</div>
+            <div class="cle-joycon-title">Work Area &amp; Spoilboard Size</div>
             <div class="cle-form-row">
               <label>Device Name:</label>
               <input class="cle-input" id="cle-m-name" value="${activeMach.name}">
@@ -4214,6 +4835,25 @@ class CLEBridge {
             <div class="cle-form-row">
               <label>Z Travel (mm):</label>
               <input class="cle-input" id="cle-m-tz" type="number" value="${activeMach.travelZ || 100}">
+            </div>
+            <div class="cle-form-row">
+              <label>Spoilboard Width (X mm):</label>
+              <input class="cle-input" id="cle-m-spoil-x" type="number" value="${activeMach.spoilboardX || activeMach.travelX || 600}" title="Width of spoilboard MDF or fixture slab">
+            </div>
+            <div class="cle-form-row">
+              <label>Spoilboard Depth (Y mm):</label>
+              <input class="cle-input" id="cle-m-spoil-y" type="number" value="${activeMach.spoilboardY || activeMach.travelY || 500}" title="Depth/length of spoilboard MDF or fixture slab">
+            </div>
+            <div class="cle-form-row">
+              <label>Spoilboard Thickness (mm):</label>
+              <input class="cle-input" id="cle-m-spoil-thick" type="number" step="0.5" value="${activeMach.spoilboardThickness !== undefined ? activeMach.spoilboardThickness : 15.0}" title="Thickness of spoilboard slab (placed below Z=0)">
+            </div>
+            <div class="cle-form-row">
+              <label>Spoilboard Offset (X, Y mm):</label>
+              <div style="display:flex; gap:6px;">
+                <input class="cle-input" id="cle-m-spoil-offx" type="number" value="${activeMach.spoilboardOffsetX || 0}" style="width:50%;" title="Offset X from machine 0,0">
+                <input class="cle-input" id="cle-m-spoil-offy" type="number" value="${activeMach.spoilboardOffsetY || 0}" style="width:50%;" title="Offset Y from machine 0,0">
+              </div>
             </div>
             <div class="cle-form-row">
               <label>4th Axis Rotary (A deg):</label>
@@ -4475,6 +5115,11 @@ class CLEBridge {
         document.getElementById('cle-m-tx').value = mach.travelX || 600;
         document.getElementById('cle-m-ty').value = mach.travelY || 500;
         document.getElementById('cle-m-tz').value = mach.travelZ || 100;
+        document.getElementById('cle-m-spoil-x').value = mach.spoilboardX || mach.travelX || 600;
+        document.getElementById('cle-m-spoil-y').value = mach.spoilboardY || mach.travelY || 500;
+        document.getElementById('cle-m-spoil-thick').value = mach.spoilboardThickness !== undefined ? mach.spoilboardThickness : 15.0;
+        document.getElementById('cle-m-spoil-offx').value = mach.spoilboardOffsetX || 0;
+        document.getElementById('cle-m-spoil-offy').value = mach.spoilboardOffsetY || 0;
         document.getElementById('cle-m-ta').value = mach.travelA || 360;
         document.getElementById('cle-m-minz').value = mach.safeLimitZ !== undefined ? mach.safeLimitZ : 0.1;
         document.getElementById('cle-m-buffer').value = mach.clearanceX || 5.0;
@@ -4491,6 +5136,7 @@ class CLEBridge {
 
       document.getElementById('cle-mach-btn-activate').onclick = () => {
         this.vault.setActiveMachine(selector.value);
+        if (this.bed) this.bed.rebuild();
         this.closeModal();
       };
 
@@ -4535,6 +5181,11 @@ class CLEBridge {
         curMach.travelX = parseFloat(document.getElementById('cle-m-tx').value) || 600;
         curMach.travelY = parseFloat(document.getElementById('cle-m-ty').value) || 500;
         curMach.travelZ = parseFloat(document.getElementById('cle-m-tz').value) || 100;
+        curMach.spoilboardX = parseFloat(document.getElementById('cle-m-spoil-x').value) || curMach.travelX || 600;
+        curMach.spoilboardY = parseFloat(document.getElementById('cle-m-spoil-y').value) || curMach.travelY || 500;
+        curMach.spoilboardThickness = parseFloat(document.getElementById('cle-m-spoil-thick').value) || 15.0;
+        curMach.spoilboardOffsetX = parseFloat(document.getElementById('cle-m-spoil-offx').value) || 0;
+        curMach.spoilboardOffsetY = parseFloat(document.getElementById('cle-m-spoil-offy').value) || 0;
         curMach.travelA = parseFloat(document.getElementById('cle-m-ta').value) || 360;
         curMach.safeLimitZ = parseFloat(document.getElementById('cle-m-minz').value) || 0.1;
         curMach.clearanceX = parseFloat(document.getElementById('cle-m-buffer').value) || 5.0;
@@ -4544,6 +5195,7 @@ class CLEBridge {
         curMach.wifiIP = document.getElementById('cle-m-ip').value.trim() || '192.168.1.150';
 
         await this.vault.saveMachine(curMach);
+        if (this.bed) this.bed.rebuild();
         this.openModal('machines');
       };
 

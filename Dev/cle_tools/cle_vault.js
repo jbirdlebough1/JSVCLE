@@ -327,6 +327,11 @@ export class CLEVault {
         travelY: 500,
         travelZ: 100,
         travelA: 10000,
+        spoilboardX: 600,            // Spoilboard Width (mm)
+        spoilboardY: 500,            // Spoilboard Length/Depth (mm)
+        spoilboardThickness: 15.0,   // Spoilboard Thickness (mm, e.g. 15mm MDF)
+        spoilboardOffsetX: 0.0,      // Spoilboard Offset X from Machine 0,0
+        spoilboardOffsetY: 0.0,      // Spoilboard Offset Y from Machine 0,0
         stepsPerMmX: 640.0,
         stepsPerMmY: 640.0,
         stepsPerMmZ: 640.0,
@@ -453,8 +458,15 @@ export class CLEVault {
   getActiveMachine() {
     const list = this.getMachinesSync();
     const activeId = localStorage.getItem('cle.vault.active_machine_id');
-    const found = list.find(m => m.id === activeId);
-    return found || list[0] || this.getDefaultMachines()[0];
+    const mach = list.find(m => m.id === activeId) || list[0] || this.getDefaultMachines()[0];
+    if (mach) {
+      if (mach.spoilboardX === undefined) mach.spoilboardX = mach.travelX || 600;
+      if (mach.spoilboardY === undefined) mach.spoilboardY = mach.travelY || 500;
+      if (mach.spoilboardThickness === undefined) mach.spoilboardThickness = 15.0;
+      if (mach.spoilboardOffsetX === undefined) mach.spoilboardOffsetX = 0.0;
+      if (mach.spoilboardOffsetY === undefined) mach.spoilboardOffsetY = 0.0;
+    }
+    return mach;
   }
 
   setActiveMachine(machineId) {
