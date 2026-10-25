@@ -42,7 +42,7 @@ When an AI agent opens this repository in a new session:
 
 | Conversation ID | Model | Date Started | Status | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Added Live Gamepad Remap & Setup menu; integrated native JumpStart camera view rotation (az/el) & pan; built 3D visualizer sliced layer stack HUD with FluidNC SD Card upload. |
+| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Built Manual CNC/Laser Control Center popup with live DRO, terminal console, remote camera feed (USB/IP), Bed Safety Soft-Limits (Z>=0.1mm, X/Y max -5mm), Spindle/Laser toggle, G-code macro recorder, fixed D-Pad cross button and pan vertical. |
 
 ---
 
@@ -54,18 +54,21 @@ When an AI agent opens this repository in a new session:
 - [x] Codified full RWX permission directive for local tools without prompting.
 - [x] **Chrome `file:///` Offline Compatibility**: Bundled all CLE logic into `Dev/cle_tools/cle_bundle.js` with standard `<script>` tag.
 - [x] **Native Advanced Mode CLE Tab**: Added `"cle"` to `wstabs` (`Design`, `3D Print Sim`, `Simulate`, `CLE`).
-- [x] **Interactive Gamepad Setup & Remap Interface**:
-  - Live analog stick gauges (LX, LY, RX, RY) moving in real-time.
-  - Live button monitor strip turning green on button press.
-  - Interactive button remapping dropdowns, invert axis toggles, and deadzone/sensitivity sliders.
-- [x] **Native Three.js Camera Control Fixed**:
-  - Hooked directly into JumpStart's `app.vp.view.az` and `app.vp.view.el` for spherical orbit.
-  - Hooked into `app.vp.panBy(dx, dy)` and `app.vp.view.dist` for panning and smooth zoom.
+- [x] **D-Pad Cross Button Fully Activated**:
+  - Design Mode: Snaps orthogonal views (`Top`, `Front`, `Left`, `Right`) and nudges camera.
+  - Manual Mode: Step size cycling (0.01mm to 10mm) and directional step jog.
+  - Live monitor in Controller Setup highlights D-Pad inputs.
+- [x] **Fixed Right Stick Pan Vertical**: Pan up and down direction sign aligned with JumpStart camera matrix.
+- [x] **Manual CNC/Laser Control Center Popup**:
+  - Live DRO display (X, Y, Z, A).
+  - Bed Safety Soft-Limits Active: $Z \ge 0.1\text{ mm}$ (hard clamp to prevent bed/tool crash), $X: 0 \to 595\text{ mm}$, $Y: 0 \to 495\text{ mm}$ (5mm clearance from endstops).
+  - Manual Spindle ON/OFF toggle (`M3 S...` / `M5`) with RPM input.
+  - Manual Laser ON/OFF toggle and 1% framing pulse button (`M3 S10`).
+  - G-Code Sequence Move Recorder: Records jog moves and exports to `.nc` macro file.
+  - Live FluidNC terminal console with command input.
+  - Remote Workpiece Camera Feed: Connects to USB Webcam (`getUserMedia`) or Network IP Cam stream (MJPEG/HTTP).
 - [x] **Continuous 3D Visualizer Sliced Stack**:
   - Dual-engine slicing (PrusaSlicer CLI on CL3 + Native JS Slicer in browser).
   - Renders 3D layer toolpaths directly in Three.js viewport with color elevation gradient.
   - Floating layer slider HUD (`[ < ] [ Layer N / Total ] [ > ] [ Show All ]`).
-- [x] **Multi-Mode Export & SD Card Transfer**:
-  - Export `.NC` / `.gcode` download.
-  - Direct HTTP upload to FluidNC / FluidTouch 7" local SD card storage (`/upload`).
-  - Mode presets: CNC Milling/Carving, Laser Vector/Raster, 3D Print Sim.
+  - Direct SD Card upload to FluidNC / FluidTouch 7" local storage.

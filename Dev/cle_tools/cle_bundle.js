@@ -4,30 +4,24 @@
 
 /* --- Module: cle_gamepad.js --- */
 /**
- * CLEJS - Nintendo Switch Gamepad Subsystem (V2)
- * Native HTML5 Gamepad API integration for JumpStart 3D
- * Supports: Nintendo Switch Joy-Cons, Pro Controller, and Standard Gamepads
+ * CLEJS - Nintendo Switch Gamepad Subsystem (V3)
+ * Full Manual CNC/Laser Control, Viewport 3D Orbit & Pan with D-Pad Hat Support
  */
 
 class CLEGamepadEngine {
   constructor(bridge) {
     this.bridge = bridge;
     this.gamepadIndex = null;
-    this.mode = 'design'; // 'design' (Viewport Orbit/Pan) | 'run' (CNC/Laser Jog & Setup)
+    this.mode = 'design'; // 'design' (Viewport Orbit/Pan) | 'manual' (Manual CNC/Laser Control)
     this.stepSize = 1.0;  // 0.01, 0.1, 1.0, 5.0, 10.0 mm
     this.activeAxis = 'Z';
-    this.recordingMacro = false;
-    this.recordedMacro = [];
     this.deadzone = 0.15;
     this.lastButtonStates = {};
     this.lastJogTime = 0;
-    this.jogThrottleMs = 60; // Throttle streaming jog rate
+    this.jogThrottleMs = 70; // Throttle streaming jog rate
 
-    // User Configurable Mapping
     this.mapping = this.loadMapping();
-
     this.initListeners();
-    // Start polling immediately so pre-connected controllers respond without waiting for events
     this.startPolling();
   }
 
@@ -55,16 +49,16 @@ class CLEGamepadEngine {
       buttons: {
         toggleMode: 9,      // Plus (+)
         macroRecord: 8,     // Minus (-)
-        zeroWCS: 0,         // A (or B depending on layout)
+        zeroWCS: 0,         // A
         feedHold: 1,        // B
         touchProbe: 2,      // X
         cycleAxis: 3,       // Y
-        stepUp: 12,         // D-Up
-        stepDown: 13,       // D-Down
-        viewTop: 12,        // D-Up (Design)
-        viewFront: 13,      // D-Down (Design)
-        viewLeft: 14,       // D-Left (Design)
-        viewIso: 15         // D-Right (Design)
+        spindleToggle: 4,   // L
+        laserToggle: 5,     // R
+        dpadUp: 12,
+        dpadDown: 13,
+        dpadLeft: 14,
+        dpadRight: 15
       }
     };
     try {
@@ -129,7 +123,6 @@ class CLEGamepadEngine {
     if (this.gamepadIndex !== null && gps[this.gamepadIndex]) {
       return gps[this.gamepadIndex];
     }
-    // Scan for any connected gamepad
     for (let i = 0; i < gps.length; i++) {
       if (gps[i]) {
         if (this.gamepadIndex !== i) {
@@ -150,19 +143,26 @@ class CLEGamepadEngine {
   }
 
   toggleMode() {
-    this.mode = this.mode === 'design' ? 'run' : 'design';
+    this.mode = this.mode === 'design' ? 'manual' : 'design';
     const modeBtn = document.getElementById('cle-gp-mode-toggle');
     const ribbonBtn = document.getElementById('cle-r-gp-mode');
-    const label = this.mode === 'design' ? 'Mode: Design 3D' : 'Mode: Run CNC/Laser';
+    const label = this.mode === 'design' ? 'Mode: Design 3D' : 'Mode: Manual CNC/Laser';
+    
     if (modeBtn) {
       modeBtn.textContent = label;
-      modeBtn.classList.toggle('active', this.mode === 'run');
+      modeBtn.classList.toggle('active', this.mode === 'manual');
     }
     if (ribbonBtn) {
-      ribbonBtn.querySelector('span').textContent = this.mode === 'design' ? 'Design 3D' : 'Run Pendant';
-      ribbonBtn.setAttribute('aria-pressed', this.mode === 'run' ? 'true' : 'false');
+      ribbonBtn.querySelector('span').textContent = this.mode === 'design' ? 'Design 3D' : 'Manual CNC/Laser';
+      ribbonBtn.setAttribute('aria-pressed', this.mode === 'manual' ? 'true' : 'false');
     }
-    this.bridge.notify(`Switch Controller: ${this.mode === 'design' ? 'DESIGN 3D VIEWPORT' : 'RUN CNC/LASER PENDANT'}`);
+
+    if (this.mode === 'manual') {
+      this.bridge.openManualControlCenter();
+      this.bridge.notify('Entered MANUAL CNC/LASER MODE. Soft-limits active (Z >= 0.1mm)', 'ok');
+    } else {
+      this.bridge.notify('Entered DESIGN 3D VIEWPORT MODE');
+    }
   }
 
   processGamepadFrame() {
@@ -174,28 +174,48 @@ class CLEGamepadEngine {
 
     this.updateStatusBadge(true, gp.id);
 
-    // Standard Gamepad Axes: 0: LX, 1: LY, 2: RX, 3: RY
     const lx = this.applyDeadzone(gp.axes[0] || 0);
     const ly = this.applyDeadzone(gp.axes[1] || 0);
     const rx = this.applyDeadzone(gp.axes[2] || 0);
     const ry = this.applyDeadzone(gp.axes[3] || 0);
 
-    // Update real-time remap modal if open
+    // Read D-Pad cross button (support standard buttons 12-15 or d-pad axes)
+    const dpadUp = this.isDpadPressed(gp, 12, 'up');
+    const dpadDown = this.isDpadPressed(gp, 13, 'down');
+    const dpadLeft = this.isDpadPressed(gp, 14, 'left');
+    const dpadRight = this.isDpadPressed(gp, 15, 'right');
+
     if (this.onFrameCallback) {
-      this.onFrameCallback(gp, lx, ly, rx, ry);
+      this.onFrameCallback(gp, lx, ly, rx, ry, { dpadUp, dpadDown, dpadLeft, dpadRight });
     }
 
-    // Plus (+) Button: Toggle Design / Run Mode
+    // Plus (+) Button: Toggle Design / Manual CNC/Laser Mode
     const modeToggleBtn = this.mapping.buttons.toggleMode ?? 9;
     if (this.isJustPressed(gp, modeToggleBtn)) {
       this.toggleMode();
     }
 
     if (this.mode === 'design') {
-      this.processDesignMode(lx, ly, rx, ry, gp);
+      this.processDesignMode(lx, ly, rx, ry, gp, { dpadUp, dpadDown, dpadLeft, dpadRight });
     } else {
-      this.processRunMode(lx, ly, rx, ry, gp);
+      this.processManualMode(lx, ly, rx, ry, gp, { dpadUp, dpadDown, dpadLeft, dpadRight });
     }
+  }
+
+  isDpadPressed(gp, btnIdx, dir) {
+    // 1. Direct button check
+    if (gp.buttons[btnIdx] && (gp.buttons[btnIdx].pressed || gp.buttons[btnIdx].value > 0.5)) {
+      return true;
+    }
+    // 2. Fallback to Hat/Axes (axes 4/5 or 6/7 on some controllers)
+    for (let a = 4; a < gp.axes.length; a++) {
+      const val = gp.axes[a];
+      if (dir === 'up' && val < -0.6) return true;
+      if (dir === 'down' && val > 0.6) return true;
+      if (dir === 'left' && val < -0.6) return true;
+      if (dir === 'right' && val > 0.6) return true;
+    }
+    return false;
   }
 
   isJustPressed(gp, btnIdx) {
@@ -206,13 +226,13 @@ class CLEGamepadEngine {
     return isDown && !wasDown;
   }
 
-  processDesignMode(lx, ly, rx, ry, gp) {
+  processDesignMode(lx, ly, rx, ry, gp, dpad) {
     const app = window.app || window.xe;
     if (!app || !app.vp || !app.vp.view) return;
 
     let needsUpdate = false;
 
-    // 1. Left Stick: Spherical Orbit around target point
+    // 1. Left Stick: Spherical Orbit (Elevation & Azimuth)
     if (Math.abs(lx) > 0.02 || Math.abs(ly) > 0.02) {
       const orbitSpeed = this.mapping.design.orbitSpeed * 0.04;
       const azDelta = (this.mapping.design.invertLX ? -lx : lx) * orbitSpeed;
@@ -223,11 +243,12 @@ class CLEGamepadEngine {
       needsUpdate = true;
     }
 
-    // 2. Right Stick: Smooth Viewport Panning (Up/Down/Left/Right)
+    // 2. Right Stick: Smooth Viewport Panning (Left/Right AND Up/Down)
     if (Math.abs(rx) > 0.02 || Math.abs(ry) > 0.02) {
       const panSpeed = this.mapping.design.panSpeed * 6;
+      // Invert sign appropriately: pushing UP (ry < 0) should pan viewport UP (dy > 0)
       const dx = (this.mapping.design.invertRX ? -rx : rx) * panSpeed;
-      const dy = (this.mapping.design.invertRY ? -ry : ry) * panSpeed;
+      const dy = (this.mapping.design.invertRY ? ry : -ry) * panSpeed;
 
       if (app.vp.panBy) {
         app.vp.panBy(-dx, dy);
@@ -235,7 +256,7 @@ class CLEGamepadEngine {
       }
     }
 
-    // 3. Triggers ZL / ZR: Smooth Zoom In / Out
+    // 3. Triggers ZL / ZR: Smooth Zoom
     const zl = (gp.buttons[6]?.value || (gp.buttons[6]?.pressed ? 1 : 0));
     const zr = (gp.buttons[7]?.value || (gp.buttons[7]?.pressed ? 1 : 0));
     const zoomDelta = (zr - zl);
@@ -251,23 +272,23 @@ class CLEGamepadEngine {
       if (app.vp.request) app.vp.request();
     }
 
-    // 4. D-Pad View Presets
-    if (this.isJustPressed(gp, this.mapping.buttons.viewTop ?? 12)) app.vp.setView && app.vp.setView('top');
-    if (this.isJustPressed(gp, this.mapping.buttons.viewFront ?? 13)) app.vp.setView && app.vp.setView('front');
-    if (this.isJustPressed(gp, this.mapping.buttons.viewLeft ?? 14)) app.vp.setView && app.vp.setView('left');
-    if (this.isJustPressed(gp, this.mapping.buttons.viewIso ?? 15)) app.vp.setView && app.vp.setView('iso');
+    // 4. Cross Button (D-Pad) in Design Mode: Snap Standard Views
+    if (this.isJustPressed(gp, 12)) app.vp.setView && app.vp.setView('top');
+    if (this.isJustPressed(gp, 13)) app.vp.setView && app.vp.setView('front');
+    if (this.isJustPressed(gp, 14)) app.vp.setView && app.vp.setView('left');
+    if (this.isJustPressed(gp, 15)) app.vp.setView && app.vp.setView('right');
 
     // 5. Fit All (B button / 0)
     if (this.isJustPressed(gp, 0)) app.fit && app.fit();
   }
 
-  processRunMode(lx, ly, rx, ry, gp) {
+  processManualMode(lx, ly, rx, ry, gp, dpad) {
     const fluid = this.bridge.fluidnc;
     if (!fluid) return;
 
-    // Step size cycling via D-Pad
-    if (this.isJustPressed(gp, this.mapping.buttons.stepUp ?? 12)) this.cycleStepSize(1);
-    if (this.isJustPressed(gp, this.mapping.buttons.stepDown ?? 13)) this.cycleStepSize(-1);
+    // Cross Button (D-Pad) in Manual Mode: Step Increment Cycle
+    if (this.isJustPressed(gp, 12)) this.cycleStepSize(1);
+    if (this.isJustPressed(gp, 13)) this.cycleStepSize(-1);
 
     const now = performance.now();
     if (now - this.lastJogTime > this.jogThrottleMs) {
@@ -285,7 +306,7 @@ class CLEGamepadEngine {
         jogged = true;
       }
 
-      // Right Stick: Z Axis (vertical) & A Axis (rotary horizontal)
+      // Right Stick: Z Axis (vertical) & A Axis (rotary)
       if (Math.abs(ry) > 0.05) {
         const signZ = this.mapping.run.invertZ ? -1 : 1;
         const dz = (-ry * this.stepSize * signZ).toFixed(3);
@@ -303,7 +324,6 @@ class CLEGamepadEngine {
         this.lastJogTime = now;
         const feed = deltas.Z ? this.mapping.run.jogFeedZ : this.mapping.run.jogFeedXY;
         fluid.jogAxisRelative(deltas, feed);
-        this.recordMacroStep(`$J=G91 G21 ${Object.entries(deltas).map(([k,v])=>`${k}${v}`).join(' ')} F${feed}`);
       }
     }
 
@@ -321,7 +341,8 @@ class CLEGamepadEngine {
 
     // Button 2 (X): Touch Plate Probe
     if (this.isJustPressed(gp, this.mapping.buttons.touchProbe ?? 2)) {
-      this.triggerProbeCycle();
+      fluid.streamGCodeLines(['G21 G91', 'G38.2 Z-30 F75', 'G92 Z15.0', 'G0 Z5']);
+      this.bridge.notify('Executing Touch Plate Probe (15mm plate)', 'ok');
     }
 
     // Button 3 (Y): Cycle Active Axis (X -> Y -> Z -> A)
@@ -332,9 +353,17 @@ class CLEGamepadEngine {
       this.bridge.notify(`Active pendant axis: ${this.activeAxis}`);
     }
 
-    // Button 8 (Minus): Toggle Teach Pendant Macro Recording
+    // Shoulder Buttons: Spindle / Laser Toggle
+    if (this.isJustPressed(gp, this.mapping.buttons.spindleToggle ?? 4)) {
+      fluid.toggleSpindle();
+    }
+    if (this.isJustPressed(gp, this.mapping.buttons.laserToggle ?? 5)) {
+      fluid.toggleLaser();
+    }
+
+    // Button 8 (Minus): Toggle G-Code Move Recording
     if (this.isJustPressed(gp, this.mapping.buttons.macroRecord ?? 8)) {
-      this.toggleMacroRecording();
+      fluid.toggleGCodeRecorder();
     }
   }
 
@@ -344,47 +373,19 @@ class CLEGamepadEngine {
     idx = Math.max(0, Math.min(steps.length - 1, idx + dir));
     this.stepSize = steps[idx];
     const el = document.getElementById('cle-step-val');
+    const hudStep = document.getElementById('cle-man-step-val');
     if (el) el.textContent = `${this.stepSize} mm`;
+    if (hudStep) hudStep.textContent = `${this.stepSize} mm`;
     this.bridge.notify(`Jog increment: ${this.stepSize} mm`);
-  }
-
-  triggerProbeCycle() {
-    const fluid = this.bridge.fluidnc;
-    if (!fluid || !fluid.isConnected) {
-      this.bridge.notify('Connect to FluidNC first before probing touch plate.', 'error');
-      return;
-    }
-    const plateThick = 15.0; // mm
-    const gcode = ['G21 G91', 'G38.2 Z-30 F75', `G92 Z${plateThick}`, 'G0 Z5'];
-    fluid.streamGCodeLines(gcode);
-    this.bridge.notify(`Executing Touch Plate Probe (${plateThick}mm plate)`, 'ok');
-  }
-
-  toggleMacroRecording() {
-    this.recordingMacro = !this.recordingMacro;
-    if (this.recordingMacro) {
-      this.recordedMacro = [];
-      this.bridge.notify('Macro Recording: STARTED (moving axes will record steps)', 'ok');
-    } else {
-      this.bridge.notify(`Macro Recording: STOPPED (${this.recordedMacro.length} moves saved)`, 'ok');
-      if (this.recordedMacro.length > 0) {
-        this.bridge.vault.saveMacro(`Teach_Macro_${Date.now()}`, this.recordedMacro.join('\n'));
-      }
-    }
-  }
-
-  recordMacroStep(cmd) {
-    if (this.recordingMacro) {
-      this.recordedMacro.push(cmd);
-    }
   }
 }
 
 /* --- Module: cle_fluidnc.js --- */
 /**
- * CLEJS - FluidNC & FluidTouch 7" Controller Bridge (V2)
+ * CLEJS - FluidNC & FluidTouch 7" Controller Bridge (V3)
  * Real-time streaming, Web Serial, WebSocket, Status Polling,
- * FluidTouch Head Integration, and SD Card File Transfer
+ * Soft-Limits Protection (Z >= 0.1mm, X/Y max -5mm), Spindle/Laser Manual Control,
+ * Console Logging, and SD Card File Transfer
  */
 
 class CLEFluidNCClient {
@@ -403,8 +404,31 @@ class CLEFluidNCClient {
     this.state = 'Disconnected';
     this.mpos = { X: 0.0, Y: 0.0, Z: 0.0, A: 0.0 };
     this.wpos = { X: 0.0, Y: 0.0, Z: 0.0, A: 0.0 };
-    this.feedRate = 0;
-    this.spindleRPM = 0;
+    this.feedRate = 1500;
+    this.spindleRPM = 12000;
+    this.spindleActive = false;
+    this.laserActive = false;
+    this.laserPowerPct = 80;
+    
+    // Soft-Limits Configuration (TTC6050 CNC Bed Protection)
+    this.softLimits = {
+      enabled: true,
+      minX: 0.0,
+      maxX: 595.0,  // 600mm travel - 5mm switch buffer
+      minY: 0.0,
+      maxY: 495.0,  // 500mm travel - 5mm switch buffer
+      minZ: 0.1,    // HARD LIMIT: 0.1mm above bed to protect tooling and spoilboard
+      maxZ: 100.0,
+      minA: -Infinity,
+      maxA: Infinity
+    };
+
+    // Console Log Buffer & Recorder
+    this.consoleLogs = [];
+    this.maxConsoleLogs = 100;
+    this.isRecordingGCode = false;
+    this.recordedGCodeLines = [];
+
     this.buffer = '';
     this.pollTimer = null;
     this.sendQueue = [];
@@ -423,13 +447,14 @@ class CLEFluidNCClient {
       this.writer = this.port.writable.getWriter();
       this.isConnected = true;
       this.connectionType = 'serial';
+      this.logConsole('[SYSTEM] Connected to FluidNC via USB Serial.');
       this.bridge.notify('Connected to FluidNC via USB Serial', 'ok');
       this.updateConnectionUI(true);
       this.startSerialReadLoop();
       this.startStatusPolling();
       return true;
     } catch (err) {
-      console.error('[CLE FluidNC] Serial connection error:', err);
+      console.error('[CLE FluidNC] Serial error:', err);
       this.bridge.notify(`Serial connection failed: ${err.message}`, 'error');
       return false;
     }
@@ -452,7 +477,7 @@ class CLEFluidNCClient {
     }
   }
 
-  // --- WebSocket Connection (FluidNC / FluidTouch 7" Head) ---
+  // --- WebSocket Connection (FluidTouch 7" Head / FluidNC) ---
   connectWebSocket(ip = this.ip) {
     this.ip = ip;
     localStorage.setItem('cle.fluidnc.ip', ip);
@@ -462,6 +487,7 @@ class CLEFluidNCClient {
       this.socket.onopen = () => {
         this.isConnected = true;
         this.connectionType = 'websocket';
+        this.logConsole(`[SYSTEM] Connected to FluidTouch/FluidNC at ${this.ip}.`);
         this.bridge.notify(`Connected to FluidTouch/FluidNC at ${this.ip}`, 'ok');
         this.updateConnectionUI(true);
         this.startStatusPolling();
@@ -470,7 +496,6 @@ class CLEFluidNCClient {
         this.handleIncomingData(event.data);
       };
       this.socket.onerror = (err) => {
-        console.error('[CLE FluidNC] WebSocket error:', err);
         this.bridge.notify(`WebSocket error connecting to ${this.ip}`, 'error');
       };
       this.socket.onclose = () => {
@@ -489,6 +514,7 @@ class CLEFluidNCClient {
     if (this.port) { try { this.port.close(); } catch {} this.port = null; }
     if (this.socket) { try { this.socket.close(); } catch {} this.socket = null; }
     this.updateConnectionUI(false);
+    this.logConsole('[SYSTEM] Disconnected from FluidNC.');
     this.bridge.notify('Disconnected from FluidNC');
   }
 
@@ -506,7 +532,7 @@ class CLEFluidNCClient {
       if (this.isConnected) {
         this.sendImmediate('?');
       }
-    }, 200);
+    }, 150);
   }
 
   handleIncomingData(chunk) {
@@ -520,8 +546,11 @@ class CLEFluidNCClient {
         this.parseStatusReport(trimmed);
       } else if (trimmed === 'ok') {
         this.onCommandAck();
-      } else if (trimmed.startsWith('error:')) {
-        this.bridge.notify(`FluidNC ${trimmed}`, 'error');
+      } else if (trimmed) {
+        this.logConsole(`[RECV] ${trimmed}`);
+        if (trimmed.startsWith('error:')) {
+          this.bridge.notify(`FluidNC ${trimmed}`, 'error');
+        }
       }
     }
   }
@@ -564,6 +593,12 @@ class CLEFluidNCClient {
     updateVal('cle-dro-z', this.wpos.Z.toFixed(2));
     updateVal('cle-dro-a', this.wpos.A.toFixed(1));
 
+    // Update manual panel DRO if open
+    updateVal('cle-man-dro-x', this.wpos.X.toFixed(2));
+    updateVal('cle-man-dro-y', this.wpos.Y.toFixed(2));
+    updateVal('cle-man-dro-z', this.wpos.Z.toFixed(2));
+    updateVal('cle-man-dro-a', this.wpos.A.toFixed(1));
+
     if (this.bridge.recovery) {
       this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
     }
@@ -583,20 +618,78 @@ class CLEFluidNCClient {
       this.bridge.notify('FluidNC is not connected', 'error');
       return;
     }
-    const clean = gcode.trim() + '\n';
+    const clean = gcode.trim();
+    if (!clean) return;
+
+    this.logConsole(`[SEND] ${clean}`);
+    if (this.isRecordingGCode) {
+      this.recordedGCodeLines.push(clean);
+      this.updateRecorderUI();
+    }
+
+    const payload = clean + '\n';
     if (this.connectionType === 'serial' && this.writer) {
-      this.writer.write(new TextEncoder().encode(clean));
+      this.writer.write(new TextEncoder().encode(payload));
     } else if (this.connectionType === 'websocket' && this.socket) {
-      this.socket.send(clean);
+      this.socket.send(payload);
     }
   }
 
+  // --- Safe Manual Jogging with Soft-Limits Clamping ---
   jogAxisRelative(axisDeltas, feedRate = 1000) {
-    let jogCmd = `$J=G91 G21`;
-    for (const [axis, dist] of Object.entries(axisDeltas)) {
-      if (dist !== 0 && dist !== '0.00' && dist !== '0.000') {
-        jogCmd += ` ${axis}${dist}`;
+    if (!this.isConnected) return;
+
+    const clampedDeltas = {};
+    const sl = this.softLimits;
+
+    for (const [axis, deltaStr] of Object.entries(axisDeltas)) {
+      const delta = parseFloat(deltaStr);
+      if (isNaN(delta) || delta === 0) continue;
+
+      if (sl.enabled) {
+        // Enforce Bed and Limit-Switch Clearance
+        if (axis === 'Z') {
+          const targetZ = this.wpos.Z + delta;
+          if (targetZ < sl.minZ) {
+            // Hard clamp: Never plunge below +0.1mm above bed
+            const allowed = Math.max(0, sl.minZ - this.wpos.Z);
+            if (allowed <= 0.001) {
+              this.bridge.notify(`Soft-Limit: Z clamped at +${sl.minZ}mm (bed safety)`, 'error');
+              continue;
+            }
+            clampedDeltas.Z = allowed.toFixed(3);
+          } else if (targetZ > sl.maxZ) {
+            continue;
+          } else {
+            clampedDeltas.Z = delta.toFixed(3);
+          }
+        } else if (axis === 'X') {
+          const targetX = this.wpos.X + delta;
+          if (targetX < sl.minX || targetX > sl.maxX) {
+            this.bridge.notify(`Soft-Limit: X bounds [${sl.minX}, ${sl.maxX}mm] reached`, 'error');
+            continue;
+          }
+          clampedDeltas.X = delta.toFixed(3);
+        } else if (axis === 'Y') {
+          const targetY = this.wpos.Y + delta;
+          if (targetY < sl.minY || targetY > sl.maxY) {
+            this.bridge.notify(`Soft-Limit: Y bounds [${sl.minY}, ${sl.maxY}mm] reached`, 'error');
+            continue;
+          }
+          clampedDeltas.Y = delta.toFixed(3);
+        } else {
+          clampedDeltas[axis] = delta.toFixed(3);
+        }
+      } else {
+        clampedDeltas[axis] = delta.toFixed(3);
       }
+    }
+
+    if (Object.keys(clampedDeltas).length === 0) return;
+
+    let jogCmd = `$J=G91 G21`;
+    for (const [axis, dist] of Object.entries(clampedDeltas)) {
+      jogCmd += ` ${axis}${dist}`;
     }
     jogCmd += ` F${feedRate}`;
     this.sendGCode(jogCmd);
@@ -610,9 +703,111 @@ class CLEFluidNCClient {
     }
   }
 
+  // --- Manual Spindle & Laser Controls ---
+  toggleSpindle(targetRPM = 12000) {
+    this.spindleActive = !this.spindleActive;
+    if (this.spindleActive) {
+      this.spindleRPM = targetRPM;
+      this.sendGCode(`M3 S${this.spindleRPM}`);
+      this.bridge.notify(`Spindle ON @ ${this.spindleRPM} RPM`, 'ok');
+    } else {
+      this.sendGCode('M5');
+      this.bridge.notify('Spindle OFF', 'ok');
+    }
+    this.updateManualToolsUI();
+  }
+
+  toggleLaser(powerPct = 80) {
+    this.laserActive = !this.laserActive;
+    if (this.laserActive) {
+      this.laserPowerPct = powerPct;
+      const sVal = Math.round((powerPct / 100) * 1000);
+      this.sendGCode(`M3 S${sVal}`);
+      this.bridge.notify(`Laser ON @ ${powerPct}% (S${sVal})`, 'ok');
+    } else {
+      this.sendGCode('M5');
+      this.bridge.notify('Laser OFF', 'ok');
+    }
+    this.updateManualToolsUI();
+  }
+
+  pulseLaserFraming(durationSec = 2) {
+    this.sendGCode(`M3 S10\nG4 P${durationSec}\nM5`);
+    this.bridge.notify(`Laser 1% alignment pulse fired (${durationSec}s)`, 'ok');
+  }
+
+  // --- G-Code Move Recorder ---
+  toggleGCodeRecorder() {
+    this.isRecordingGCode = !this.isRecordingGCode;
+    if (this.isRecordingGCode) {
+      this.recordedGCodeLines = [
+        `; --- CLEJS Manual Macro Recording ---`,
+        `; Timestamp: ${new Date().toISOString()}`,
+        `G21 ; mm mode`,
+        `G90 ; Absolute positioning`,
+        `; Initial Work Position: X${this.wpos.X.toFixed(3)} Y${this.wpos.Y.toFixed(3)} Z${this.wpos.Z.toFixed(3)} A${this.wpos.A.toFixed(3)}`
+      ];
+      this.bridge.notify('G-Code Move Recording: STARTED', 'ok');
+    } else {
+      this.bridge.notify(`G-Code Recording: STOPPED (${this.recordedGCodeLines.length} lines saved)`, 'ok');
+    }
+    this.updateRecorderUI();
+  }
+
+  exportRecordedGCode(filename = 'manual_macro.nc') {
+    if (this.recordedGCodeLines.length === 0) {
+      this.bridge.notify('No recorded moves to export.', 'error');
+      return;
+    }
+    const blob = new Blob([this.recordedGCodeLines.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    this.bridge.notify(`Exported recorded macro: ${filename}`, 'ok');
+  }
+
+  logConsole(msg) {
+    this.consoleLogs.push(msg);
+    if (this.consoleLogs.length > this.maxConsoleLogs) {
+      this.consoleLogs.shift();
+    }
+    const consoleEl = document.getElementById('cle-man-console-body');
+    if (consoleEl) {
+      consoleEl.innerHTML = this.consoleLogs.map(l => `<div>${l}</div>`).join('');
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+  }
+
+  updateManualToolsUI() {
+    const sBtn = document.getElementById('cle-man-btn-spindle');
+    const lBtn = document.getElementById('cle-man-btn-laser');
+    if (sBtn) {
+      sBtn.textContent = this.spindleActive ? 'Spindle: RUNNING' : 'Spindle: OFF';
+      sBtn.className = `cle-btn ${this.spindleActive ? 'danger' : ''}`;
+    }
+    if (lBtn) {
+      lBtn.textContent = this.laserActive ? 'Laser: FIRING' : 'Laser: OFF';
+      lBtn.className = `cle-btn ${this.laserActive ? 'danger' : ''}`;
+    }
+  }
+
+  updateRecorderUI() {
+    const rBtn = document.getElementById('cle-man-btn-record');
+    const rCount = document.getElementById('cle-man-rec-count');
+    if (rBtn) {
+      rBtn.textContent = this.isRecordingGCode ? 'Stop Recording' : 'Record Moves';
+      rBtn.className = `cle-btn ${this.isRecordingGCode ? 'danger' : ''}`;
+    }
+    if (rCount) {
+      rCount.textContent = `Recorded: ${this.recordedGCodeLines.length} lines`;
+    }
+  }
+
   openFluidTouchWebGUI() {
-    const url = `http://${this.ip}`;
-    window.open(url, '_blank');
+    window.open(`http://${this.ip}`, '_blank');
   }
 
   streamGCodeLines(lines) {
@@ -641,9 +836,8 @@ class CLEFluidNCClient {
     }
   }
 
-  // --- FluidNC & FluidTouch SD Card File Management ---
   async uploadFileToSD(filename, gcodeText) {
-    this.bridge.notify(`Uploading ${filename} to FluidNC SD Card...`, 'ok');
+    this.bridge.notify(`Uploading ${filename} to SD Card...`, 'ok');
     try {
       const formData = new FormData();
       const blob = new Blob([gcodeText], { type: 'text/plain' });
@@ -660,27 +854,8 @@ class CLEFluidNCClient {
         throw new Error(`Upload returned status ${resp.status}`);
       }
     } catch (e) {
-      console.warn('[CLE FluidNC] Direct HTTP upload failed (may need CORS or local network). Falling back to macro: ', e);
-      // Fallback: If HTTP upload fails over browser sandbox, allow downloading or streaming
-      this.bridge.notify(`Could not direct upload to http://${this.ip}/upload. Check network connection or use Export .NC`, 'error');
+      this.bridge.notify(`Could not direct upload to http://${this.ip}/upload. Use Export .NC`, 'error');
     }
-  }
-
-  async listSDFiles() {
-    try {
-      const resp = await fetch(`http://${this.ip}/files?path=/sd`);
-      if (resp.ok) {
-        return await resp.json();
-      }
-    } catch (e) {
-      console.warn('[CLE FluidNC] Failed to list SD files:', e);
-    }
-    return [];
-  }
-
-  runJobFromSD(filename) {
-    this.sendGCode(`$SD/Run=${filename}`);
-    this.bridge.notify(`Running job from SD: ${filename}`, 'ok');
   }
 }
 
@@ -1613,14 +1788,14 @@ class CLESlicerEngine {
 
 /* --- Module: cle_boot.js --- */
 /**
- * CLEJS - Master Extension Bootstrapper (V2)
- * Mounts into JumpStart 3D native DOM and Advanced Mode Ribbon
+ * CLEJS - Master Extension Bootstrapper (V3)
+ * Advanced Mode Ribbon, Manual CNC/Laser Control Center, Live Remote Camera Feed
  */
 
 
 class CLEBridge {
   constructor() {
-    this.version = '1.1.0';
+    this.version = '1.2.0';
     this.vault = new CLEVault(this);
     this.fluidnc = new CLEFluidNCClient(this);
     this.gamepad = new CLEGamepadEngine(this);
@@ -1631,6 +1806,7 @@ class CLEBridge {
     this.slicer = new CLESlicerEngine(this);
 
     this.activeModal = null;
+    this.cameraStream = null;
   }
 
   notify(message, type = 'info') {
@@ -1691,7 +1867,7 @@ class CLEBridge {
       <span class="cle-badge" id="cle-fluid-badge">FluidNC: Offline</span>
       <span>CLE Suite</span>
     `;
-    btn.onclick = () => this.openModal('gamepad');
+    btn.onclick = () => this.openManualControlCenter();
     topbar.appendChild(btn);
   }
 
@@ -1709,9 +1885,10 @@ class CLEBridge {
     ]);
 
     // 2. Controller Section
-    m("Switch Pad", "", [
-      { id: "cle-r-gp-mode", label: this.gamepad.mode === "design" ? "Design 3D" : "Run Pendant", title: "Toggle Switch Controller Mode", icon: "motion", pressed: this.gamepad.mode === "run", fn: () => this.gamepad.toggleMode() },
-      { id: "cle-r-gp-remap", label: "Controller Setup", title: "Configure & Test Controller Mapping", icon: "settings", fn: () => this.openModal("gamepad") }
+    m("Manual Control", "", [
+      { id: "cle-r-gp-mode", label: this.gamepad.mode === "design" ? "Design 3D" : "Manual CNC/Laser", title: "Toggle Switch Controller Mode", icon: "motion", pressed: this.gamepad.mode === "manual", fn: () => this.gamepad.toggleMode() },
+      { id: "cle-r-manual-hub", label: "Control Center", title: "Open Manual CNC/Laser Control & Camera Feed", icon: "inspect", fn: () => this.openManualControlCenter() },
+      { id: "cle-r-gp-remap", label: "Controller Setup", title: "Configure Switch Controller Buttons", icon: "settings", fn: () => this.openModal("gamepad") }
     ]);
 
     // 3. 4th Axis & Slicer
@@ -1748,6 +1925,198 @@ class CLEBridge {
       </div>
     `;
     s.append(droDiv);
+  }
+
+  // --- Pop-up Manual CNC / Laser Control Center ---
+  openManualControlCenter() {
+    let hub = document.getElementById('cle-manual-hub');
+    if (hub) {
+      hub.style.display = 'flex';
+      return;
+    }
+
+    hub = document.createElement('div');
+    hub.id = 'cle-manual-hub';
+    hub.style.cssText = `
+      position: fixed;
+      top: 90px;
+      right: 20px;
+      width: 440px;
+      max-height: 85vh;
+      background: var(--panel);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      box-shadow: 0 12px 36px var(--shadow);
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font: 12px/1.3 var(--f-ui);
+    `;
+
+    hub.innerHTML = `
+      <div class="cle-modal-header" style="cursor:move; padding:8px 12px;">
+        <span>Manual CNC / Laser Mode (Live Control)</span>
+        <button class="cle-modal-close" id="cle-man-close">&times;</button>
+      </div>
+
+      <div style="padding:12px; overflow-y:auto; display:flex; flex-direction:column; gap:10px;">
+        <!-- Soft Limits & Safety Status -->
+        <div style="background:var(--paper); padding:8px 12px; border-radius:4px; border:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <span class="cle-badge connected" id="cle-softlimit-badge">Soft-Limits: Active</span>
+            <span style="font-size:10px; color:var(--ink-2); margin-left:6px;">Z &ge; 0.1mm | X: 0-595 | Y: 0-495</span>
+          </div>
+          <div style="font-weight:700; color:var(--accent);" id="cle-man-step-val">${this.gamepad.stepSize} mm</div>
+        </div>
+
+        <!-- High-Contrast DRO Readout -->
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:6px; background:rgba(0,0,0,0.4); padding:10px; border-radius:6px; color:#fff; font-family:var(--f-mono); text-align:center;">
+          <div><div style="color:var(--accent-2); font-size:10px;">X (mm)</div><div style="font-size:16px; font-weight:700;" id="cle-man-dro-x">${this.fluidnc.wpos.X.toFixed(2)}</div></div>
+          <div><div style="color:var(--accent-2); font-size:10px;">Y (mm)</div><div style="font-size:16px; font-weight:700;" id="cle-man-dro-y">${this.fluidnc.wpos.Y.toFixed(2)}</div></div>
+          <div><div style="color:var(--accent-2); font-size:10px;">Z (mm)</div><div style="font-size:16px; font-weight:700;" id="cle-man-dro-z">${this.fluidnc.wpos.Z.toFixed(2)}</div></div>
+          <div><div style="color:var(--accent-2); font-size:10px;">A (deg)</div><div style="font-size:16px; font-weight:700;" id="cle-man-dro-a">${this.fluidnc.wpos.A.toFixed(1)}</div></div>
+        </div>
+
+        <!-- Manual Tool Controls (Spindle / Laser) -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:6px;">Spindle & Laser Manual Control</div>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button class="cle-btn" id="cle-man-btn-spindle">Spindle: OFF</button>
+            <input class="cle-input" id="cle-man-rpm" type="number" value="12000" style="width:70px;" title="Target Spindle RPM">
+            <span style="font-size:11px;">RPM</span>
+            <div style="height:16px; width:1px; background:var(--line);"></div>
+            <button class="cle-btn" id="cle-man-btn-laser">Laser: OFF</button>
+            <button class="cle-btn" id="cle-man-btn-pulse" title="1% power alignment pulse">1% Pulse</button>
+          </div>
+        </div>
+
+        <!-- G-Code Move Recorder -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:6px;">G-Code Sequence Recorder</div>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="display:flex; gap:6px;">
+              <button class="cle-btn" id="cle-man-btn-record">Record Moves</button>
+              <button class="cle-btn" id="cle-man-btn-export-rec">Export .NC</button>
+            </div>
+            <span id="cle-man-rec-count" style="font-family:var(--f-mono); font-size:11px;">Recorded: 0 lines</span>
+          </div>
+        </div>
+
+        <!-- Live Camera Feed Container -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:6px;">Remote Workpiece Camera Feed</div>
+          <video id="cle-webcam-preview" autoplay playsinline style="display:none; width:100%; height:160px; border-radius:4px; object-fit:cover; background:#000;"></video>
+          <img id="cle-mjpeg-preview" style="display:none; width:100%; height:160px; border-radius:4px; object-fit:cover; background:#000;">
+          <div id="cle-cam-placeholder" style="height:100px; display:flex; align-items:center; justify-content:center; background:var(--paper); border:1px dashed var(--line); border-radius:4px; color:var(--ink-3); text-align:center; padding:10px;">
+            Camera inactive. Click USB Webcam or Network IP Cam to stream workpiece.
+          </div>
+          <div style="display:flex; gap:6px; margin-top:6px;">
+            <button class="cle-btn" id="cle-cam-usb">USB Webcam</button>
+            <button class="cle-btn" id="cle-cam-ip">Network IP Cam</button>
+            <button class="cle-btn" id="cle-cam-stop">Stop</button>
+          </div>
+        </div>
+
+        <!-- Live G-Code Terminal Console -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:4px;">Live FluidNC Console</div>
+          <div id="cle-man-console-body" style="height:90px; overflow-y:auto; background:var(--block); color:#5fc27f; padding:6px; border-radius:4px; font-family:var(--f-mono); font-size:10px;">
+            <div>[CLE] Manual Console Ready.</div>
+          </div>
+          <div style="display:flex; gap:6px; margin-top:6px;">
+            <input class="cle-input" id="cle-man-gcode-input" placeholder="Type G-Code (e.g. G0 X10 Y10)..." style="flex:1;">
+            <button class="cle-btn" id="cle-man-send-cmd">Send</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(hub);
+
+    // Wire Events
+    document.getElementById('cle-man-close').onclick = () => { hub.style.display = 'none'; };
+    
+    // Spindle / Laser
+    document.getElementById('cle-man-btn-spindle').onclick = () => {
+      const rpm = parseInt(document.getElementById('cle-man-rpm').value, 10) || 12000;
+      this.fluidnc.toggleSpindle(rpm);
+    };
+    document.getElementById('cle-man-btn-laser').onclick = () => {
+      this.fluidnc.toggleLaser(80);
+    };
+    document.getElementById('cle-man-btn-pulse').onclick = () => {
+      this.fluidnc.pulseLaserFraming(2);
+    };
+
+    // Recorder
+    document.getElementById('cle-man-btn-record').onclick = () => {
+      this.fluidnc.toggleGCodeRecorder();
+    };
+    document.getElementById('cle-man-btn-export-rec').onclick = () => {
+      this.fluidnc.exportRecordedGCode();
+    };
+
+    // Camera Feed
+    document.getElementById('cle-cam-usb').onclick = async () => {
+      const v = document.getElementById('cle-webcam-preview');
+      const p = document.getElementById('cle-cam-placeholder');
+      const img = document.getElementById('cle-mjpeg-preview');
+      img.style.display = 'none';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+        this.cameraStream = stream;
+        v.srcObject = stream;
+        v.style.display = 'block';
+        p.style.display = 'none';
+        this.notify('USB Webcam stream connected.', 'ok');
+      } catch (err) {
+        this.notify(`Webcam error: ${err.message}`, 'error');
+      }
+    };
+
+    document.getElementById('cle-cam-ip').onclick = () => {
+      const url = prompt('Enter Network Camera Stream URL (MJPEG / HTTP):', 'http://192.168.1.150:8080/stream');
+      if (url) {
+        const v = document.getElementById('cle-webcam-preview');
+        const p = document.getElementById('cle-cam-placeholder');
+        const img = document.getElementById('cle-mjpeg-preview');
+        v.style.display = 'none';
+        img.src = url;
+        img.style.display = 'block';
+        p.style.display = 'none';
+        this.notify(`Connected to IP camera at ${url}`, 'ok');
+      }
+    };
+
+    document.getElementById('cle-cam-stop').onclick = () => {
+      const v = document.getElementById('cle-webcam-preview');
+      const p = document.getElementById('cle-cam-placeholder');
+      const img = document.getElementById('cle-mjpeg-preview');
+      if (this.cameraStream) {
+        this.cameraStream.getTracks().forEach(t => t.stop());
+        this.cameraStream = null;
+      }
+      v.style.display = 'none';
+      img.style.display = 'none';
+      img.src = '';
+      p.style.display = 'flex';
+      this.notify('Camera stopped.');
+    };
+
+    // Console Send
+    const sendInput = () => {
+      const inp = document.getElementById('cle-man-gcode-input');
+      if (inp && inp.value.trim()) {
+        this.fluidnc.sendGCode(inp.value.trim());
+        inp.value = '';
+      }
+    };
+    document.getElementById('cle-man-send-cmd').onclick = sendInput;
+    document.getElementById('cle-man-gcode-input').onkeydown = (e) => {
+      if (e.key === 'Enter') sendInput();
+    };
   }
 
   openModal(type) {
@@ -1795,14 +2164,21 @@ class CLEBridge {
             </div>
             <div style="display:flex; gap:10px;">
               <label><input type="checkbox" id="cfg-inv-rx" ${m.design.invertRX?'checked':''}> Invert X</label>
-              <label><input type="checkbox" id="cfg-inv-ry" ${m.design.invertRY?'checked':''}> Invert Y</label>
+              <label><input type="checkbox" id="cfg-inv-ry" ${m.design.invertRY?'checked':''}> Invert Y (Pan Up/Down)</label>
             </div>
           </div>
         </div>
 
-        <!-- Live Button Test Strip -->
+        <!-- Live D-Pad Cross Button & Button Strip -->
         <div style="margin-top:8px;">
-          <div style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--ink-2); margin-bottom:4px;">Buttons Live Monitor (press on controller):</div>
+          <div style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--ink-2); margin-bottom:4px;">Live Cross Button (D-Pad) & Button Monitor:</div>
+          <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+            <span style="font-size:11px; font-weight:700;">D-Pad: </span>
+            <span id="cle-dpad-up-tag" style="padding:2px 8px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-family:var(--f-mono);">Up &uarr;</span>
+            <span id="cle-dpad-down-tag" style="padding:2px 8px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-family:var(--f-mono);">Down &darr;</span>
+            <span id="cle-dpad-left-tag" style="padding:2px 8px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-family:var(--f-mono);">Left &larr;</span>
+            <span id="cle-dpad-right-tag" style="padding:2px 8px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-family:var(--f-mono);">Right &rarr;</span>
+          </div>
           <div id="cle-live-btns" style="display:flex; gap:4px; flex-wrap:wrap;">
             ${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17].map(i => `<span id="cle-btn-tag-${i}" style="padding:2px 6px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-size:10px; font-family:var(--f-mono);">B${i}</span>`).join('')}
           </div>
@@ -1825,29 +2201,6 @@ class CLEBridge {
           <div class="cle-form-row">
             <label>Zoom Speed:</label>
             <input type="range" id="cfg-zoom-speed" min="0.5" max="2.5" step="0.1" value="${m.design.zoomSpeed || 1.0}">
-          </div>
-        </div>
-
-        <!-- Button Mapping Assignments -->
-        <div class="cle-joycon-panel" style="margin-top:8px;">
-          <div class="cle-joycon-title">Button Actions Mapping</div>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-            <div class="cle-form-row">
-              <label>Toggle Mode (Design/Run):</label>
-              <select class="cle-select" id="cfg-btn-mode">${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(b => `<option value="${b}" ${m.buttons.toggleMode===b?'selected':''}>Button ${b} (Plus/Start)</option>`).join('')}</select>
-            </div>
-            <div class="cle-form-row">
-              <label>Zero WCS (A Button):</label>
-              <select class="cle-select" id="cfg-btn-zero">${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(b => `<option value="${b}" ${m.buttons.zeroWCS===b?'selected':''}>Button ${b} (A)</option>`).join('')}</select>
-            </div>
-            <div class="cle-form-row">
-              <label>Feed Hold / Pause (B):</label>
-              <select class="cle-select" id="cfg-btn-hold">${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(b => `<option value="${b}" ${m.buttons.feedHold===b?'selected':''}>Button ${b} (B)</option>`).join('')}</select>
-            </div>
-            <div class="cle-form-row">
-              <label>Touch Plate Probe (X):</label>
-              <select class="cle-select" id="cfg-btn-probe">${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(b => `<option value="${b}" ${m.buttons.touchProbe===b?'selected':''}>Button ${b} (X)</option>`).join('')}</select>
-            </div>
           </div>
         </div>
       `;
@@ -2031,7 +2384,7 @@ class CLEBridge {
   }
 
   bindGamepadModalRealtime() {
-    this.gamepad.onFrameCallback = (gp, lx, ly, rx, ry) => {
+    this.gamepad.onFrameCallback = (gp, lx, ly, rx, ry, dpad) => {
       const nameEl = document.getElementById('cle-modal-gp-name');
       const lxEl = document.getElementById('cle-live-lx');
       const lyEl = document.getElementById('cle-live-ly');
@@ -2043,6 +2396,21 @@ class CLEBridge {
       if (lyEl) lyEl.textContent = ly.toFixed(2);
       if (rxEl) rxEl.textContent = rx.toFixed(2);
       if (ryEl) ryEl.textContent = ry.toFixed(2);
+
+      // D-Pad Cross Button Monitor
+      if (dpad) {
+        const updateTag = (id, active) => {
+          const el = document.getElementById(id);
+          if (el) {
+            el.style.background = active ? 'var(--ok)' : 'var(--panel-2)';
+            el.style.color = active ? '#fff' : 'inherit';
+          }
+        };
+        updateTag('cle-dpad-up-tag', dpad.dpadUp);
+        updateTag('cle-dpad-down-tag', dpad.dpadDown);
+        updateTag('cle-dpad-left-tag', dpad.dpadLeft);
+        updateTag('cle-dpad-right-tag', dpad.dpadRight);
+      }
 
       // Light up buttons on live test strip
       gp.buttons.forEach((btn, idx) => {
@@ -2068,11 +2436,6 @@ class CLEBridge {
     m.design.invertLY = document.getElementById('cfg-inv-ly').checked;
     m.design.invertRX = document.getElementById('cfg-inv-rx').checked;
     m.design.invertRY = document.getElementById('cfg-inv-ry').checked;
-
-    m.buttons.toggleMode = parseInt(document.getElementById('cfg-btn-mode').value, 10);
-    m.buttons.zeroWCS = parseInt(document.getElementById('cfg-btn-zero').value, 10);
-    m.buttons.feedHold = parseInt(document.getElementById('cfg-btn-hold').value, 10);
-    m.buttons.touchProbe = parseInt(document.getElementById('cfg-btn-probe').value, 10);
 
     this.gamepad.saveMapping();
   }

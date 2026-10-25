@@ -1,6 +1,6 @@
 /**
- * CLEJS - Master Extension Bootstrapper (V2)
- * Mounts into JumpStart 3D native DOM and Advanced Mode Ribbon
+ * CLEJS - Master Extension Bootstrapper (V3)
+ * Advanced Mode Ribbon, Manual CNC/Laser Control Center, Live Remote Camera Feed
  */
 
 import { CLEGamepadEngine } from './cle_gamepad.js';
@@ -14,7 +14,7 @@ import { CLESlicerEngine } from './cle_slicer.js';
 
 class CLEBridge {
   constructor() {
-    this.version = '1.1.0';
+    this.version = '1.2.0';
     this.vault = new CLEVault(this);
     this.fluidnc = new CLEFluidNCClient(this);
     this.gamepad = new CLEGamepadEngine(this);
@@ -25,6 +25,7 @@ class CLEBridge {
     this.slicer = new CLESlicerEngine(this);
 
     this.activeModal = null;
+    this.cameraStream = null;
   }
 
   notify(message, type = 'info') {
@@ -85,7 +86,7 @@ class CLEBridge {
       <span class="cle-badge" id="cle-fluid-badge">FluidNC: Offline</span>
       <span>CLE Suite</span>
     `;
-    btn.onclick = () => this.openModal('gamepad');
+    btn.onclick = () => this.openManualControlCenter();
     topbar.appendChild(btn);
   }
 
@@ -103,9 +104,10 @@ class CLEBridge {
     ]);
 
     // 2. Controller Section
-    m("Switch Pad", "", [
-      { id: "cle-r-gp-mode", label: this.gamepad.mode === "design" ? "Design 3D" : "Run Pendant", title: "Toggle Switch Controller Mode", icon: "motion", pressed: this.gamepad.mode === "run", fn: () => this.gamepad.toggleMode() },
-      { id: "cle-r-gp-remap", label: "Controller Setup", title: "Configure & Test Controller Mapping", icon: "settings", fn: () => this.openModal("gamepad") }
+    m("Manual Control", "", [
+      { id: "cle-r-gp-mode", label: this.gamepad.mode === "design" ? "Design 3D" : "Manual CNC/Laser", title: "Toggle Switch Controller Mode", icon: "motion", pressed: this.gamepad.mode === "manual", fn: () => this.gamepad.toggleMode() },
+      { id: "cle-r-manual-hub", label: "Control Center", title: "Open Manual CNC/Laser Control & Camera Feed", icon: "inspect", fn: () => this.openManualControlCenter() },
+      { id: "cle-r-gp-remap", label: "Controller Setup", title: "Configure Switch Controller Buttons", icon: "settings", fn: () => this.openModal("gamepad") }
     ]);
 
     // 3. 4th Axis & Slicer
@@ -142,6 +144,198 @@ class CLEBridge {
       </div>
     `;
     s.append(droDiv);
+  }
+
+  // --- Pop-up Manual CNC / Laser Control Center ---
+  openManualControlCenter() {
+    let hub = document.getElementById('cle-manual-hub');
+    if (hub) {
+      hub.style.display = 'flex';
+      return;
+    }
+
+    hub = document.createElement('div');
+    hub.id = 'cle-manual-hub';
+    hub.style.cssText = `
+      position: fixed;
+      top: 90px;
+      right: 20px;
+      width: 440px;
+      max-height: 85vh;
+      background: var(--panel);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      box-shadow: 0 12px 36px var(--shadow);
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font: 12px/1.3 var(--f-ui);
+    `;
+
+    hub.innerHTML = `
+      <div class="cle-modal-header" style="cursor:move; padding:8px 12px;">
+        <span>Manual CNC / Laser Mode (Live Control)</span>
+        <button class="cle-modal-close" id="cle-man-close">&times;</button>
+      </div>
+
+      <div style="padding:12px; overflow-y:auto; display:flex; flex-direction:column; gap:10px;">
+        <!-- Soft Limits & Safety Status -->
+        <div style="background:var(--paper); padding:8px 12px; border-radius:4px; border:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <span class="cle-badge connected" id="cle-softlimit-badge">Soft-Limits: Active</span>
+            <span style="font-size:10px; color:var(--ink-2); margin-left:6px;">Z &ge; 0.1mm | X: 0-595 | Y: 0-495</span>
+          </div>
+          <div style="font-weight:700; color:var(--accent);" id="cle-man-step-val">${this.gamepad.stepSize} mm</div>
+        </div>
+
+        <!-- High-Contrast DRO Readout -->
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:6px; background:rgba(0,0,0,0.4); padding:10px; border-radius:6px; color:#fff; font-family:var(--f-mono); text-align:center;">
+          <div><div style="color:var(--accent-2); font-size:10px;">X (mm)</div><div style="font-size:16px; font-weight:700;" id="cle-man-dro-x">${this.fluidnc.wpos.X.toFixed(2)}</div></div>
+          <div><div style="color:var(--accent-2); font-size:10px;">Y (mm)</div><div style="font-size:16px; font-weight:700;" id="cle-man-dro-y">${this.fluidnc.wpos.Y.toFixed(2)}</div></div>
+          <div><div style="color:var(--accent-2); font-size:10px;">Z (mm)</div><div style="font-size:16px; font-weight:700;" id="cle-man-dro-z">${this.fluidnc.wpos.Z.toFixed(2)}</div></div>
+          <div><div style="color:var(--accent-2); font-size:10px;">A (deg)</div><div style="font-size:16px; font-weight:700;" id="cle-man-dro-a">${this.fluidnc.wpos.A.toFixed(1)}</div></div>
+        </div>
+
+        <!-- Manual Tool Controls (Spindle / Laser) -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:6px;">Spindle & Laser Manual Control</div>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button class="cle-btn" id="cle-man-btn-spindle">Spindle: OFF</button>
+            <input class="cle-input" id="cle-man-rpm" type="number" value="12000" style="width:70px;" title="Target Spindle RPM">
+            <span style="font-size:11px;">RPM</span>
+            <div style="height:16px; width:1px; background:var(--line);"></div>
+            <button class="cle-btn" id="cle-man-btn-laser">Laser: OFF</button>
+            <button class="cle-btn" id="cle-man-btn-pulse" title="1% power alignment pulse">1% Pulse</button>
+          </div>
+        </div>
+
+        <!-- G-Code Move Recorder -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:6px;">G-Code Sequence Recorder</div>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="display:flex; gap:6px;">
+              <button class="cle-btn" id="cle-man-btn-record">Record Moves</button>
+              <button class="cle-btn" id="cle-man-btn-export-rec">Export .NC</button>
+            </div>
+            <span id="cle-man-rec-count" style="font-family:var(--f-mono); font-size:11px;">Recorded: 0 lines</span>
+          </div>
+        </div>
+
+        <!-- Live Camera Feed Container -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:6px;">Remote Workpiece Camera Feed</div>
+          <video id="cle-webcam-preview" autoplay playsinline style="display:none; width:100%; height:160px; border-radius:4px; object-fit:cover; background:#000;"></video>
+          <img id="cle-mjpeg-preview" style="display:none; width:100%; height:160px; border-radius:4px; object-fit:cover; background:#000;">
+          <div id="cle-cam-placeholder" style="height:100px; display:flex; align-items:center; justify-content:center; background:var(--paper); border:1px dashed var(--line); border-radius:4px; color:var(--ink-3); text-align:center; padding:10px;">
+            Camera inactive. Click USB Webcam or Network IP Cam to stream workpiece.
+          </div>
+          <div style="display:flex; gap:6px; margin-top:6px;">
+            <button class="cle-btn" id="cle-cam-usb">USB Webcam</button>
+            <button class="cle-btn" id="cle-cam-ip">Network IP Cam</button>
+            <button class="cle-btn" id="cle-cam-stop">Stop</button>
+          </div>
+        </div>
+
+        <!-- Live G-Code Terminal Console -->
+        <div class="cle-joycon-panel" style="padding:8px 10px;">
+          <div class="cle-joycon-title" style="margin-bottom:4px;">Live FluidNC Console</div>
+          <div id="cle-man-console-body" style="height:90px; overflow-y:auto; background:var(--block); color:#5fc27f; padding:6px; border-radius:4px; font-family:var(--f-mono); font-size:10px;">
+            <div>[CLE] Manual Console Ready.</div>
+          </div>
+          <div style="display:flex; gap:6px; margin-top:6px;">
+            <input class="cle-input" id="cle-man-gcode-input" placeholder="Type G-Code (e.g. G0 X10 Y10)..." style="flex:1;">
+            <button class="cle-btn" id="cle-man-send-cmd">Send</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(hub);
+
+    // Wire Events
+    document.getElementById('cle-man-close').onclick = () => { hub.style.display = 'none'; };
+    
+    // Spindle / Laser
+    document.getElementById('cle-man-btn-spindle').onclick = () => {
+      const rpm = parseInt(document.getElementById('cle-man-rpm').value, 10) || 12000;
+      this.fluidnc.toggleSpindle(rpm);
+    };
+    document.getElementById('cle-man-btn-laser').onclick = () => {
+      this.fluidnc.toggleLaser(80);
+    };
+    document.getElementById('cle-man-btn-pulse').onclick = () => {
+      this.fluidnc.pulseLaserFraming(2);
+    };
+
+    // Recorder
+    document.getElementById('cle-man-btn-record').onclick = () => {
+      this.fluidnc.toggleGCodeRecorder();
+    };
+    document.getElementById('cle-man-btn-export-rec').onclick = () => {
+      this.fluidnc.exportRecordedGCode();
+    };
+
+    // Camera Feed
+    document.getElementById('cle-cam-usb').onclick = async () => {
+      const v = document.getElementById('cle-webcam-preview');
+      const p = document.getElementById('cle-cam-placeholder');
+      const img = document.getElementById('cle-mjpeg-preview');
+      img.style.display = 'none';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+        this.cameraStream = stream;
+        v.srcObject = stream;
+        v.style.display = 'block';
+        p.style.display = 'none';
+        this.notify('USB Webcam stream connected.', 'ok');
+      } catch (err) {
+        this.notify(`Webcam error: ${err.message}`, 'error');
+      }
+    };
+
+    document.getElementById('cle-cam-ip').onclick = () => {
+      const url = prompt('Enter Network Camera Stream URL (MJPEG / HTTP):', 'http://192.168.1.150:8080/stream');
+      if (url) {
+        const v = document.getElementById('cle-webcam-preview');
+        const p = document.getElementById('cle-cam-placeholder');
+        const img = document.getElementById('cle-mjpeg-preview');
+        v.style.display = 'none';
+        img.src = url;
+        img.style.display = 'block';
+        p.style.display = 'none';
+        this.notify(`Connected to IP camera at ${url}`, 'ok');
+      }
+    };
+
+    document.getElementById('cle-cam-stop').onclick = () => {
+      const v = document.getElementById('cle-webcam-preview');
+      const p = document.getElementById('cle-cam-placeholder');
+      const img = document.getElementById('cle-mjpeg-preview');
+      if (this.cameraStream) {
+        this.cameraStream.getTracks().forEach(t => t.stop());
+        this.cameraStream = null;
+      }
+      v.style.display = 'none';
+      img.style.display = 'none';
+      img.src = '';
+      p.style.display = 'flex';
+      this.notify('Camera stopped.');
+    };
+
+    // Console Send
+    const sendInput = () => {
+      const inp = document.getElementById('cle-man-gcode-input');
+      if (inp && inp.value.trim()) {
+        this.fluidnc.sendGCode(inp.value.trim());
+        inp.value = '';
+      }
+    };
+    document.getElementById('cle-man-send-cmd').onclick = sendInput;
+    document.getElementById('cle-man-gcode-input').onkeydown = (e) => {
+      if (e.key === 'Enter') sendInput();
+    };
   }
 
   openModal(type) {
@@ -189,14 +383,21 @@ class CLEBridge {
             </div>
             <div style="display:flex; gap:10px;">
               <label><input type="checkbox" id="cfg-inv-rx" ${m.design.invertRX?'checked':''}> Invert X</label>
-              <label><input type="checkbox" id="cfg-inv-ry" ${m.design.invertRY?'checked':''}> Invert Y</label>
+              <label><input type="checkbox" id="cfg-inv-ry" ${m.design.invertRY?'checked':''}> Invert Y (Pan Up/Down)</label>
             </div>
           </div>
         </div>
 
-        <!-- Live Button Test Strip -->
+        <!-- Live D-Pad Cross Button & Button Strip -->
         <div style="margin-top:8px;">
-          <div style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--ink-2); margin-bottom:4px;">Buttons Live Monitor (press on controller):</div>
+          <div style="font-size:11px; font-weight:600; text-transform:uppercase; color:var(--ink-2); margin-bottom:4px;">Live Cross Button (D-Pad) & Button Monitor:</div>
+          <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+            <span style="font-size:11px; font-weight:700;">D-Pad: </span>
+            <span id="cle-dpad-up-tag" style="padding:2px 8px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-family:var(--f-mono);">Up &uarr;</span>
+            <span id="cle-dpad-down-tag" style="padding:2px 8px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-family:var(--f-mono);">Down &darr;</span>
+            <span id="cle-dpad-left-tag" style="padding:2px 8px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-family:var(--f-mono);">Left &larr;</span>
+            <span id="cle-dpad-right-tag" style="padding:2px 8px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-family:var(--f-mono);">Right &rarr;</span>
+          </div>
           <div id="cle-live-btns" style="display:flex; gap:4px; flex-wrap:wrap;">
             ${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17].map(i => `<span id="cle-btn-tag-${i}" style="padding:2px 6px; border-radius:3px; background:var(--panel-2); border:1px solid var(--line); font-size:10px; font-family:var(--f-mono);">B${i}</span>`).join('')}
           </div>
@@ -219,29 +420,6 @@ class CLEBridge {
           <div class="cle-form-row">
             <label>Zoom Speed:</label>
             <input type="range" id="cfg-zoom-speed" min="0.5" max="2.5" step="0.1" value="${m.design.zoomSpeed || 1.0}">
-          </div>
-        </div>
-
-        <!-- Button Mapping Assignments -->
-        <div class="cle-joycon-panel" style="margin-top:8px;">
-          <div class="cle-joycon-title">Button Actions Mapping</div>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-            <div class="cle-form-row">
-              <label>Toggle Mode (Design/Run):</label>
-              <select class="cle-select" id="cfg-btn-mode">${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(b => `<option value="${b}" ${m.buttons.toggleMode===b?'selected':''}>Button ${b} (Plus/Start)</option>`).join('')}</select>
-            </div>
-            <div class="cle-form-row">
-              <label>Zero WCS (A Button):</label>
-              <select class="cle-select" id="cfg-btn-zero">${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(b => `<option value="${b}" ${m.buttons.zeroWCS===b?'selected':''}>Button ${b} (A)</option>`).join('')}</select>
-            </div>
-            <div class="cle-form-row">
-              <label>Feed Hold / Pause (B):</label>
-              <select class="cle-select" id="cfg-btn-hold">${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(b => `<option value="${b}" ${m.buttons.feedHold===b?'selected':''}>Button ${b} (B)</option>`).join('')}</select>
-            </div>
-            <div class="cle-form-row">
-              <label>Touch Plate Probe (X):</label>
-              <select class="cle-select" id="cfg-btn-probe">${[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map(b => `<option value="${b}" ${m.buttons.touchProbe===b?'selected':''}>Button ${b} (X)</option>`).join('')}</select>
-            </div>
           </div>
         </div>
       `;
@@ -425,7 +603,7 @@ class CLEBridge {
   }
 
   bindGamepadModalRealtime() {
-    this.gamepad.onFrameCallback = (gp, lx, ly, rx, ry) => {
+    this.gamepad.onFrameCallback = (gp, lx, ly, rx, ry, dpad) => {
       const nameEl = document.getElementById('cle-modal-gp-name');
       const lxEl = document.getElementById('cle-live-lx');
       const lyEl = document.getElementById('cle-live-ly');
@@ -437,6 +615,21 @@ class CLEBridge {
       if (lyEl) lyEl.textContent = ly.toFixed(2);
       if (rxEl) rxEl.textContent = rx.toFixed(2);
       if (ryEl) ryEl.textContent = ry.toFixed(2);
+
+      // D-Pad Cross Button Monitor
+      if (dpad) {
+        const updateTag = (id, active) => {
+          const el = document.getElementById(id);
+          if (el) {
+            el.style.background = active ? 'var(--ok)' : 'var(--panel-2)';
+            el.style.color = active ? '#fff' : 'inherit';
+          }
+        };
+        updateTag('cle-dpad-up-tag', dpad.dpadUp);
+        updateTag('cle-dpad-down-tag', dpad.dpadDown);
+        updateTag('cle-dpad-left-tag', dpad.dpadLeft);
+        updateTag('cle-dpad-right-tag', dpad.dpadRight);
+      }
 
       // Light up buttons on live test strip
       gp.buttons.forEach((btn, idx) => {
@@ -462,11 +655,6 @@ class CLEBridge {
     m.design.invertLY = document.getElementById('cfg-inv-ly').checked;
     m.design.invertRX = document.getElementById('cfg-inv-rx').checked;
     m.design.invertRY = document.getElementById('cfg-inv-ry').checked;
-
-    m.buttons.toggleMode = parseInt(document.getElementById('cfg-btn-mode').value, 10);
-    m.buttons.zeroWCS = parseInt(document.getElementById('cfg-btn-zero').value, 10);
-    m.buttons.feedHold = parseInt(document.getElementById('cfg-btn-hold').value, 10);
-    m.buttons.touchProbe = parseInt(document.getElementById('cfg-btn-probe').value, 10);
 
     this.gamepad.saveMapping();
   }

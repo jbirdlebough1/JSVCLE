@@ -1,28 +1,22 @@
 /**
- * CLEJS - Nintendo Switch Gamepad Subsystem (V2)
- * Native HTML5 Gamepad API integration for JumpStart 3D
- * Supports: Nintendo Switch Joy-Cons, Pro Controller, and Standard Gamepads
+ * CLEJS - Nintendo Switch Gamepad Subsystem (V3)
+ * Full Manual CNC/Laser Control, Viewport 3D Orbit & Pan with D-Pad Hat Support
  */
 
 export class CLEGamepadEngine {
   constructor(bridge) {
     this.bridge = bridge;
     this.gamepadIndex = null;
-    this.mode = 'design'; // 'design' (Viewport Orbit/Pan) | 'run' (CNC/Laser Jog & Setup)
+    this.mode = 'design'; // 'design' (Viewport Orbit/Pan) | 'manual' (Manual CNC/Laser Control)
     this.stepSize = 1.0;  // 0.01, 0.1, 1.0, 5.0, 10.0 mm
     this.activeAxis = 'Z';
-    this.recordingMacro = false;
-    this.recordedMacro = [];
     this.deadzone = 0.15;
     this.lastButtonStates = {};
     this.lastJogTime = 0;
-    this.jogThrottleMs = 60; // Throttle streaming jog rate
+    this.jogThrottleMs = 70; // Throttle streaming jog rate
 
-    // User Configurable Mapping
     this.mapping = this.loadMapping();
-
     this.initListeners();
-    // Start polling immediately so pre-connected controllers respond without waiting for events
     this.startPolling();
   }
 
@@ -50,16 +44,16 @@ export class CLEGamepadEngine {
       buttons: {
         toggleMode: 9,      // Plus (+)
         macroRecord: 8,     // Minus (-)
-        zeroWCS: 0,         // A (or B depending on layout)
+        zeroWCS: 0,         // A
         feedHold: 1,        // B
         touchProbe: 2,      // X
         cycleAxis: 3,       // Y
-        stepUp: 12,         // D-Up
-        stepDown: 13,       // D-Down
-        viewTop: 12,        // D-Up (Design)
-        viewFront: 13,      // D-Down (Design)
-        viewLeft: 14,       // D-Left (Design)
-        viewIso: 15         // D-Right (Design)
+        spindleToggle: 4,   // L
+        laserToggle: 5,     // R
+        dpadUp: 12,
+        dpadDown: 13,
+        dpadLeft: 14,
+        dpadRight: 15
       }
     };
     try {
@@ -124,7 +118,6 @@ export class CLEGamepadEngine {
     if (this.gamepadIndex !== null && gps[this.gamepadIndex]) {
       return gps[this.gamepadIndex];
     }
-    // Scan for any connected gamepad
     for (let i = 0; i < gps.length; i++) {
       if (gps[i]) {
         if (this.gamepadIndex !== i) {
@@ -145,19 +138,26 @@ export class CLEGamepadEngine {
   }
 
   toggleMode() {
-    this.mode = this.mode === 'design' ? 'run' : 'design';
+    this.mode = this.mode === 'design' ? 'manual' : 'design';
     const modeBtn = document.getElementById('cle-gp-mode-toggle');
     const ribbonBtn = document.getElementById('cle-r-gp-mode');
-    const label = this.mode === 'design' ? 'Mode: Design 3D' : 'Mode: Run CNC/Laser';
+    const label = this.mode === 'design' ? 'Mode: Design 3D' : 'Mode: Manual CNC/Laser';
+    
     if (modeBtn) {
       modeBtn.textContent = label;
-      modeBtn.classList.toggle('active', this.mode === 'run');
+      modeBtn.classList.toggle('active', this.mode === 'manual');
     }
     if (ribbonBtn) {
-      ribbonBtn.querySelector('span').textContent = this.mode === 'design' ? 'Design 3D' : 'Run Pendant';
-      ribbonBtn.setAttribute('aria-pressed', this.mode === 'run' ? 'true' : 'false');
+      ribbonBtn.querySelector('span').textContent = this.mode === 'design' ? 'Design 3D' : 'Manual CNC/Laser';
+      ribbonBtn.setAttribute('aria-pressed', this.mode === 'manual' ? 'true' : 'false');
     }
-    this.bridge.notify(`Switch Controller: ${this.mode === 'design' ? 'DESIGN 3D VIEWPORT' : 'RUN CNC/LASER PENDANT'}`);
+
+    if (this.mode === 'manual') {
+      this.bridge.openManualControlCenter();
+      this.bridge.notify('Entered MANUAL CNC/LASER MODE. Soft-limits active (Z >= 0.1mm)', 'ok');
+    } else {
+      this.bridge.notify('Entered DESIGN 3D VIEWPORT MODE');
+    }
   }
 
   processGamepadFrame() {
@@ -169,28 +169,48 @@ export class CLEGamepadEngine {
 
     this.updateStatusBadge(true, gp.id);
 
-    // Standard Gamepad Axes: 0: LX, 1: LY, 2: RX, 3: RY
     const lx = this.applyDeadzone(gp.axes[0] || 0);
     const ly = this.applyDeadzone(gp.axes[1] || 0);
     const rx = this.applyDeadzone(gp.axes[2] || 0);
     const ry = this.applyDeadzone(gp.axes[3] || 0);
 
-    // Update real-time remap modal if open
+    // Read D-Pad cross button (support standard buttons 12-15 or d-pad axes)
+    const dpadUp = this.isDpadPressed(gp, 12, 'up');
+    const dpadDown = this.isDpadPressed(gp, 13, 'down');
+    const dpadLeft = this.isDpadPressed(gp, 14, 'left');
+    const dpadRight = this.isDpadPressed(gp, 15, 'right');
+
     if (this.onFrameCallback) {
-      this.onFrameCallback(gp, lx, ly, rx, ry);
+      this.onFrameCallback(gp, lx, ly, rx, ry, { dpadUp, dpadDown, dpadLeft, dpadRight });
     }
 
-    // Plus (+) Button: Toggle Design / Run Mode
+    // Plus (+) Button: Toggle Design / Manual CNC/Laser Mode
     const modeToggleBtn = this.mapping.buttons.toggleMode ?? 9;
     if (this.isJustPressed(gp, modeToggleBtn)) {
       this.toggleMode();
     }
 
     if (this.mode === 'design') {
-      this.processDesignMode(lx, ly, rx, ry, gp);
+      this.processDesignMode(lx, ly, rx, ry, gp, { dpadUp, dpadDown, dpadLeft, dpadRight });
     } else {
-      this.processRunMode(lx, ly, rx, ry, gp);
+      this.processManualMode(lx, ly, rx, ry, gp, { dpadUp, dpadDown, dpadLeft, dpadRight });
     }
+  }
+
+  isDpadPressed(gp, btnIdx, dir) {
+    // 1. Direct button check
+    if (gp.buttons[btnIdx] && (gp.buttons[btnIdx].pressed || gp.buttons[btnIdx].value > 0.5)) {
+      return true;
+    }
+    // 2. Fallback to Hat/Axes (axes 4/5 or 6/7 on some controllers)
+    for (let a = 4; a < gp.axes.length; a++) {
+      const val = gp.axes[a];
+      if (dir === 'up' && val < -0.6) return true;
+      if (dir === 'down' && val > 0.6) return true;
+      if (dir === 'left' && val < -0.6) return true;
+      if (dir === 'right' && val > 0.6) return true;
+    }
+    return false;
   }
 
   isJustPressed(gp, btnIdx) {
@@ -201,13 +221,13 @@ export class CLEGamepadEngine {
     return isDown && !wasDown;
   }
 
-  processDesignMode(lx, ly, rx, ry, gp) {
+  processDesignMode(lx, ly, rx, ry, gp, dpad) {
     const app = window.app || window.xe;
     if (!app || !app.vp || !app.vp.view) return;
 
     let needsUpdate = false;
 
-    // 1. Left Stick: Spherical Orbit around target point
+    // 1. Left Stick: Spherical Orbit (Elevation & Azimuth)
     if (Math.abs(lx) > 0.02 || Math.abs(ly) > 0.02) {
       const orbitSpeed = this.mapping.design.orbitSpeed * 0.04;
       const azDelta = (this.mapping.design.invertLX ? -lx : lx) * orbitSpeed;
@@ -218,11 +238,12 @@ export class CLEGamepadEngine {
       needsUpdate = true;
     }
 
-    // 2. Right Stick: Smooth Viewport Panning (Up/Down/Left/Right)
+    // 2. Right Stick: Smooth Viewport Panning (Left/Right AND Up/Down)
     if (Math.abs(rx) > 0.02 || Math.abs(ry) > 0.02) {
       const panSpeed = this.mapping.design.panSpeed * 6;
+      // Invert sign appropriately: pushing UP (ry < 0) should pan viewport UP (dy > 0)
       const dx = (this.mapping.design.invertRX ? -rx : rx) * panSpeed;
-      const dy = (this.mapping.design.invertRY ? -ry : ry) * panSpeed;
+      const dy = (this.mapping.design.invertRY ? ry : -ry) * panSpeed;
 
       if (app.vp.panBy) {
         app.vp.panBy(-dx, dy);
@@ -230,7 +251,7 @@ export class CLEGamepadEngine {
       }
     }
 
-    // 3. Triggers ZL / ZR: Smooth Zoom In / Out
+    // 3. Triggers ZL / ZR: Smooth Zoom
     const zl = (gp.buttons[6]?.value || (gp.buttons[6]?.pressed ? 1 : 0));
     const zr = (gp.buttons[7]?.value || (gp.buttons[7]?.pressed ? 1 : 0));
     const zoomDelta = (zr - zl);
@@ -246,23 +267,23 @@ export class CLEGamepadEngine {
       if (app.vp.request) app.vp.request();
     }
 
-    // 4. D-Pad View Presets
-    if (this.isJustPressed(gp, this.mapping.buttons.viewTop ?? 12)) app.vp.setView && app.vp.setView('top');
-    if (this.isJustPressed(gp, this.mapping.buttons.viewFront ?? 13)) app.vp.setView && app.vp.setView('front');
-    if (this.isJustPressed(gp, this.mapping.buttons.viewLeft ?? 14)) app.vp.setView && app.vp.setView('left');
-    if (this.isJustPressed(gp, this.mapping.buttons.viewIso ?? 15)) app.vp.setView && app.vp.setView('iso');
+    // 4. Cross Button (D-Pad) in Design Mode: Snap Standard Views
+    if (this.isJustPressed(gp, 12)) app.vp.setView && app.vp.setView('top');
+    if (this.isJustPressed(gp, 13)) app.vp.setView && app.vp.setView('front');
+    if (this.isJustPressed(gp, 14)) app.vp.setView && app.vp.setView('left');
+    if (this.isJustPressed(gp, 15)) app.vp.setView && app.vp.setView('right');
 
     // 5. Fit All (B button / 0)
     if (this.isJustPressed(gp, 0)) app.fit && app.fit();
   }
 
-  processRunMode(lx, ly, rx, ry, gp) {
+  processManualMode(lx, ly, rx, ry, gp, dpad) {
     const fluid = this.bridge.fluidnc;
     if (!fluid) return;
 
-    // Step size cycling via D-Pad
-    if (this.isJustPressed(gp, this.mapping.buttons.stepUp ?? 12)) this.cycleStepSize(1);
-    if (this.isJustPressed(gp, this.mapping.buttons.stepDown ?? 13)) this.cycleStepSize(-1);
+    // Cross Button (D-Pad) in Manual Mode: Step Increment Cycle
+    if (this.isJustPressed(gp, 12)) this.cycleStepSize(1);
+    if (this.isJustPressed(gp, 13)) this.cycleStepSize(-1);
 
     const now = performance.now();
     if (now - this.lastJogTime > this.jogThrottleMs) {
@@ -280,7 +301,7 @@ export class CLEGamepadEngine {
         jogged = true;
       }
 
-      // Right Stick: Z Axis (vertical) & A Axis (rotary horizontal)
+      // Right Stick: Z Axis (vertical) & A Axis (rotary)
       if (Math.abs(ry) > 0.05) {
         const signZ = this.mapping.run.invertZ ? -1 : 1;
         const dz = (-ry * this.stepSize * signZ).toFixed(3);
@@ -298,7 +319,6 @@ export class CLEGamepadEngine {
         this.lastJogTime = now;
         const feed = deltas.Z ? this.mapping.run.jogFeedZ : this.mapping.run.jogFeedXY;
         fluid.jogAxisRelative(deltas, feed);
-        this.recordMacroStep(`$J=G91 G21 ${Object.entries(deltas).map(([k,v])=>`${k}${v}`).join(' ')} F${feed}`);
       }
     }
 
@@ -316,7 +336,8 @@ export class CLEGamepadEngine {
 
     // Button 2 (X): Touch Plate Probe
     if (this.isJustPressed(gp, this.mapping.buttons.touchProbe ?? 2)) {
-      this.triggerProbeCycle();
+      fluid.streamGCodeLines(['G21 G91', 'G38.2 Z-30 F75', 'G92 Z15.0', 'G0 Z5']);
+      this.bridge.notify('Executing Touch Plate Probe (15mm plate)', 'ok');
     }
 
     // Button 3 (Y): Cycle Active Axis (X -> Y -> Z -> A)
@@ -327,9 +348,17 @@ export class CLEGamepadEngine {
       this.bridge.notify(`Active pendant axis: ${this.activeAxis}`);
     }
 
-    // Button 8 (Minus): Toggle Teach Pendant Macro Recording
+    // Shoulder Buttons: Spindle / Laser Toggle
+    if (this.isJustPressed(gp, this.mapping.buttons.spindleToggle ?? 4)) {
+      fluid.toggleSpindle();
+    }
+    if (this.isJustPressed(gp, this.mapping.buttons.laserToggle ?? 5)) {
+      fluid.toggleLaser();
+    }
+
+    // Button 8 (Minus): Toggle G-Code Move Recording
     if (this.isJustPressed(gp, this.mapping.buttons.macroRecord ?? 8)) {
-      this.toggleMacroRecording();
+      fluid.toggleGCodeRecorder();
     }
   }
 
@@ -339,38 +368,9 @@ export class CLEGamepadEngine {
     idx = Math.max(0, Math.min(steps.length - 1, idx + dir));
     this.stepSize = steps[idx];
     const el = document.getElementById('cle-step-val');
+    const hudStep = document.getElementById('cle-man-step-val');
     if (el) el.textContent = `${this.stepSize} mm`;
+    if (hudStep) hudStep.textContent = `${this.stepSize} mm`;
     this.bridge.notify(`Jog increment: ${this.stepSize} mm`);
-  }
-
-  triggerProbeCycle() {
-    const fluid = this.bridge.fluidnc;
-    if (!fluid || !fluid.isConnected) {
-      this.bridge.notify('Connect to FluidNC first before probing touch plate.', 'error');
-      return;
-    }
-    const plateThick = 15.0; // mm
-    const gcode = ['G21 G91', 'G38.2 Z-30 F75', `G92 Z${plateThick}`, 'G0 Z5'];
-    fluid.streamGCodeLines(gcode);
-    this.bridge.notify(`Executing Touch Plate Probe (${plateThick}mm plate)`, 'ok');
-  }
-
-  toggleMacroRecording() {
-    this.recordingMacro = !this.recordingMacro;
-    if (this.recordingMacro) {
-      this.recordedMacro = [];
-      this.bridge.notify('Macro Recording: STARTED (moving axes will record steps)', 'ok');
-    } else {
-      this.bridge.notify(`Macro Recording: STOPPED (${this.recordedMacro.length} moves saved)`, 'ok');
-      if (this.recordedMacro.length > 0) {
-        this.bridge.vault.saveMacro(`Teach_Macro_${Date.now()}`, this.recordedMacro.join('\n'));
-      }
-    }
-  }
-
-  recordMacroStep(cmd) {
-    if (this.recordingMacro) {
-      this.recordedMacro.push(cmd);
-    }
   }
 }
