@@ -27,3 +27,4 @@ except Exception as e:
     print("Error listing targets:", e)
 finally:
     proc.terminate()
+

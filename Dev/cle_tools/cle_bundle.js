@@ -1016,16 +1016,21 @@ class CLEFluidNCClient {
 
   // --- WebSocket Connection (FluidTouch 7" Head / FluidNC) ---
   connectWebSocket(ip = this.ip) {
-    let cleanIp = (ip || this.ip || '192.168.12.158').trim();
-    if (cleanIp === '192.168.12.150' || cleanIp === '192.168.1.150' || cleanIp === '192.168.1.100') {
-      cleanIp = '192.168.12.158';
+    let rawInput = (ip || this.ip || '192.168.12.158').trim();
+    // Strip protocols and trailing slashes
+    let host = rawInput.replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').trim();
+
+    // Clean up stale IPs
+    if (host === '192.168.12.150' || host === '192.168.1.150' || host === '192.168.1.100') {
+      host = '192.168.12.158';
     }
-    this.ip = cleanIp;
-    localStorage.setItem('cle.fluidnc.ip', cleanIp);
+
+    this.ip = host;
+    localStorage.setItem('cle.fluidnc.ip', host);
     if (this.bridge && this.bridge.vault) {
       const mach = this.bridge.vault.getActiveMachine();
-      if (mach && mach.wifiIP !== cleanIp) {
-        mach.wifiIP = cleanIp;
+      if (mach && mach.wifiIP !== host) {
+        mach.wifiIP = host;
         this.bridge.vault.saveMachine(mach);
       }
     }
@@ -1035,57 +1040,78 @@ class CLEFluidNCClient {
       this.socket = null;
     }
 
-    // Probe port 81 (raw FluidNC websocket); fallback to port 80 (/websocket) if port 81 is closed/unreachable
-    this._tryWebSocketConnect(cleanIp, 81, () => {
-      console.log(`[CLE FluidNC] Port 81 unreachable on ${cleanIp}, trying ws://${cleanIp}:80/websocket...`);
-      this._tryWebSocketConnect(cleanIp, 80);
-    });
+    // Map mDNS hostname 'ttcwifi.local' or 'ttcwifi' to resolved IP 192.168.12.158 for WebSocket
+    // (Chromium cannot resolve .local mDNS domains for WebSocket connections)
+    let wsHost = host;
+    if (host.toLowerCase() === 'ttcwifi.local' || host.toLowerCase() === 'ttcwifi' || host.toLowerCase() === 'ttc6050') {
+      wsHost = '192.168.12.158';
+    }
+
+    // Candidate WebSocket URLs in priority order:
+    // 1. ws://${wsHost} (port 80 default, root path '/') -> Fastest connection for TwoTrees TTC6050 DLC32 MAX
+    // 2. ws://${wsHost}:81 -> FluidNC raw telnet/websocket port
+    // 3. ws://${wsHost}/websocket -> ESP32 Web Server websocket endpoint
+    const candidates = [
+      `ws://${wsHost}`,
+      `ws://${wsHost}:81`,
+      `ws://${wsHost}/websocket`
+    ];
+
+    this._probeWebSocketCandidates(candidates, 0, host);
   }
 
-  _tryWebSocketConnect(cleanIp, port, onFailFallback = null) {
-    const wsUrl = port === 80 ? `ws://${cleanIp}:80/websocket` : `ws://${cleanIp}:81`;
+  _probeWebSocketCandidates(candidates, index, displayHost) {
+    if (index >= candidates.length) {
+      this.bridge.notify(`Could not connect to FluidTouch/FluidNC at ${displayHost} via WebSocket`, 'error');
+      this.disconnect();
+      return;
+    }
+
+    const wsUrl = candidates[index];
     let connected = false;
     let connectTimeout = null;
 
     try {
       const ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
       this.socket = ws;
 
       connectTimeout = setTimeout(() => {
         if (!connected && ws.readyState !== WebSocket.OPEN) {
           try { ws.close(); } catch (e) {}
-          if (onFailFallback) {
-            onFailFallback();
-          } else {
-            this.bridge.notify(`Connection timeout connecting to ${cleanIp} (ports 81/80)`, 'error');
-            this.disconnect();
-          }
+          console.log(`[CLE FluidNC] Candidate ${wsUrl} timed out, trying next...`);
+          this._probeWebSocketCandidates(candidates, index + 1, displayHost);
         }
-      }, 4000);
+      }, 2500);
 
       ws.onopen = () => {
         connected = true;
         if (connectTimeout) clearTimeout(connectTimeout);
         this.isConnected = true;
         this.connectionType = 'websocket';
-        this.logConsole(`[SYSTEM] Connected to FluidTouch/FluidNC at ${cleanIp}:${port}.`);
-        this.bridge.notify(`Connected to FluidTouch/FluidNC at ${cleanIp} (port ${port})`, 'ok');
+        this.logConsole(`[SYSTEM] Connected to FluidTouch/FluidNC at ${displayHost} (${wsUrl}).`);
+        this.bridge.notify(`Connected to FluidTouch/FluidNC at ${displayHost}`, 'ok');
         this.updateConnectionUI(true);
         this.startStatusPolling();
       };
 
       ws.onmessage = (event) => {
-        this.handleIncomingData(event.data);
+        let data = event.data;
+        if (data instanceof ArrayBuffer) {
+          data = new TextDecoder().decode(data);
+        }
+        this.handleIncomingData(data);
       };
 
       ws.onerror = (err) => {
-        if (!connected && onFailFallback) {
+        if (!connected) {
           if (connectTimeout) clearTimeout(connectTimeout);
           try { ws.close(); } catch (e) {}
-          onFailFallback();
+          console.log(`[CLE FluidNC] Candidate ${wsUrl} error, trying next...`);
+          this._probeWebSocketCandidates(candidates, index + 1, displayHost);
           return;
         }
-        this.bridge.notify(`WebSocket error connecting to ${cleanIp}:${port}`, 'error');
+        this.bridge.notify(`WebSocket connection error on ${displayHost}`, 'error');
       };
 
       ws.onclose = () => {
@@ -1094,8 +1120,8 @@ class CLEFluidNCClient {
         }
       };
     } catch (err) {
-      if (onFailFallback) {
-        onFailFallback();
+      if (!connected) {
+        this._probeWebSocketCandidates(candidates, index + 1, displayHost);
       } else {
         this.bridge.notify(`WebSocket failed: ${err.message}`, 'error');
       }
@@ -1136,6 +1162,19 @@ class CLEFluidNCClient {
   }
 
   handleIncomingData(chunk) {
+    if (typeof chunk !== 'string') {
+      if (chunk instanceof ArrayBuffer) {
+        chunk = new TextDecoder().decode(chunk);
+      } else if (chunk && chunk.buffer instanceof ArrayBuffer) {
+        chunk = new TextDecoder().decode(chunk.buffer);
+      } else {
+        try {
+          chunk = String(chunk);
+        } catch (e) {
+          return;
+        }
+      }
+    }
     this.buffer += chunk;
     const lines = this.buffer.split('\n');
     this.buffer = lines.pop();
@@ -1572,6 +1611,7 @@ class CLEFluidNCClient {
 
   openFluidTouchWebGUI() {
     let cleanIp = (this.ip || '192.168.12.158').trim();
+    cleanIp = cleanIp.replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').trim();
     if (cleanIp === '192.168.12.150' || cleanIp === '192.168.1.150' || cleanIp === '192.168.1.100') {
       cleanIp = '192.168.12.158';
     }
@@ -4411,9 +4451,9 @@ class CLEBridge {
           if (currentIp === '192.168.12.150' || currentIp === '192.168.1.150' || currentIp === '192.168.1.100') {
             currentIp = '192.168.12.158';
           }
-          const ip = prompt("Enter FluidTouch 7\" / FluidNC IP:", currentIp);
+          const ip = prompt("Enter FluidTouch 7\" / FluidNC IP or Hostname (e.g. ttcwifi.local or 192.168.12.158):", currentIp);
           if (ip && ip.trim()) {
-            let cleanIp = ip.trim();
+            let cleanIp = ip.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').trim();
             if (cleanIp === '192.168.12.150' || cleanIp === '192.168.1.150' || cleanIp === '192.168.1.100') {
               cleanIp = '192.168.12.158';
             }
@@ -5382,7 +5422,7 @@ class CLEBridge {
         curMach.travelZ = parseFloat(document.getElementById('cle-m-tz').value) || 100;
         curMach.spoilboardX = parseFloat(document.getElementById('cle-m-spoil-x').value) || curMach.travelX || 600;
         curMach.spoilboardY = parseFloat(document.getElementById('cle-m-spoil-y').value) || curMach.travelY || 500;
-        curMach.spoilboardThickness = parseFloat(document.getElementById('cle-m-spoil-thick').value) || 15.0;
+        curMach.spoilboardThickness = parseFloat(document.getElementById('cle-m-spoil-thick').value) || 20.0;
         curMach.spoilboardOffsetX = parseFloat(document.getElementById('cle-m-spoil-offx').value) || 0;
         curMach.spoilboardOffsetY = parseFloat(document.getElementById('cle-m-spoil-offy').value) || 0;
         curMach.travelA = parseFloat(document.getElementById('cle-m-ta').value) || 360;
@@ -5392,6 +5432,7 @@ class CLEBridge {
         curMach.maxRateXY = parseFloat(document.getElementById('cle-m-maxfeed').value) || 5000;
         curMach.spindleMaxRPM = parseFloat(document.getElementById('cle-m-rpm').value) || 24000;
         let newIp = document.getElementById('cle-m-ip').value.trim() || '192.168.12.158';
+        newIp = newIp.replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').trim();
         if (newIp === '192.168.12.150' || newIp === '192.168.1.150' || newIp === '192.168.1.100') {
           newIp = '192.168.12.158';
         }

@@ -141,9 +141,9 @@ class CLEBridge {
           if (currentIp === '192.168.12.150' || currentIp === '192.168.1.150' || currentIp === '192.168.1.100') {
             currentIp = '192.168.12.158';
           }
-          const ip = prompt("Enter FluidTouch 7\" / FluidNC IP:", currentIp);
+          const ip = prompt("Enter FluidTouch 7\" / FluidNC IP or Hostname (e.g. ttcwifi.local or 192.168.12.158):", currentIp);
           if (ip && ip.trim()) {
-            let cleanIp = ip.trim();
+            let cleanIp = ip.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').trim();
             if (cleanIp === '192.168.12.150' || cleanIp === '192.168.1.150' || cleanIp === '192.168.1.100') {
               cleanIp = '192.168.12.158';
             }
@@ -1112,7 +1112,7 @@ class CLEBridge {
         curMach.travelZ = parseFloat(document.getElementById('cle-m-tz').value) || 100;
         curMach.spoilboardX = parseFloat(document.getElementById('cle-m-spoil-x').value) || curMach.travelX || 600;
         curMach.spoilboardY = parseFloat(document.getElementById('cle-m-spoil-y').value) || curMach.travelY || 500;
-        curMach.spoilboardThickness = parseFloat(document.getElementById('cle-m-spoil-thick').value) || 15.0;
+        curMach.spoilboardThickness = parseFloat(document.getElementById('cle-m-spoil-thick').value) || 20.0;
         curMach.spoilboardOffsetX = parseFloat(document.getElementById('cle-m-spoil-offx').value) || 0;
         curMach.spoilboardOffsetY = parseFloat(document.getElementById('cle-m-spoil-offy').value) || 0;
         curMach.travelA = parseFloat(document.getElementById('cle-m-ta').value) || 360;
@@ -1122,6 +1122,7 @@ class CLEBridge {
         curMach.maxRateXY = parseFloat(document.getElementById('cle-m-maxfeed').value) || 5000;
         curMach.spindleMaxRPM = parseFloat(document.getElementById('cle-m-rpm').value) || 24000;
         let newIp = document.getElementById('cle-m-ip').value.trim() || '192.168.12.158';
+        newIp = newIp.replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').trim();
         if (newIp === '192.168.12.150' || newIp === '192.168.1.150' || newIp === '192.168.1.100') {
           newIp = '192.168.12.158';
         }
