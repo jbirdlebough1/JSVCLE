@@ -42,7 +42,7 @@ When an AI agent opens this repository in a new session:
 
 | Conversation ID | Model | Date Started | Status | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Migrated fully to pure Bash standard. Full RWX confirmed for CL3 local tools without asking (C: drive protected). All initial build phases verified. |
+| `c1c01b32-0294-42e0-a526-18f205e9d6d5` | Gemini 3.8 Flash | 2026-10-24 | **Active** | Injected native CLE ribbon tab in Advanced mode wstabs. Created cle_bundle.js for universal Chrome file:// compatibility. |
 
 ---
 
@@ -52,30 +52,12 @@ When an AI agent opens this repository in a new session:
 - [x] Established `sessions/` directory to archive complete Antigravity transcript logs (`transcript.jsonl` and `transcript_full.jsonl`).
 - [x] Standardized on pure **Bash** scripts (`save_checkpoint.sh`, `update_jumpstart.sh`, `cle_start.sh`).
 - [x] Codified full RWX permission directive for local tools without prompting.
-- [x] Created `PROJECT_STATUS.md` ledger for zero-loss crash recovery.
-- [x] Created `D:\CLEJS\tools` directory for local tool installs.
-- [x] **Phase 1: Nintendo Switch Gamepad Subsystem (`cle_gamepad.js`)**:
-  - HTML5 Gamepad API integration.
-  - Mode 1 (Design): Left stick spherical orbit, Right stick pan, Triggers ZL/ZR zoom, D-Pad orthopedic view snaps.
-  - Mode 2 (Run): Proportional X/Y jog, Z plunge, A rotary jog, D-Pad step cycling (0.01-10mm), WCS zeroing, Touch-plate probe, Teach-pendant macro recorder.
-  - Visual Remapping modal.
-- [x] **Phase 2: FluidNC & FluidTouch 7" Head Bridge (`cle_fluidnc.js`)**:
-  - Web Serial (USB) and WebSocket connections.
-  - Live Digital Readout (DRO) updating X, Y, Z, A coordinates in real-time.
-  - Direct launch link to FluidTouch 7" Head / FluidNC Web GUI.
-  - G-Code line streaming with flow control and immediate E-Stop (`!`).
-- [x] **Phase 3: 4th-Axis Rotary Engine & Three.js Visualizer (`cle_rotary.js`)**:
-  - Renders cylindrical stock and 3-jaw rotary chuck in JumpStart's Three.js scene.
-  - Planar-to-rotary coordinate unwrapping ($A = \frac{360 \times Y}{\pi \times D}$).
-- [x] **Phase 4: Calibration, Vault, Test, & Job Recovery**:
-  - `cle_calibration.js`: Steps/mm calculator, Laser power/speed matrix generator, Backlash measurement.
-  - `cle_vault.js`: Endmills, lasers, materials, TTC6050 profiles, macros.
-  - `cle_test.js`: Circle-Diamond-Square, Rapid repeatability, Laser alignment pulse.
-  - `cle_recovery.js`: Live stream position tracking, power-loss crash recovery wizard with Safe-Z plunge preamble.
-- [x] **Phase 5: PrusaSlicer CLI & `CLE_server.py`**:
-  - `cle_slicer.js`: Three.js vertex extractor to STL.
-  - `tools/CLE_server.py`: Local Python server on CL3 (localhost:8765) executing PrusaSlicer CLI and handling disk vault persistence.
-- [x] **Phase 6: Inno Setup Installer & Daily 8:00 AM Upstream Task**:
-  - `installer/cle_setup.iss` (Inno Setup installer targeting `D:\CLEJS`).
-  - `cle_start.sh`: Bash one-click startup for CLE_server and JumpStart.
-  - Windows Task Scheduler: `CLEJS_Daily_Upstream_Check` registered to run daily at 8:00 AM via bash.
+- [x] **Chrome `file:///` Compatibility**: Bundled all CLE logic into `Dev/cle_tools/cle_bundle.js` using standard `<script>` tag, eliminating CORS module failures on local file loads.
+- [x] **Native Advanced Mode CLE Tab**: Added `"cle"` to `wstabs` (`Design`, `3D Print Sim`, `Simulate`, `CLE`) in JumpStart's Advanced mode ribbon navigation.
+- [x] **Ribbon Router Integration**: Wired `Vr === "cle"` to `window.CLE.renderAdvancedRibbon(...)` rendering native JumpStart buttons for:
+  - Machine: USB Serial, WiFi/WS, FluidTouch 7" Head, Zero All
+  - Controller: Nintendo Switch Mode toggle (Design 3D / Run Pendant), Button Remap
+  - Rotary & Slicer: 4th Axis Rotary (A) stock visualizer, Prusa Slicer CLI
+  - CLE Tools: Vault, Calibration, Test Suite, Job Recovery
+  - Safety: FEED HOLD (!)
+  - Real-time DRO: Live X, Y, Z, A coordinate bar
