@@ -21,6 +21,61 @@ export class CLESlicerEngine {
     this.visualizerGroup = null;
   }
 
+  init() {
+    if (!this.slicedLayers || this.slicedLayers.length === 0) {
+      this.generateDefaultSampleSlices();
+    }
+  }
+
+  // Generates high-visibility default sample slices on the TTC6050 bed so slices are immediately visible
+  generateDefaultSampleSlices() {
+    const minX = 180, maxX = 300;
+    const minY = 160, maxY = 260;
+    const numPasses = 6;
+    const totalDepth = 6.0;
+    const passDepth = totalDepth / numPasses;
+    const stepover = 15.0;
+
+    this.slicedLayers = [];
+    for (let k = 0; k < numPasses; k++) {
+      const curZ = -(k + 1) * passDepth;
+      const layer = {
+        index: k,
+        z: curZ,
+        toolNumber: k < 3 ? 1 : 2,
+        points: []
+      };
+
+      // Rapid move to start
+      layer.points.push({ x: minX, y: minY, z: curZ + 2.0, isRapid: true });
+      layer.points.push({ x: minX, y: minY, z: curZ, isRapid: false });
+
+      // Perimeter contour
+      layer.points.push({ x: maxX, y: minY, z: curZ, isRapid: false });
+      layer.points.push({ x: maxX, y: maxY, z: curZ, isRapid: false });
+      layer.points.push({ x: minX, y: maxY, z: curZ, isRapid: false });
+      layer.points.push({ x: minX, y: minY, z: curZ, isRapid: false });
+
+      // Pocket clearing zig-zag
+      let goingRight = true;
+      for (let y = minY + stepover; y < maxY - stepover / 2; y += stepover) {
+        if (goingRight) {
+          layer.points.push({ x: maxX - 2, y, z: curZ, isRapid: false });
+        } else {
+          layer.points.push({ x: minX + 2, y, z: curZ, isRapid: false });
+        }
+        goingRight = !goingRight;
+      }
+
+      // Retract
+      layer.points.push({ x: minX + 2, y: maxY - 5, z: curZ + 2.0, isRapid: true });
+      this.slicedLayers.push(layer);
+    }
+
+    this.renderSlicedStackToVisualizer();
+    console.log('[CLE Slicer] Default sample workpiece slices initialized in 3D visualizer.');
+  }
+
   // Extracts active CAD geometry from JumpStart scene or generates realistic sample block
   getActiveBodyGeometry() {
     const app = window.app || window.xe;
@@ -433,6 +488,35 @@ export class CLESlicerEngine {
       lineMesh.renderOrder = 99999;
       lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z };
       this.visualizerGroup.add(lineMesh);
+
+      // Visible waypoint marks (toolpath nodes / plunge points)
+      const ptPositions = [];
+      const ptColors = [];
+      for (const p of layer.points) {
+        ptPositions.push(p.x, p.y, p.z);
+        if (p.isRapid) {
+          ptColors.push(0.0, 0.95, 1.0); // Cyan rapid mark
+        } else {
+          ptColors.push(r, g, b); // Cut mark
+        }
+      }
+      if (ptPositions.length > 0) {
+        const ptGeo = new THREE.BufferGeometry();
+        ptGeo.setAttribute('position', new THREE.Float32BufferAttribute(ptPositions, 3));
+        ptGeo.setAttribute('color', new THREE.Float32BufferAttribute(ptColors, 3));
+        const ptMat = new THREE.PointsMaterial({
+          size: 4.5,
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.95,
+          depthTest: false,
+          depthWrite: false
+        });
+        const ptMesh = new THREE.Points(ptGeo, ptMat);
+        ptMesh.renderOrder = 100000;
+        ptMesh.userData = { layerIndex: lIdx, zElevation: layer.z };
+        this.visualizerGroup.add(ptMesh);
+      }
     });
 
     // Workpiece Material Stock Box & Safe Retract Plane in Millimeters

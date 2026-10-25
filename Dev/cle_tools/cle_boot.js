@@ -87,6 +87,7 @@ class CLEBridge {
     if (app && app.vp) {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
       if (this.bed) this.bed.init();
+      if (this.slicer) this.slicer.init();
     } else {
       setTimeout(() => this.registerWithJumpStart(), 250);
     }
@@ -158,7 +159,8 @@ class CLEBridge {
       }},
       { id: "cle-r-connect", label: "Connect", title: "Direct Machine Connect / Disconnect", icon: "drive", pressed: this.fluidnc.isConnected, fn: () => this.connectActiveMachine() },
       { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "motion", fn: () => this.fluidnc.openFluidTouchWebGUI() },
-      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Rulers", icon: "dim", pressed: this.bed ? this.bed.visible : true, fn: () => this.bed && this.bed.toggle() }
+      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Rulers", icon: "dim", pressed: this.bed ? this.bed.visible : true, fn: () => this.bed && this.bed.toggle() },
+      { id: "cle-r-fitbed", label: "Fit Bed", title: "Center and Frame 3D View on Machine Bed", icon: "zoomExtents", fn: () => this.bed && this.bed.fitBedView() }
     ]);
 
     // 2. JOYSTICK MODE Section (Defaults to Design Mode; has dedicated Manual Mode button)
@@ -230,6 +232,9 @@ class CLEBridge {
     let hub = document.getElementById('cle-manual-hub');
     if (hub) {
       hub.style.display = 'flex';
+      if (this.fluidnc) {
+        this.fluidnc.updateConnectionUI(this.fluidnc.isConnected);
+      }
       if (this.camera && !this.camera.isActive) {
         this.camera.autoStartIfAvailable();
       }
@@ -413,6 +418,11 @@ class CLEBridge {
     // Camera if exists should always be started
     if (this.camera && !this.camera.isActive) {
       this.camera.autoStartIfAvailable();
+    }
+
+    // Sync live connection state to manual card badge
+    if (this.fluidnc) {
+      this.fluidnc.updateConnectionUI(this.fluidnc.isConnected);
     }
 
     // Wire Events
@@ -929,6 +939,7 @@ class CLEBridge {
             </select>
           </div>
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="cle-btn" id="cle-mach-btn-connect" style="background:var(--accent); color:var(--on-accent); font-weight:700;">Connect</button>
             <button class="cle-btn" id="cle-mach-btn-activate" style="background:var(--ok); color:#fff; font-weight:700;">Make Active Device</button>
             <button class="cle-btn" id="cle-mach-btn-query" title="Auto-detect machine settings by querying controller ($$, $I)">Query ($$, $I)</button>
             <button class="cle-btn" id="cle-mach-btn-read-yaml" style="background:var(--accent); color:var(--on-accent); font-weight:600;" title="Load full capability model from FluidNC flash config.yaml">Read Flash config.yaml</button>
@@ -1308,6 +1319,15 @@ class CLEBridge {
         if (this.bed) this.bed.rebuild();
         this.closeModal();
       };
+
+      const connBtn = document.getElementById('cle-mach-btn-connect');
+      if (connBtn) {
+        connBtn.textContent = this.fluidnc.isConnected ? 'Disconnect' : 'Connect';
+        connBtn.onclick = async () => {
+          await this.connectActiveMachine();
+          connBtn.textContent = this.fluidnc.isConnected ? 'Disconnect' : 'Connect';
+        };
+      }
 
       document.getElementById('cle-mach-btn-query').onclick = () => {
         this.fluidnc.queryDeviceSettings();

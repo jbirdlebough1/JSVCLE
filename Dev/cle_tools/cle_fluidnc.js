@@ -333,6 +333,15 @@ export class CLEFluidNCClient {
       badge.textContent = connected ? `FluidNC (${this.connectionType.toUpperCase()})` : 'FluidNC: Offline';
       badge.className = `cle-badge ${connected ? 'connected' : 'alert'}`;
     }
+    const manBadge = document.getElementById('cle-man-conn-status');
+    if (manBadge) {
+      manBadge.textContent = connected ? `Connected (${this.connectionType.toUpperCase()})` : 'Offline';
+      manBadge.className = `cle-badge ${connected ? 'connected' : 'alert'}`;
+    }
+    const machBtn = document.getElementById('cle-mach-btn-connect');
+    if (machBtn) {
+      machBtn.textContent = connected ? 'Disconnect' : 'Connect';
+    }
   }
 
   startStatusPolling() {

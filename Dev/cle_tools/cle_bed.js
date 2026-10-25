@@ -87,26 +87,51 @@ export class CLEBedVisualizer {
 
     this.buildSpoilboardSlab(THREE);
     this.buildGridAndExtrusionFrame(THREE);
+    this.buildMachineOriginToolLines(THREE);
     this.buildMillimeterRulers(THREE);
     this.buildToolheadCursor(THREE);
 
     container.add(this.bedGroup);
+
+    // Hide JumpStart's default small infinite gray grid so the medium blue bed with green squares pops
+    const app = window.app || window.xe;
+    if (app && app.vp && app.vp.grid) {
+      app.vp.grid.visible = false;
+    }
+
+    // Smoothly frame the view so the 600x500mm bed is centered in view
+    this.fitBedView();
+
     this.requestRender();
-    console.log('[CLE Bed] Mounted device bed, spoilboard and rulers to 3D viewport.');
+    console.log('[CLE Bed] Mounted medium blue bed with light green squares and X,Y,Z tool lines.');
   }
 
-  // 1. Spoilboard Slab & 600x500x20mm High-Contrast Outline
+  // Centering & Framing: Centers camera on bed center (300, 250, 0)
+  fitBedView() {
+    const app = window.app || window.xe;
+    if (!app || !app.vp || !app.vp.view) return;
+    const cx = (this.config.travelX || 600) / 2;
+    const cy = (this.config.travelY || 500) / 2;
+    app.vp.view.target.set(cx, cy, 0);
+    app.vp.view.dist = 780;
+    app.vp.view.az = 0.45;
+    app.vp.view.el = 0.55;
+    if (app.vp.updateCamera) app.vp.updateCamera();
+  }
+
+  // 1. Spoilboard Slab: Medium Blue Translucent Bed & High-Contrast Outline
   buildSpoilboardSlab(THREE) {
     const { spoilboardX, spoilboardY, spoilboardThickness, spoilboardOffsetX, spoilboardOffsetY } = this.config;
 
-    // Solid MDF/Aluminum Base Slab
+    // Medium Blue Translucent Bed Slab
     const slabGeo = new THREE.BoxGeometry(spoilboardX, spoilboardY, spoilboardThickness);
     const slabMat = new THREE.MeshStandardMaterial({
-      color: 0x1e2632,
-      roughness: 0.85,
-      metalness: 0.1,
+      color: 0x1d4ed8, // Medium Royal Blue
+      roughness: 0.25,
+      metalness: 0.15,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.38,
+      side: THREE.DoubleSide,
       depthWrite: false
     });
 
@@ -120,6 +145,24 @@ export class CLEBedVisualizer {
     slab.receiveShadow = true;
     slab.name = 'CLE_Spoilboard_Slab';
     this.bedGroup.add(slab);
+
+    // Polished top bed plane surface for vivid translucency
+    const topPlaneGeo = new THREE.PlaneGeometry(spoilboardX, spoilboardY);
+    const topPlaneMat = new THREE.MeshBasicMaterial({
+      color: 0x2563eb, // Vibrant medium blue top face
+      transparent: true,
+      opacity: 0.45,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    const topPlaneMesh = new THREE.Mesh(topPlaneGeo, topPlaneMat);
+    topPlaneMesh.position.set(
+      spoilboardOffsetX + spoilboardX / 2,
+      spoilboardOffsetY + spoilboardY / 2,
+      0.03
+    );
+    topPlaneMesh.name = 'CLE_Bed_Top_Plane';
+    this.bedGroup.add(topPlaneMesh);
 
     // High-Contrast Spoilboard 3D Box Outline (600x500x20mm)
     const edgesGeo = new THREE.EdgesGeometry(slabGeo);
@@ -145,19 +188,20 @@ export class CLEBedVisualizer {
     ];
     const topGeo = new THREE.BufferGeometry();
     topGeo.setAttribute('position', new THREE.Float32BufferAttribute(topPts, 3));
-    const topMat = new THREE.LineBasicMaterial({ color: 0x0284c7, linewidth: 3, transparent: true, opacity: 1.0 });
+    const topMat = new THREE.LineBasicMaterial({ color: 0x60a5fa, linewidth: 3, transparent: true, opacity: 1.0 });
     const topBorder = new THREE.LineSegments(topGeo, topMat);
     topBorder.name = 'CLE_Spoilboard_Top_Border';
     this.bedGroup.add(topBorder);
   }
 
-  // 2. Machine Travel Limits Volume (600x500x100mm) & Surface Grid
+  // 2. Light Green Squares Surface Grid & Machine Travel Limits Volume (600x500x100mm)
   buildGridAndExtrusionFrame(THREE) {
     const { travelX, travelY, travelZ, spoilboardX, spoilboardY, spoilboardOffsetX, spoilboardOffsetY, gridPitch, majorGridPitch } = this.config;
 
     const minorPts = [];
     const majorPts = [];
-    const zSurface = 0.06;
+    const zMinor = 0.08;
+    const zMajor = 0.10;
 
     const x0 = spoilboardOffsetX;
     const x1 = spoilboardOffsetX + spoilboardX;
@@ -168,33 +212,52 @@ export class CLEBedVisualizer {
     for (let x = x0; x <= x1 + 0.1; x += gridPitch) {
       const relX = Math.round(x - x0);
       const isMajor = (relX % majorGridPitch === 0);
-      const target = isMajor ? majorPts : minorPts;
-      target.push(x, y0, zSurface, x, y1, zSurface);
+      if (isMajor) {
+        majorPts.push(x, y0, zMajor, x, y1, zMajor);
+      } else {
+        minorPts.push(x, y0, zMinor, x, y1, zMinor);
+      }
     }
 
     // Grid lines along Y (running in X direction)
     for (let y = y0; y <= y1 + 0.1; y += gridPitch) {
       const relY = Math.round(y - y0);
       const isMajor = (relY % majorGridPitch === 0);
-      const target = isMajor ? majorPts : minorPts;
-      target.push(x0, y, zSurface, x1, y, zSurface);
+      if (isMajor) {
+        majorPts.push(x0, y, zMajor, x1, y, zMajor);
+      } else {
+        minorPts.push(x0, y, zMinor, x1, y, zMinor);
+      }
     }
 
-    // Minor grid lines (10mm pitch)
+    // Minor grid lines (10mm pitch) in bright light green
     if (minorPts.length > 0) {
       const minGeo = new THREE.BufferGeometry();
       minGeo.setAttribute('position', new THREE.Float32BufferAttribute(minorPts, 3));
-      const minMat = new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.45 });
+      const minMat = new THREE.LineBasicMaterial({
+        color: 0x4ade80, // Bright Light Green
+        transparent: true,
+        opacity: 0.60,
+        depthWrite: false
+      });
       const minLines = new THREE.LineSegments(minGeo, minMat);
+      minLines.name = 'CLE_Bed_Grid_Minor_Green';
       this.bedGroup.add(minLines);
     }
 
-    // Major grid lines (50mm pitch)
+    // Major grid lines (50mm pitch forming 50x50mm light green squares)
     if (majorPts.length > 0) {
       const majGeo = new THREE.BufferGeometry();
       majGeo.setAttribute('position', new THREE.Float32BufferAttribute(majorPts, 3));
-      const majMat = new THREE.LineBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.85 });
+      const majMat = new THREE.LineBasicMaterial({
+        color: 0x22c55e, // Vibrant Green Squares
+        transparent: true,
+        opacity: 0.95,
+        linewidth: 2,
+        depthWrite: false
+      });
       const majLines = new THREE.LineSegments(majGeo, majMat);
+      majLines.name = 'CLE_Bed_Grid_Major_Green_Squares';
       this.bedGroup.add(majLines);
     }
 
@@ -202,20 +265,20 @@ export class CLEBedVisualizer {
     const tz = travelZ || 100;
     const travelBoxPts = [
       // Base rectangle
-      0, 0, zSurface,  travelX, 0, zSurface,
-      travelX, 0, zSurface,  travelX, travelY, zSurface,
-      travelX, travelY, zSurface,  0, travelY, zSurface,
-      0, travelY, zSurface,  0, 0, zSurface,
+      0, 0, zMajor,  travelX, 0, zMajor,
+      travelX, 0, zMajor,  travelX, travelY, zMajor,
+      travelX, travelY, zMajor,  0, travelY, zMajor,
+      0, travelY, zMajor,  0, 0, zMajor,
       // Top rectangle at Z = travelZ
       0, 0, tz,  travelX, 0, tz,
       travelX, 0, tz,  travelX, travelY, tz,
       travelX, travelY, tz,  0, travelY, tz,
       0, travelY, tz,  0, 0, tz,
       // 4 vertical corner posts
-      0, 0, zSurface,  0, 0, tz,
-      travelX, 0, zSurface,  travelX, 0, tz,
-      travelX, travelY, zSurface,  travelX, travelY, tz,
-      0, travelY, zSurface,  0, travelY, tz
+      0, 0, zMajor,  0, 0, tz,
+      travelX, 0, zMajor,  travelX, 0, tz,
+      travelX, travelY, zMajor,  travelX, travelY, tz,
+      0, travelY, zMajor,  0, travelY, tz
     ];
     const travelGeo = new THREE.BufferGeometry();
     travelGeo.setAttribute('position', new THREE.Float32BufferAttribute(travelBoxPts, 3));
@@ -223,6 +286,103 @@ export class CLEBedVisualizer {
     const travelFrame = new THREE.LineSegments(travelGeo, travelMat);
     travelFrame.name = 'CLE_Machine_Travel_Volume_Box';
     this.bedGroup.add(travelFrame);
+  }
+
+  // 3. Machine Tool Lines (X, Y, Z Axes Marker at Bed Origin)
+  buildMachineOriginToolLines(THREE) {
+    const { travelX, travelY, travelZ } = this.config;
+    const tz = travelZ || 100;
+    const zOrigin = 0.20;
+
+    const toolLinesGroup = new THREE.Group();
+    toolLinesGroup.name = 'CLE_Machine_Tool_Lines_XYZ';
+
+    // --- Red X Axis Tool Line (Across front edge 0..travelX) ---
+    const xPts = [0, 0, zOrigin,  travelX, 0, zOrigin];
+    const xGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(xPts, 3));
+    const xMat = new THREE.LineBasicMaterial({ color: 0xef4444, linewidth: 4, depthTest: false });
+    const xLine = new THREE.Line(xGeo, xMat);
+    toolLinesGroup.add(xLine);
+
+    // Thick 3D X Tool Rod
+    const xRodGeo = new THREE.CylinderGeometry(1.2, 1.2, travelX, 12);
+    const xRodMat = new THREE.MeshBasicMaterial({ color: 0xef4444, depthTest: false });
+    const xRod = new THREE.Mesh(xRodGeo, xRodMat);
+    xRod.position.set(travelX / 2, 0, zOrigin);
+    xRod.rotation.z = -Math.PI / 2;
+    toolLinesGroup.add(xRod);
+
+    // X Arrow Head & Sprite Label
+    const xConeGeo = new THREE.ConeGeometry(3.5, 12, 16);
+    const xCone = new THREE.Mesh(xConeGeo, xRodMat);
+    xCone.position.set(travelX + 6, 0, zOrigin);
+    xCone.rotation.z = -Math.PI / 2;
+    toolLinesGroup.add(xCone);
+
+    const xLabel = this.createNumberLabelSprite(THREE, `X (${travelX}mm)`, '#ef4444');
+    xLabel.position.set(travelX + 28, 0, zOrigin + 2);
+    xLabel.scale.set(32, 16, 1);
+    toolLinesGroup.add(xLabel);
+
+    // --- Green Y Axis Tool Line (Along left edge 0..travelY) ---
+    const yPts = [0, 0, zOrigin,  0, travelY, zOrigin];
+    const yGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(yPts, 3));
+    const yMat = new THREE.LineBasicMaterial({ color: 0x22c55e, linewidth: 4, depthTest: false });
+    const yLine = new THREE.Line(yGeo, yMat);
+    toolLinesGroup.add(yLine);
+
+    // Thick 3D Y Tool Rod
+    const yRodGeo = new THREE.CylinderGeometry(1.2, 1.2, travelY, 12);
+    const yRodMat = new THREE.MeshBasicMaterial({ color: 0x22c55e, depthTest: false });
+    const yRod = new THREE.Mesh(yRodGeo, yRodMat);
+    yRod.position.set(0, travelY / 2, zOrigin);
+    toolLinesGroup.add(yRod);
+
+    // Y Arrow Head & Sprite Label
+    const yConeGeo = new THREE.ConeGeometry(3.5, 12, 16);
+    const yCone = new THREE.Mesh(yConeGeo, yRodMat);
+    yCone.position.set(0, travelY + 6, zOrigin);
+    toolLinesGroup.add(yCone);
+
+    const yLabel = this.createNumberLabelSprite(THREE, `Y (${travelY}mm)`, '#22c55e');
+    yLabel.position.set(0, travelY + 26, zOrigin + 2);
+    yLabel.scale.set(32, 16, 1);
+    toolLinesGroup.add(yLabel);
+
+    // --- Blue Z Axis Tool Line (Vertical corner post 0..travelZ) ---
+    const zPts = [0, 0, 0,  0, 0, tz];
+    const zGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(zPts, 3));
+    const zMat = new THREE.LineBasicMaterial({ color: 0x3b82f6, linewidth: 4, depthTest: false });
+    const zLine = new THREE.Line(zGeo, zMat);
+    toolLinesGroup.add(zLine);
+
+    // Thick 3D Z Tool Rod
+    const zRodGeo = new THREE.CylinderGeometry(1.2, 1.2, tz, 12);
+    const zRodMat = new THREE.MeshBasicMaterial({ color: 0x3b82f6, depthTest: false });
+    const zRod = new THREE.Mesh(zRodGeo, zRodMat);
+    zRod.position.set(0, 0, tz / 2);
+    zRod.rotation.x = Math.PI / 2;
+    toolLinesGroup.add(zRod);
+
+    // Z Arrow Head & Sprite Label
+    const zConeGeo = new THREE.ConeGeometry(3.5, 12, 16);
+    const zCone = new THREE.Mesh(zConeGeo, zRodMat);
+    zCone.position.set(0, 0, tz + 6);
+    zCone.rotation.x = Math.PI;
+    toolLinesGroup.add(zCone);
+
+    const zLabel = this.createNumberLabelSprite(THREE, `Z (${tz}mm)`, '#3b82f6');
+    zLabel.position.set(0, 0, tz + 20);
+    zLabel.scale.set(32, 16, 1);
+    toolLinesGroup.add(zLabel);
+
+    // Origin WCS Badge at (0, 0, 0)
+    const wcsTag = this.createNumberLabelSprite(THREE, 'WCS (0,0,0)', '#f59e0b');
+    wcsTag.position.set(-14, -14, zOrigin + 2);
+    wcsTag.scale.set(28, 14, 1);
+    toolLinesGroup.add(wcsTag);
+
+    this.bedGroup.add(toolLinesGroup);
   }
 
   // 3. Millimeter Rulers along X and Y axes with Tick Marks and Numerical Labels
@@ -367,6 +527,30 @@ export class CLEBedVisualizer {
       bitMesh.rotation.x = Math.PI / 2;
       this.cursorGroup.add(bitMesh);
     }
+
+    // 3D Tool Lines at Cursor Tip (think of tool lines X, Y, Z)
+    const tipAxisGroup = new THREE.Group();
+    tipAxisGroup.name = 'CLE_Tool_Tip_Lines_XYZ';
+
+    // X Tool Line (Red: -35mm to +35mm)
+    const txPts = [-35, 0, 0,  35, 0, 0];
+    const txGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(txPts, 3));
+    const txMat = new THREE.LineBasicMaterial({ color: 0xef4444, linewidth: 3, depthTest: false });
+    tipAxisGroup.add(new THREE.LineSegments(txGeo, txMat));
+
+    // Y Tool Line (Green: -35mm to +35mm)
+    const tyPts = [0, -35, 0,  0, 35, 0];
+    const tyGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(tyPts, 3));
+    const tyMat = new THREE.LineBasicMaterial({ color: 0x22c55e, linewidth: 3, depthTest: false });
+    tipAxisGroup.add(new THREE.LineSegments(tyGeo, tyMat));
+
+    // Z Tool Line (Blue: 0 to +45mm)
+    const tzPts = [0, 0, 0,  0, 0, 45];
+    const tzGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(tzPts, 3));
+    const tzMat = new THREE.LineBasicMaterial({ color: 0x3b82f6, linewidth: 3, depthTest: false });
+    tipAxisGroup.add(new THREE.LineSegments(tzGeo, tzMat));
+
+    this.cursorGroup.add(tipAxisGroup);
 
     // Floating 3D DRO Coordinate Badge
     this.coordTag = this.createNumberLabelSprite(THREE, 'X0.00 Y0.00 Z0.00', '#38bdf8');
