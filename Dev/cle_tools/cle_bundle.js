@@ -4110,15 +4110,17 @@ class CLESlicerEngine {
     this.sharedSolidMat = new THREE.MeshBasicMaterial({
       color: 0x00ff66, // Vivid Bright Neon/Emerald Green Slice Microtome Fill
       transparent: true,
-      opacity: 0.70,
+      opacity: 0.80,   // Solid yet translucent, completely filling the contour
       side: THREE.DoubleSide,
+      depthTest: false, // Never occluded by CAD bodies in front of slice
       depthWrite: false
     });
     this.sharedFadeSolidMat = new THREE.MeshBasicMaterial({
       color: 0x00e676, // Bright Green for Range and Full Stack Slices
       transparent: true,
-      opacity: 0.38,
+      opacity: 0.35,
       side: THREE.DoubleSide,
+      depthTest: false,
       depthWrite: false
     });
     this.sharedBorderMat = new THREE.LineBasicMaterial({
@@ -4126,14 +4128,14 @@ class CLESlicerEngine {
       linewidth: 4.0,
       transparent: true,
       opacity: 1.0,
-      depthWrite: false
+      depthTest: false
     });
     this.sharedFadeBorderMat = new THREE.LineBasicMaterial({
       color: 0x00e676,
       linewidth: 2.0,
       transparent: true,
       opacity: 0.60,
-      depthWrite: false
+      depthTest: false
     });
 
     // Build true 3D microtome slice slabs with physical layer thickness (visible from ALL angles)
@@ -4172,7 +4174,7 @@ class CLESlicerEngine {
         const solidSliceMesh = new THREE.Mesh(solidGeo, this.sharedSolidMat);
         solidSliceMesh.name = `CLE_Solid_Slice_${lIdx}`;
         solidSliceMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isSolidSlice: true };
-        solidSliceMesh.renderOrder = 99990;
+        solidSliceMesh.renderOrder = 100000;
         solidSliceMesh.visible = false;
         this.visualizerGroup.add(solidSliceMesh);
 
@@ -4380,6 +4382,8 @@ class CLESlicerEngine {
 
     const applyMeshTransparency = (obj) => {
       if (!obj || !obj.isMesh || !obj.material || obj.name === 'CLE_Sample_Workpiece_Ghost') return;
+      if (obj.name && (obj.name.startsWith('CLE_') || obj.name.startsWith('cle-'))) return;
+      if (obj.userData && (obj.userData.isSolidSlice || obj.userData.isContourBorder || obj.userData.isRawToolpath)) return;
       const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
       mats.forEach(m => {
         if (transparent) {
@@ -4390,7 +4394,7 @@ class CLESlicerEngine {
             m._cleOrigColor = (m.color && m.color.getHex) ? m.color.getHex() : null;
           }
           m.transparent = true;
-          m.opacity = 0.28;
+          m.opacity = 0.22;
           m.depthWrite = false;
           if (m.color && m.color.setHex) m.color.setHex(0xf97316); // Vivid Transparent Orange
           m.needsUpdate = true;
@@ -4427,14 +4431,19 @@ class CLESlicerEngine {
       }
     };
 
-    if (app.scene.views) {
+    if (app.scene?.views) {
       for (const [id, view] of app.scene.views) {
-        if (view.mesh) applyMeshTransparency(view.mesh);
+        if (view.mesh) view.mesh.traverse(applyMeshTransparency);
+        if (view.group) view.group.traverse(applyMeshTransparency);
       }
     }
 
-    if (app.scene.root) {
+    if (app.scene?.root) {
       app.scene.root.traverse(applyMeshTransparency);
+    }
+
+    if (app.vp?.scene) {
+      app.vp.scene.traverse(applyMeshTransparency);
     }
 
     if (app.vp) {
