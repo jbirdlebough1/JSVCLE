@@ -336,6 +336,7 @@ export class CLEVault {
         spoilboardThickness: 20.0,   // Spoilboard Thickness (mm, 20mm MDF spoilboard)
         spoilboardOffsetX: 0.0,      // Spoilboard Offset X from Machine 0,0
         spoilboardOffsetY: 0.0,      // Spoilboard Offset Y from Machine 0,0
+        cutoutOvercut: 0.2,          // 0.2mm breakthrough into spoilboard for clean cutouts
         stepsPerMmX: 640.0,
         stepsPerMmY: 640.0,
         stepsPerMmZ: 640.0,
@@ -469,6 +470,7 @@ export class CLEVault {
       if (mach.spoilboardThickness === undefined || mach.spoilboardThickness === 15.0) mach.spoilboardThickness = 20.0;
       if (mach.spoilboardOffsetX === undefined) mach.spoilboardOffsetX = 0.0;
       if (mach.spoilboardOffsetY === undefined) mach.spoilboardOffsetY = 0.0;
+      if (mach.cutoutOvercut === undefined) mach.cutoutOvercut = 0.2;
 
       // Clean up legacy/stale IPs (.150, .100, etc.) from localStorage
       const savedFluidIp = localStorage.getItem('cle.fluidnc.ip');

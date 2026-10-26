@@ -103,6 +103,19 @@ class CLEBridge {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
       if (this.bed) this.bed.init();
       if (this.slicer) this.slicer.init();
+      // Hook scene refresh so workpiece automatically stays seated on spoilboard
+      if (app.scene && !this._sceneRefreshHooked) {
+        this._sceneRefreshHooked = true;
+        const origRefresh = app.scene.refresh ? app.scene.refresh.bind(app.scene) : null;
+        if (origRefresh) {
+          app.scene.refresh = () => {
+            origRefresh();
+            if (this.bed && this.bed.visible) {
+              this.bed.sitWorkpieceOnSpoilboard();
+            }
+          };
+        }
+      }
     } else {
       setTimeout(() => this.registerWithJumpStart(), 250);
     }
@@ -174,7 +187,14 @@ class CLEBridge {
       }},
       { id: "cle-r-connect", label: "Connect", title: "Direct Machine Connect / Disconnect", icon: "drive", pressed: this.fluidnc.isConnected, fn: () => this.connectActiveMachine() },
       { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "motion", fn: () => this.fluidnc.openFluidTouchWebGUI() },
-      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Rulers", icon: "dim", pressed: this.bed ? this.bed.visible : true, fn: () => this.bed && this.bed.toggle() },
+      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Workpiece Elevation", icon: "dim", pressed: this.bed ? this.bed.visible : true, fn: () => {
+        if (this.bed) {
+          const vis = this.bed.toggle();
+          const el = document.getElementById('cle-r-bed');
+          if (el) el.classList.toggle('pressed', vis);
+        }
+      }},
+      { id: "cle-r-spoilboard", label: "Spoilboard & Z", title: "Adjust Spoilboard Size, Thickness & Sit Workpiece on Surface", icon: "cube", fn: () => this.openModal("spoilboard") },
       { id: "cle-r-fitbed", label: "Fit Bed", title: "Center and Frame 3D View on Machine Bed", icon: "zoomExtents", fn: () => this.bed && this.bed.fitBedView() }
     ]);
 
@@ -877,8 +897,125 @@ class CLEBridge {
           <input class="cle-input" id="slice-feed" type="number" value="${this.slicer.feedRate}">
         </div>
 
+        <!-- Spoilboard Clean Cutout Breakthrough Option -->
+        <div class="cle-form-row" style="margin-top:12px; background:rgba(37,99,235,0.08); padding:10px 12px; border-radius:6px; border:1px solid rgba(37,99,235,0.25);">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="checkbox" id="slice-enable-cutout" checked style="width:16px; height:16px;">
+            <span style="font-weight:700;">Spoilboard Clean Cutout (Breakthrough Pass)</span>
+          </label>
+          <div style="font-size:11px; color:var(--ink-2); margin-top:4px;">
+            Mills 0.20mm into the spoilboard for a clean cutout without tabs. Zero risk of touching aluminum bed table (>19mm safe MDF buffer).
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+            <label style="font-size:12px;">Cutout Depth into Spoilboard (mm):</label>
+            <input class="cle-input" id="slice-cutout-depth" type="number" step="0.05" value="${this.bed ? (this.bed.config.cutoutOvercut || 0.20) : 0.20}" style="width:90px;">
+          </div>
+        </div>
+
         <div style="margin-top:14px; display:flex; gap:10px;">
           <button class="cle-btn" id="slice-run-btn" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Slice & Display in 3D Viewport</button>
+        </div>
+      `;
+    } else if (type === 'spoilboard') {
+      title = '🪵 Spoilboard Size, Z Thickness & Workpiece Elevation';
+      const bConf = this.bed ? this.bed.config : { spoilboardX: 600, spoilboardY: 500, spoilboardThickness: 20.0, cutoutOvercut: 0.2 };
+      const curThick = bConf.spoilboardThickness !== undefined ? bConf.spoilboardThickness : 20.0;
+      const curX = bConf.spoilboardX || 600;
+      const curY = bConf.spoilboardY || 500;
+      const curCutout = bConf.cutoutOvercut !== undefined ? bConf.cutoutOvercut : 0.2;
+      const curOffX = bConf.spoilboardOffsetX || 0;
+      const curOffY = bConf.spoilboardOffsetY || 0;
+
+      bodyHtml = `
+        <p style="margin-bottom:12px; font-size:12px; color:var(--ink-2);">
+          Configure the physical spoilboard slab sitting on top of the machine aluminum table bed.
+          The workpiece sits flush on the spoilboard surface, allowing the tool to mill 0.2mm into the spoilboard for 100% clean cutouts without touching the aluminum table.
+        </p>
+
+        <!-- Visual Stack Diagram -->
+        <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px;">
+          <div style="font-weight:700; font-size:12px; color:var(--accent); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px;">
+            Physical 3D Coordinate Stack
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; font-family:monospace; font-size:12px;">
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(56, 189, 248, 0.12); border-left:4px solid #38bdf8; border-radius:4px;">
+              <span><strong>Workpiece (3D CAD Object):</strong> Sits on top of Spoilboard</span>
+              <span id="stack-workpiece-z" style="color:#0284c7; font-weight:700;">Z = +${(0.1 + curThick).toFixed(2)} mm</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(245, 158, 11, 0.12); border-left:4px solid #f59e0b; border-radius:4px;">
+              <span><strong>Clean Cutout Breakthrough Level:</strong> -${curCutout.toFixed(2)}mm into spoilboard</span>
+              <span id="stack-cutout-z" style="color:#d97706; font-weight:700;">Z = +${(0.1 + curThick - curCutout).toFixed(2)} mm</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(37, 99, 235, 0.15); border-left:4px solid #2563eb; border-radius:4px;">
+              <span><strong>Spoilboard Slab (MDF / Sacrificial Fixture):</strong> Thickness = <span id="stack-thick-val">${curThick.toFixed(1)}</span> mm</span>
+              <span id="stack-spoil-span" style="color:#1d4ed8; font-weight:700;">Z = +0.10 .. +${(0.1 + curThick).toFixed(2)} mm</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(100, 116, 139, 0.15); border-left:4px solid #64748b; border-radius:4px;">
+              <span><strong>Aluminum Machine Table Bed:</strong> Safety Limit Floor (Zero Risk)</span>
+              <span style="color:#475569; font-weight:700;">Z = +0.10 mm Hard Floor</span>
+            </div>
+          </div>
+          <div id="stack-safety-margin" style="margin-top:8px; font-size:11px; color:var(--ok); font-weight:600;">
+            ✔ ${(curThick - curCutout).toFixed(2)} mm of protective MDF buffer between cutout pass and aluminum table bed.
+          </div>
+        </div>
+
+        <!-- Spoilboard Dimensions Form -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <div class="cle-form-row">
+            <label>Spoilboard Width (X mm):</label>
+            <input class="cle-input" id="cle-sp-width" type="number" value="${curX}" step="10">
+          </div>
+          <div class="cle-form-row">
+            <label>Spoilboard Depth (Y mm):</label>
+            <input class="cle-input" id="cle-sp-depth" type="number" value="${curY}" step="10">
+          </div>
+        </div>
+
+        <div style="margin-top:10px;">
+          <div class="cle-form-row">
+            <label>Spoilboard Z Thickness (mm):</label>
+            <input class="cle-input" id="cle-sp-thick" type="number" value="${curThick}" step="0.5">
+          </div>
+          <!-- Quick Preset Chips -->
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; align-items:center;">
+            <span style="font-size:11px; color:var(--ink-2);">Presets:</span>
+            <button class="cle-btn cle-sp-preset" data-val="12.0" style="padding:2px 8px; font-size:11px;">12mm (1/2")</button>
+            <button class="cle-btn cle-sp-preset" data-val="15.0" style="padding:2px 8px; font-size:11px;">15mm</button>
+            <button class="cle-btn cle-sp-preset" data-val="18.0" style="padding:2px 8px; font-size:11px;">18mm</button>
+            <button class="cle-btn cle-sp-preset" data-val="19.05" style="padding:2px 8px; font-size:11px;">19.05mm (3/4")</button>
+            <button class="cle-btn cle-sp-preset" data-val="20.0" style="padding:2px 8px; font-size:11px; font-weight:700; border-color:var(--accent);">20mm (Standard)</button>
+            <button class="cle-btn cle-sp-preset" data-val="25.0" style="padding:2px 8px; font-size:11px;">25mm (1")</button>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
+          <div class="cle-form-row">
+            <label>Offset X (mm):</label>
+            <input class="cle-input" id="cle-sp-offx" type="number" value="${curOffX}">
+          </div>
+          <div class="cle-form-row">
+            <label>Offset Y (mm):</label>
+            <input class="cle-input" id="cle-sp-offy" type="number" value="${curOffY}">
+          </div>
+        </div>
+
+        <div class="cle-form-row" style="margin-top:10px;">
+          <label>Breakthrough Cutout Depth into Spoilboard (mm):</label>
+          <input class="cle-input" id="cle-sp-cutout" type="number" step="0.05" value="${curCutout}">
+        </div>
+
+        <!-- Action Buttons -->
+        <div style="margin-top:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <button class="cle-btn" id="cle-sp-btn-sit" style="background:var(--ok); color:#fff; font-weight:700; padding:8px 16px;">
+            🪑 Sit 3D Object on Spoilboard
+          </button>
+          <div style="display:flex; gap:8px;">
+            <button class="cle-btn" id="cle-sp-btn-cancel">Close</button>
+            <button class="cle-btn" id="cle-sp-btn-save" style="background:var(--accent); color:var(--on-accent); font-weight:700; padding:8px 18px;">
+              Apply & Save to Vault
+            </button>
+          </div>
         </div>
       `;
     } else if (type === 'grayscale') {
@@ -1258,8 +1395,73 @@ class CLEBridge {
         const layerH = document.getElementById('slice-layer-h').value;
         const infill = document.getElementById('slice-infill').value;
         const feed = document.getElementById('slice-feed').value;
+        const enableCutout = document.getElementById('slice-enable-cutout') ? document.getElementById('slice-enable-cutout').checked : true;
+        const cutoutOvercut = document.getElementById('slice-cutout-depth') ? (parseFloat(document.getElementById('slice-cutout-depth').value) || 0.20) : 0.20;
+
         this.slicer.feedRate = parseFloat(feed) || 1500;
-        await this.slicer.sliceModel({ mode, layerHeight: layerH, infill });
+        await this.slicer.sliceModel({ mode, layerHeight: layerH, infill, enableCutout, cutoutOvercut });
+        this.closeModal();
+      };
+    } else if (type === 'spoilboard') {
+      const wInput = document.getElementById('cle-sp-width');
+      const dInput = document.getElementById('cle-sp-depth');
+      const tInput = document.getElementById('cle-sp-thick');
+      const cInput = document.getElementById('cle-sp-cutout');
+      const offXInput = document.getElementById('cle-sp-offx');
+      const offYInput = document.getElementById('cle-sp-offy');
+
+      const updateStackDisplay = () => {
+        const t = parseFloat(tInput.value) || 20.0;
+        const c = parseFloat(cInput.value) || 0.20;
+        const surf = 0.10 + t;
+        const cut = surf - c;
+        const safe = t - c;
+        const wElem = document.getElementById('stack-workpiece-z');
+        const cElem = document.getElementById('stack-cutout-z');
+        const tElem = document.getElementById('stack-thick-val');
+        const sElem = document.getElementById('stack-spoil-span');
+        const safeElem = document.getElementById('stack-safety-margin');
+        if (wElem) wElem.textContent = `Z = +${surf.toFixed(2)} mm`;
+        if (cElem) cElem.textContent = `Z = +${cut.toFixed(2)} mm`;
+        if (tElem) tElem.textContent = t.toFixed(1);
+        if (sElem) sElem.textContent = `Z = +0.10 .. +${surf.toFixed(2)} mm`;
+        if (safeElem) safeElem.textContent = `✔ ${safe.toFixed(2)} mm of protective MDF buffer between cutout pass and aluminum table bed.`;
+      };
+
+      tInput.oninput = updateStackDisplay;
+      cInput.oninput = updateStackDisplay;
+
+      document.querySelectorAll('.cle-sp-preset').forEach(btn => {
+        btn.onclick = () => {
+          tInput.value = btn.getAttribute('data-val');
+          updateStackDisplay();
+        };
+      });
+
+      document.getElementById('cle-sp-btn-sit').onclick = () => {
+        if (this.bed) {
+          const t = parseFloat(tInput.value) || 20.0;
+          this.bed.config.spoilboardThickness = t;
+          this.bed.sitWorkpieceOnSpoilboard();
+          this.notify(`Workpiece seated on Spoilboard surface at Z=${(0.1 + t).toFixed(2)}mm`, 'ok');
+        }
+      };
+
+      document.getElementById('cle-sp-btn-cancel').onclick = () => this.closeModal();
+
+      document.getElementById('cle-sp-btn-save').onclick = async () => {
+        const x = parseFloat(wInput.value) || 600;
+        const y = parseFloat(dInput.value) || 500;
+        const thickness = parseFloat(tInput.value) || 20.0;
+        const cutoutOvercut = parseFloat(cInput.value) || 0.20;
+        const offX = parseFloat(offXInput.value) || 0.0;
+        const offY = parseFloat(offYInput.value) || 0.0;
+
+        if (this.bed) {
+          this.bed.config.spoilboardOffsetX = offX;
+          this.bed.config.spoilboardOffsetY = offY;
+          await this.bed.setSpoilboardDimensions({ x, y, thickness, cutoutOvercut, saveToVault: true });
+        }
         this.closeModal();
       };
     } else if (type === 'grayscale') {

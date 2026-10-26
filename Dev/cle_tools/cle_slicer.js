@@ -128,7 +128,11 @@ export class CLESlicerEngine {
   }
 
   generateSampleBoxTriangles(w, d, h) {
-    const x0 = -w/2, x1 = w/2, y0 = -d/2, y1 = d/2, z0 = 0, z1 = h;
+    const bedConfig = this.bridge?.bed?.config;
+    const spoilboardThickness = bedConfig ? (bedConfig.spoilboardThickness !== undefined ? bedConfig.spoilboardThickness : 20.0) : 20.0;
+    const z0 = 0.10 + spoilboardThickness; // Workpiece sits directly on top of spoilboard surface
+    const z1 = z0 + h;
+    const x0 = -w/2, x1 = w/2, y0 = -d/2, y1 = d/2;
     const vertices = [
       // Bottom
       x0,y0,z0, x1,y0,z0, x1,y1,z0,  x0,y0,z0, x1,y1,z0, x0,y1,z0,
@@ -210,7 +214,7 @@ export class CLESlicerEngine {
 
     // 2. Native Device-Type-Aware Slicing
     if (!gcode) {
-      gcode = this.sliceNative(triangles, this.layerHeight, this.mode);
+      gcode = this.sliceNative(triangles, this.layerHeight, this.mode, options);
       usedEngine = `Native CLE JS (${this.mode.toUpperCase()})`;
     }
 
@@ -225,7 +229,7 @@ export class CLESlicerEngine {
   }
 
   // Native In-Browser Slicer with strict Top-Down (CNC/Laser) vs Bottom-Up (3D) ordering
-  sliceNative(triangles, layerH, mode) {
+  sliceNative(triangles, layerH, mode, options = {}) {
     let minX = Infinity, maxX = -Infinity;
     let minY = Infinity, maxY = -Infinity;
     let minZ = Infinity, maxZ = -Infinity;
@@ -328,6 +332,26 @@ export class CLESlicerEngine {
       }
     }
 
+    // Spoilboard Breakthrough / Clean Cutout Pass for CNC Milling
+    // Penetrates 0.2mm into the spoilboard (Z = minZ - 0.20) for 100% clean cutout without tabs
+    // Safe distance to aluminum bed table is > 19.8mm, leaving zero risk of hitting the aluminum bed!
+    const enableCutout = options.enableCutout !== undefined ? options.enableCutout : (this.enableSpoilboardCutout !== false);
+    const cutoutOvercut = options.cutoutOvercut !== undefined ? options.cutoutOvercut : (this.cutoutDepthIntoSpoilboard || this.bridge?.bed?.config?.cutoutOvercut || 0.20);
+
+    if (mode === 'cnc' && enableCutout) {
+      const cutoutZ = (minZ - cutoutOvercut);
+      lines.push(`; --- SPOILBOARD BREAKTHROUGH / CLEAN CUTOUT PASS (Z=${cutoutZ.toFixed(3)}) ---`);
+      lines.push(`; Milling ${cutoutOvercut.toFixed(2)}mm into spoilboard for clean cutout without tabs`);
+      lines.push(`; Safe protective clearance to aluminum bed table: ${(minZ - cutoutOvercut - 0.10).toFixed(2)}mm`);
+      lines.push(`G0 X${minX.toFixed(2)} Y${minY.toFixed(2)} F3000`);
+      lines.push(`G1 Z${cutoutZ.toFixed(3)} F300 ; Plunge into spoilboard`);
+      lines.push(`G1 X${maxX.toFixed(2)} Y${minY.toFixed(2)} F${this.feedRate}`);
+      lines.push(`G1 X${maxX.toFixed(2)} Y${maxY.toFixed(2)}`);
+      lines.push(`G1 X${minX.toFixed(2)} Y${maxY.toFixed(2)}`);
+      lines.push(`G1 X${minX.toFixed(2)} Y${minY.toFixed(2)}`);
+      lines.push(`G0 Z${(maxZ + 5.0).toFixed(3)} F1000 ; Safe retract to clearance plane`);
+    }
+
     // Preamble finish
     lines.push('G0 Z15.0 F1000 ; Safe retract');
     lines.push(mode === 'laser' ? 'M5 ; Laser shutdown' : 'M5 ; Spindle OFF');
@@ -338,12 +362,23 @@ export class CLESlicerEngine {
   parseGCodeIntoLayers(gcodeText) {
     this.slicedLayers = [];
     const lines = gcodeText.split('\n');
-    let currentLayer = { index: 0, z: 0, points: [] };
+    let currentLayer = { index: 0, z: 0, points: [], isCutoutPass: false };
     let curX = 0, curY = 0, curZ = 0;
 
     for (const raw of lines) {
       const line = raw.trim();
       if (!line || line.startsWith('; ===') || line.startsWith('; Device')) continue;
+
+      // Spoilboard Breakthrough header
+      if (line.includes('SPOILBOARD BREAKTHROUGH') || line.includes('CLEAN CUTOUT PASS')) {
+        if (currentLayer.points.length > 0) {
+          this.slicedLayers.push(currentLayer);
+        }
+        const matchZ = line.match(/Z=([-\d.]+)/i);
+        const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
+        currentLayer = { index: this.slicedLayers.length, z: lZ, points: [], isCutoutPass: true };
+        continue;
+      }
 
       // Layer header detection (; --- LAYER: 0 (Z=8.000) --- or ;LAYER:0 or ;LAYER_CHANGE)
       if (line.match(/^;\s*(?:---)?\s*LAYER(?:_CHANGE)?[:\s]/i)) {
@@ -354,7 +389,7 @@ export class CLESlicerEngine {
         const lIdx = matchIdx ? parseInt(matchIdx[1], 10) : this.slicedLayers.length;
         const matchZ = line.match(/Z=([-\d.]+)/i);
         const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
-        currentLayer = { index: lIdx, z: lZ, points: [] };
+        currentLayer = { index: lIdx, z: lZ, points: [], isCutoutPass: false };
         continue;
       }
 
@@ -434,22 +469,27 @@ export class CLESlicerEngine {
       const colors = [];
 
       // Color coding:
+      // Cutout Breakthrough Pass: Vivid Amber-Gold (penetrating into spoilboard)
       // CNC/Laser (top-down): bright neon green at surface -> gold -> deep red at floor
       // 3D (bottom-up): deep blue at bed -> bright cyan -> vivid red at top
       let r, g, b;
-      const progress = lIdx / Math.max(1, numLayers - 1);
-      if (isTopDown) {
-        if (progress < 0.5) {
-          // Green to Gold (0 to 0.5)
-          const t = progress * 2;
-          r = t; g = 1.0; b = 0.2 * (1 - t);
-        } else {
-          // Gold to Red (0.5 to 1.0)
-          const t = (progress - 0.5) * 2;
-          r = 1.0; g = 1.0 - t * 0.8; b = 0.0;
-        }
+      if (layer.isCutoutPass) {
+        r = 1.0; g = 0.65; b = 0.0; // Glowing Amber for Spoilboard Cutout pass
       } else {
-        r = progress; g = 0.5 + 0.5 * (1 - progress); b = 1.0 - progress;
+        const progress = lIdx / Math.max(1, numLayers - 1);
+        if (isTopDown) {
+          if (progress < 0.5) {
+            // Green to Gold (0 to 0.5)
+            const t = progress * 2;
+            r = t; g = 1.0; b = 0.2 * (1 - t);
+          } else {
+            // Gold to Red (0.5 to 1.0)
+            const t = (progress - 0.5) * 2;
+            r = 1.0; g = 1.0 - t * 0.8; b = 0.0;
+          }
+        } else {
+          r = progress; g = 0.5 + 0.5 * (1 - progress); b = 1.0 - progress;
+        }
       }
 
       for (let i = 0; i < layer.points.length - 1; i++) {

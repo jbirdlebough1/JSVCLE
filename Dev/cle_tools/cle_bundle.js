@@ -2390,6 +2390,7 @@ class CLEVault {
         spoilboardThickness: 20.0,   // Spoilboard Thickness (mm, 20mm MDF spoilboard)
         spoilboardOffsetX: 0.0,      // Spoilboard Offset X from Machine 0,0
         spoilboardOffsetY: 0.0,      // Spoilboard Offset Y from Machine 0,0
+        cutoutOvercut: 0.2,          // 0.2mm breakthrough into spoilboard for clean cutouts
         stepsPerMmX: 640.0,
         stepsPerMmY: 640.0,
         stepsPerMmZ: 640.0,
@@ -2523,6 +2524,7 @@ class CLEVault {
       if (mach.spoilboardThickness === undefined || mach.spoilboardThickness === 15.0) mach.spoilboardThickness = 20.0;
       if (mach.spoilboardOffsetX === undefined) mach.spoilboardOffsetX = 0.0;
       if (mach.spoilboardOffsetY === undefined) mach.spoilboardOffsetY = 0.0;
+      if (mach.cutoutOvercut === undefined) mach.cutoutOvercut = 0.2;
 
       // Clean up legacy/stale IPs (.150, .100, etc.) from localStorage
       const savedFluidIp = localStorage.getItem('cle.fluidnc.ip');
@@ -3084,7 +3086,11 @@ class CLESlicerEngine {
   }
 
   generateSampleBoxTriangles(w, d, h) {
-    const x0 = -w/2, x1 = w/2, y0 = -d/2, y1 = d/2, z0 = 0, z1 = h;
+    const bedConfig = this.bridge?.bed?.config;
+    const spoilboardThickness = bedConfig ? (bedConfig.spoilboardThickness !== undefined ? bedConfig.spoilboardThickness : 20.0) : 20.0;
+    const z0 = 0.10 + spoilboardThickness; // Workpiece sits directly on top of spoilboard surface
+    const z1 = z0 + h;
+    const x0 = -w/2, x1 = w/2, y0 = -d/2, y1 = d/2;
     const vertices = [
       // Bottom
       x0,y0,z0, x1,y0,z0, x1,y1,z0,  x0,y0,z0, x1,y1,z0, x0,y1,z0,
@@ -3166,7 +3172,7 @@ class CLESlicerEngine {
 
     // 2. Native Device-Type-Aware Slicing
     if (!gcode) {
-      gcode = this.sliceNative(triangles, this.layerHeight, this.mode);
+      gcode = this.sliceNative(triangles, this.layerHeight, this.mode, options);
       usedEngine = `Native CLE JS (${this.mode.toUpperCase()})`;
     }
 
@@ -3181,7 +3187,7 @@ class CLESlicerEngine {
   }
 
   // Native In-Browser Slicer with strict Top-Down (CNC/Laser) vs Bottom-Up (3D) ordering
-  sliceNative(triangles, layerH, mode) {
+  sliceNative(triangles, layerH, mode, options = {}) {
     let minX = Infinity, maxX = -Infinity;
     let minY = Infinity, maxY = -Infinity;
     let minZ = Infinity, maxZ = -Infinity;
@@ -3284,6 +3290,26 @@ class CLESlicerEngine {
       }
     }
 
+    // Spoilboard Breakthrough / Clean Cutout Pass for CNC Milling
+    // Penetrates 0.2mm into the spoilboard (Z = minZ - 0.20) for 100% clean cutout without tabs
+    // Safe distance to aluminum bed table is > 19.8mm, leaving zero risk of hitting the aluminum bed!
+    const enableCutout = options.enableCutout !== undefined ? options.enableCutout : (this.enableSpoilboardCutout !== false);
+    const cutoutOvercut = options.cutoutOvercut !== undefined ? options.cutoutOvercut : (this.cutoutDepthIntoSpoilboard || this.bridge?.bed?.config?.cutoutOvercut || 0.20);
+
+    if (mode === 'cnc' && enableCutout) {
+      const cutoutZ = (minZ - cutoutOvercut);
+      lines.push(`; --- SPOILBOARD BREAKTHROUGH / CLEAN CUTOUT PASS (Z=${cutoutZ.toFixed(3)}) ---`);
+      lines.push(`; Milling ${cutoutOvercut.toFixed(2)}mm into spoilboard for clean cutout without tabs`);
+      lines.push(`; Safe protective clearance to aluminum bed table: ${(minZ - cutoutOvercut - 0.10).toFixed(2)}mm`);
+      lines.push(`G0 X${minX.toFixed(2)} Y${minY.toFixed(2)} F3000`);
+      lines.push(`G1 Z${cutoutZ.toFixed(3)} F300 ; Plunge into spoilboard`);
+      lines.push(`G1 X${maxX.toFixed(2)} Y${minY.toFixed(2)} F${this.feedRate}`);
+      lines.push(`G1 X${maxX.toFixed(2)} Y${maxY.toFixed(2)}`);
+      lines.push(`G1 X${minX.toFixed(2)} Y${maxY.toFixed(2)}`);
+      lines.push(`G1 X${minX.toFixed(2)} Y${minY.toFixed(2)}`);
+      lines.push(`G0 Z${(maxZ + 5.0).toFixed(3)} F1000 ; Safe retract to clearance plane`);
+    }
+
     // Preamble finish
     lines.push('G0 Z15.0 F1000 ; Safe retract');
     lines.push(mode === 'laser' ? 'M5 ; Laser shutdown' : 'M5 ; Spindle OFF');
@@ -3294,12 +3320,23 @@ class CLESlicerEngine {
   parseGCodeIntoLayers(gcodeText) {
     this.slicedLayers = [];
     const lines = gcodeText.split('\n');
-    let currentLayer = { index: 0, z: 0, points: [] };
+    let currentLayer = { index: 0, z: 0, points: [], isCutoutPass: false };
     let curX = 0, curY = 0, curZ = 0;
 
     for (const raw of lines) {
       const line = raw.trim();
       if (!line || line.startsWith('; ===') || line.startsWith('; Device')) continue;
+
+      // Spoilboard Breakthrough header
+      if (line.includes('SPOILBOARD BREAKTHROUGH') || line.includes('CLEAN CUTOUT PASS')) {
+        if (currentLayer.points.length > 0) {
+          this.slicedLayers.push(currentLayer);
+        }
+        const matchZ = line.match(/Z=([-\d.]+)/i);
+        const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
+        currentLayer = { index: this.slicedLayers.length, z: lZ, points: [], isCutoutPass: true };
+        continue;
+      }
 
       // Layer header detection (; --- LAYER: 0 (Z=8.000) --- or ;LAYER:0 or ;LAYER_CHANGE)
       if (line.match(/^;\s*(?:---)?\s*LAYER(?:_CHANGE)?[:\s]/i)) {
@@ -3310,7 +3347,7 @@ class CLESlicerEngine {
         const lIdx = matchIdx ? parseInt(matchIdx[1], 10) : this.slicedLayers.length;
         const matchZ = line.match(/Z=([-\d.]+)/i);
         const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
-        currentLayer = { index: lIdx, z: lZ, points: [] };
+        currentLayer = { index: lIdx, z: lZ, points: [], isCutoutPass: false };
         continue;
       }
 
@@ -3390,22 +3427,27 @@ class CLESlicerEngine {
       const colors = [];
 
       // Color coding:
+      // Cutout Breakthrough Pass: Vivid Amber-Gold (penetrating into spoilboard)
       // CNC/Laser (top-down): bright neon green at surface -> gold -> deep red at floor
       // 3D (bottom-up): deep blue at bed -> bright cyan -> vivid red at top
       let r, g, b;
-      const progress = lIdx / Math.max(1, numLayers - 1);
-      if (isTopDown) {
-        if (progress < 0.5) {
-          // Green to Gold (0 to 0.5)
-          const t = progress * 2;
-          r = t; g = 1.0; b = 0.2 * (1 - t);
-        } else {
-          // Gold to Red (0.5 to 1.0)
-          const t = (progress - 0.5) * 2;
-          r = 1.0; g = 1.0 - t * 0.8; b = 0.0;
-        }
+      if (layer.isCutoutPass) {
+        r = 1.0; g = 0.65; b = 0.0; // Glowing Amber for Spoilboard Cutout pass
       } else {
-        r = progress; g = 0.5 + 0.5 * (1 - progress); b = 1.0 - progress;
+        const progress = lIdx / Math.max(1, numLayers - 1);
+        if (isTopDown) {
+          if (progress < 0.5) {
+            // Green to Gold (0 to 0.5)
+            const t = progress * 2;
+            r = t; g = 1.0; b = 0.2 * (1 - t);
+          } else {
+            // Gold to Red (0.5 to 1.0)
+            const t = (progress - 0.5) * 2;
+            r = 1.0; g = 1.0 - t * 0.8; b = 0.0;
+          }
+        } else {
+          r = progress; g = 0.5 + 0.5 * (1 - progress); b = 1.0 - progress;
+        }
       }
 
       for (let i = 0; i < layer.points.length - 1; i++) {
@@ -4302,9 +4344,12 @@ class CLEBedVisualizer {
       spoilboardThickness: 20.0,
       spoilboardOffsetX: 0.0,
       spoilboardOffsetY: 0.0,
+      cutoutOvercut: 0.2, // 0.2mm breakthrough into spoilboard for clean cutouts without tabs
+      safeLimitZ: 0.1,    // 0.1mm above aluminum bed table hard limit
       gridPitch: 10.0,
       majorGridPitch: 50.0
     };
+    this.workpieceZ = 20.1;
   }
 
   // Initializes bed visualizer once JumpStart Three.js viewport is ready
@@ -4329,6 +4374,8 @@ class CLEBedVisualizer {
     this.config.spoilboardThickness = mach.spoilboardThickness !== undefined ? parseFloat(mach.spoilboardThickness) : 20.0;
     this.config.spoilboardOffsetX = mach.spoilboardOffsetX !== undefined ? parseFloat(mach.spoilboardOffsetX) : 0.0;
     this.config.spoilboardOffsetY = mach.spoilboardOffsetY !== undefined ? parseFloat(mach.spoilboardOffsetY) : 0.0;
+    this.config.cutoutOvercut = mach.cutoutOvercut !== undefined ? parseFloat(mach.cutoutOvercut) : 0.2;
+    this.config.safeLimitZ = mach.safeLimitZ !== undefined ? parseFloat(mach.safeLimitZ) : 0.1;
   }
 
   // Get Three.js root scene/world container
@@ -4367,6 +4414,7 @@ class CLEBedVisualizer {
     this.bedGroup.name = 'CLE_Device_Bed_Visualizer';
     this.bedGroup.visible = this.visible;
 
+    this.buildAluminumBedTable(THREE);
     this.buildSpoilboardSlab(THREE);
     this.buildGridAndExtrusionFrame(THREE);
     this.buildMMLBKeepOutToolLines(THREE);
@@ -4376,17 +4424,23 @@ class CLEBedVisualizer {
 
     container.add(this.bedGroup);
 
+    // If visible, seat workpiece on the spoilboard surface
+    if (this.visible) {
+      this.sitWorkpieceOnSpoilboard();
+    }
+
     this.requestRender();
-    console.log('[CLE Bed] Mounted MM/LB tool line overlay and medium blue bed on top of normal display.');
+    console.log('[CLE Bed] Mounted MM/LB tool line overlay, aluminum bed table, medium blue spoilboard and seated workpiece.');
   }
 
-  // Centering & Framing: Centers camera on bed center (300, 250, 0) - only on explicit user request (Fit Bed)
+  // Centering & Framing: Centers camera on bed center (300, 250, Z_mid) - only on explicit user request (Fit Bed)
   fitBedView() {
     const app = window.app || window.xe;
     if (!app || !app.vp || !app.vp.view) return;
     const cx = (this.config.travelX || 600) / 2;
     const cy = (this.config.travelY || 500) / 2;
-    app.vp.view.target.set(cx, cy, 0);
+    const cz = 0.1 + (this.config.spoilboardThickness || 20) / 2;
+    app.vp.view.target.set(cx, cy, cz);
     app.vp.view.dist = 780;
     app.vp.view.az = 0.45;
     app.vp.view.el = 0.55;
@@ -4394,11 +4448,44 @@ class CLEBedVisualizer {
     this.requestRender();
   }
 
-  // 1. Spoilboard Slab: Medium Blue Translucent Bed Underlay
+  // 0. Aluminum Machine Bed Table: Heavy Base Plate underneath Spoilboard (Floor safety limit at Z = +0.10mm)
+  buildAluminumBedTable(THREE) {
+    const { travelX, travelY, spoilboardX, spoilboardY, spoilboardOffsetX, spoilboardOffsetY } = this.config;
+    const tableW = Math.max(travelX, spoilboardX) + 24;
+    const tableD = Math.max(travelY, spoilboardY) + 24;
+    const tableThick = 15.0; // 15mm heavy aluminum bed plate
+
+    // Aluminum Bed Table Plate - sits from Z = -14.90mm up to Z = +0.10mm
+    const tableGeo = new THREE.BoxGeometry(tableW, tableD, tableThick);
+    const tableMat = new THREE.MeshStandardMaterial({
+      color: 0x334155, // Dark Slate Metallic Aluminum
+      roughness: 0.35,
+      metalness: 0.80,
+      depthWrite: false
+    });
+    const tableMesh = new THREE.Mesh(tableGeo, tableMat);
+    tableMesh.position.set(
+      spoilboardOffsetX + (travelX / 2),
+      spoilboardOffsetY + (travelY / 2),
+      0.10 - (tableThick / 2) // top face sits precisely at Z = +0.10mm
+    );
+    tableMesh.renderOrder = -25;
+    tableMesh.name = 'CLE_Aluminum_Bed_Table';
+    this.bedGroup.add(tableMesh);
+
+    // Subtle chamfered wireframe around aluminum table border
+    const edgeGeo = new THREE.EdgesGeometry(tableGeo);
+    const edgeMat = new THREE.LineBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.45, depthWrite: false });
+    const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
+    tableMesh.add(edgeLines);
+  }
+
+  // 1. Spoilboard Slab: Medium Blue Translucent Bed Underlay sitting on top of Aluminum Bed (+0.1mm to 0.1 + Thickness)
   buildSpoilboardSlab(THREE) {
     const { spoilboardX, spoilboardY, spoilboardThickness, spoilboardOffsetX, spoilboardOffsetY } = this.config;
 
-    // Medium Blue Translucent Bed Slab - rendered with depthWrite: false and renderOrder: -20 so it never occludes normal CAD bodies
+    // Spoilboard Slab sits directly on top of aluminum bed:
+    // Bottom sits at Z = +0.10mm; Top surface sits at Z = 0.10 + spoilboardThickness
     const slabGeo = new THREE.BoxGeometry(spoilboardX, spoilboardY, spoilboardThickness);
     const slabMat = new THREE.MeshStandardMaterial({
       color: 0x1d4ed8, // Medium Royal Blue
@@ -4411,17 +4498,17 @@ class CLEBedVisualizer {
     });
 
     const slab = new THREE.Mesh(slabGeo, slabMat);
-    // Center of slab: sits below Z = 0.00
+    // Center Z = 0.10 + (spoilboardThickness / 2)
     slab.position.set(
       spoilboardOffsetX + spoilboardX / 2,
       spoilboardOffsetY + spoilboardY / 2,
-      -spoilboardThickness / 2
+      0.10 + (spoilboardThickness / 2)
     );
     slab.renderOrder = -20;
     slab.name = 'CLE_Spoilboard_Slab';
     this.bedGroup.add(slab);
 
-    // Polished top bed plane surface placed slightly below Z=0 (Z = -0.05mm) so normal CAD models sit cleanly on top
+    // Polished top bed plane surface placed right at Z = 0.10 + spoilboardThickness
     const topPlaneGeo = new THREE.PlaneGeometry(spoilboardX, spoilboardY);
     const topPlaneMat = new THREE.MeshBasicMaterial({
       color: 0x2563eb, // Vibrant medium blue top face
@@ -4434,21 +4521,22 @@ class CLEBedVisualizer {
     topPlaneMesh.position.set(
       spoilboardOffsetX + spoilboardX / 2,
       spoilboardOffsetY + spoilboardY / 2,
-      -0.05
+      0.10 + spoilboardThickness
     );
     topPlaneMesh.renderOrder = -20;
     topPlaneMesh.name = 'CLE_Bed_Top_Plane';
     this.bedGroup.add(topPlaneMesh);
   }
 
-  // 2. Light Green Squares Surface Grid & Machine Travel Limits Volume (600x500x100mm)
+  // 2. Light Green Squares Surface Grid & Machine Travel Limits Volume on Spoilboard Surface
   buildGridAndExtrusionFrame(THREE) {
-    const { travelX, travelY, travelZ, spoilboardX, spoilboardY, spoilboardOffsetX, spoilboardOffsetY, gridPitch, majorGridPitch } = this.config;
+    const { travelX, travelY, travelZ, spoilboardX, spoilboardY, spoilboardThickness, spoilboardOffsetX, spoilboardOffsetY, gridPitch, majorGridPitch } = this.config;
 
     const minorPts = [];
     const majorPts = [];
-    const zMinor = -0.03;
-    const zMajor = -0.02;
+    const zSurface = 0.10 + spoilboardThickness;
+    const zMinor = zSurface + 0.02;
+    const zMajor = zSurface + 0.03;
 
     const x0 = spoilboardOffsetX;
     const x1 = spoilboardOffsetX + spoilboardX;
@@ -4512,11 +4600,10 @@ class CLEBedVisualizer {
   }
 
   // 3. MillMage / LightBurn Tool Lines (T1 Bed Boundary, T2 Soft-Limit Keep-Out Margins & Clamp Keepouts)
-  // Non-cutting reference tool lines rendered on top of normal display ("where no actual tool exists but good for keep outs etc.")
   buildMMLBKeepOutToolLines(THREE) {
-    const { travelX, travelY, travelZ } = this.config;
+    const { travelX, travelY, travelZ, spoilboardThickness } = this.config;
     const tz = travelZ || 100;
-    const zToolLine = 0.05;
+    const zToolLine = 0.10 + spoilboardThickness + 0.05;
 
     const toolLayerGroup = new THREE.Group();
     toolLayerGroup.name = 'CLE_MM_LB_Tool_Lines_Overlay';
@@ -4574,7 +4661,7 @@ class CLEBedVisualizer {
       clampPts.push(c.x1, c.y0, zToolLine,  c.x1, c.y1, zToolLine);
       clampPts.push(c.x1, c.y1, zToolLine,  c.x0, c.y1, zToolLine);
       clampPts.push(c.x0, c.y1, zToolLine,  c.x0, c.y0, zToolLine);
-      // Diagonal cross-hatch (keep-out marker)
+      // Diagonal cross-hatch
       clampPts.push(c.x0, c.y0, zToolLine,  c.x1, c.y1, zToolLine);
       clampPts.push(c.x1, c.y0, zToolLine,  c.x0, c.y1, zToolLine);
     });
@@ -4607,14 +4694,14 @@ class CLEBedVisualizer {
       travelX, 0, zToolLine,  travelX, travelY, zToolLine,
       travelX, travelY, zToolLine,  0, travelY, zToolLine,
       0, travelY, zToolLine,  0, 0, zToolLine,
-      0, 0, tz,  travelX, 0, tz,
-      travelX, 0, tz,  travelX, travelY, tz,
-      travelX, travelY, tz,  0, travelY, tz,
-      0, travelY, tz,  0, 0, tz,
-      0, 0, zToolLine,  0, 0, tz,
-      travelX, 0, zToolLine,  travelX, 0, tz,
-      travelX, travelY, zToolLine,  travelX, travelY, tz,
-      0, travelY, zToolLine,  0, travelY, tz
+      0, 0, zToolLine + tz,  travelX, 0, zToolLine + tz,
+      travelX, 0, zToolLine + tz,  travelX, travelY, zToolLine + tz,
+      travelX, travelY, zToolLine + tz,  0, travelY, zToolLine + tz,
+      0, travelY, zToolLine + tz,  0, 0, zToolLine + tz,
+      0, 0, zToolLine,  0, 0, zToolLine + tz,
+      travelX, 0, zToolLine,  travelX, 0, zToolLine + tz,
+      travelX, travelY, zToolLine,  travelX, travelY, zToolLine + tz,
+      0, travelY, zToolLine,  0, travelY, zToolLine + tz
     ];
     const travelGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(travelBoxPts, 3));
     const travelMat = new THREE.LineBasicMaterial({ color: 0xd946ef, linewidth: 2, transparent: true, opacity: 0.70 });
@@ -4625,11 +4712,11 @@ class CLEBedVisualizer {
     this.bedGroup.add(toolLayerGroup);
   }
 
-  // 3. Machine Tool Lines (X, Y, Z Axes Marker at Bed Origin)
+  // 3. Machine Tool Lines (X, Y, Z Axes Marker at Spoilboard Surface Origin)
   buildMachineOriginToolLines(THREE) {
-    const { travelX, travelY, travelZ } = this.config;
+    const { travelX, travelY, travelZ, spoilboardThickness } = this.config;
     const tz = travelZ || 100;
-    const zOrigin = 0.20;
+    const zOrigin = 0.10 + spoilboardThickness + 0.08;
 
     const toolLinesGroup = new THREE.Group();
     toolLinesGroup.name = 'CLE_Machine_Tool_Lines_XYZ';
@@ -4686,8 +4773,8 @@ class CLEBedVisualizer {
     yLabel.scale.set(32, 16, 1);
     toolLinesGroup.add(yLabel);
 
-    // --- Blue Z Axis Tool Line (Vertical corner post 0..travelZ) ---
-    const zPts = [0, 0, 0,  0, 0, tz];
+    // --- Blue Z Axis Tool Line (Vertical corner post zOrigin .. zOrigin + tz) ---
+    const zPts = [0, 0, zOrigin,  0, 0, zOrigin + tz];
     const zGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(zPts, 3));
     const zMat = new THREE.LineBasicMaterial({ color: 0x3b82f6, linewidth: 4, depthTest: false });
     const zLine = new THREE.Line(zGeo, zMat);
@@ -4697,35 +4784,35 @@ class CLEBedVisualizer {
     const zRodGeo = new THREE.CylinderGeometry(1.2, 1.2, tz, 12);
     const zRodMat = new THREE.MeshBasicMaterial({ color: 0x3b82f6, depthTest: false });
     const zRod = new THREE.Mesh(zRodGeo, zRodMat);
-    zRod.position.set(0, 0, tz / 2);
+    zRod.position.set(0, 0, zOrigin + tz / 2);
     zRod.rotation.x = Math.PI / 2;
     toolLinesGroup.add(zRod);
 
     // Z Arrow Head & Sprite Label
     const zConeGeo = new THREE.ConeGeometry(3.5, 12, 16);
     const zCone = new THREE.Mesh(zConeGeo, zRodMat);
-    zCone.position.set(0, 0, tz + 6);
+    zCone.position.set(0, 0, zOrigin + tz + 6);
     zCone.rotation.x = Math.PI;
     toolLinesGroup.add(zCone);
 
     const zLabel = this.createNumberLabelSprite(THREE, `Z (${tz}mm)`, '#3b82f6');
-    zLabel.position.set(0, 0, tz + 20);
+    zLabel.position.set(0, 0, zOrigin + tz + 20);
     zLabel.scale.set(32, 16, 1);
     toolLinesGroup.add(zLabel);
 
-    // Origin WCS Badge at (0, 0, 0)
-    const wcsTag = this.createNumberLabelSprite(THREE, 'WCS (0,0,0)', '#f59e0b');
-    wcsTag.position.set(-14, -14, zOrigin + 2);
-    wcsTag.scale.set(28, 14, 1);
+    // Origin WCS Badge at (0, 0, zOrigin)
+    const wcsTag = this.createNumberLabelSprite(THREE, `WCS (0,0) Z+${(0.10 + spoilboardThickness).toFixed(1)}mm`, '#f59e0b');
+    wcsTag.position.set(-16, -16, zOrigin + 2);
+    wcsTag.scale.set(32, 14, 1);
     toolLinesGroup.add(wcsTag);
 
     this.bedGroup.add(toolLinesGroup);
   }
 
-  // 3. Millimeter Rulers along X and Y axes with Tick Marks and Numerical Labels
+  // 3. Millimeter Rulers along X and Y axes with Tick Marks and Numerical Labels on Spoilboard Surface
   buildMillimeterRulers(THREE) {
-    const { travelX, travelY, spoilboardOffsetX, spoilboardOffsetY } = this.config;
-    const zSurface = 0.05;
+    const { travelX, travelY, spoilboardThickness, spoilboardOffsetX, spoilboardOffsetY } = this.config;
+    const zSurface = 0.10 + spoilboardThickness + 0.06;
 
     const tickPts = [];
     const rulerColor = 0x94a3b8;
@@ -4903,11 +4990,14 @@ class CLEBedVisualizer {
     this.buildShadowCrosshair(THREE);
   }
 
-  // Projected Shadow Crosshair & Guide Lines to Rulers on Spoilboard
+  // Projected Shadow Crosshair & Guide Lines to Rulers on Spoilboard Surface
   buildShadowCrosshair(THREE) {
     if (this.shadowCrosshair && this.shadowCrosshair.parent) {
       this.shadowCrosshair.parent.remove(this.shadowCrosshair);
     }
+
+    const { spoilboardThickness } = this.config;
+    const zCrosshair = 0.10 + spoilboardThickness + 0.04;
 
     this.shadowCrosshair = new THREE.Group();
     this.shadowCrosshair.name = 'CLE_Spoilboard_Crosshair_Shadow';
@@ -4922,7 +5012,7 @@ class CLEBedVisualizer {
       depthTest: false
     });
     const ringMesh = new THREE.Mesh(ringGeo, ringMat);
-    ringMesh.position.set(0, 0, 0.08);
+    ringMesh.position.set(0, 0, zCrosshair);
     this.shadowCrosshair.add(ringMesh);
 
     // Dynamic Guide Line Segments to X and Y rulers
@@ -4954,90 +5044,116 @@ class CLEBedVisualizer {
     const posAttr = this.guideLines.geometry.attributes.position;
     const baseY = this.config.spoilboardOffsetY;
     const baseX = this.config.spoilboardOffsetX;
+    const zCrosshair = 0.10 + this.config.spoilboardThickness + 0.04;
 
     // Line 1: from (x, y) down to front X-axis ruler at (x, baseY)
-    posAttr.setXYZ(0, 0, 0, 0.08);
-    posAttr.setXYZ(1, 0, baseY - y, 0.08);
+    posAttr.setXYZ(0, 0, 0, zCrosshair);
+    posAttr.setXYZ(1, 0, baseY - y, zCrosshair);
 
     // Line 2: from (x, y) left to Y-axis ruler at (baseX, y)
-    posAttr.setXYZ(2, 0, 0, 0.08);
-    posAttr.setXYZ(3, baseX - x, 0, 0.08);
+    posAttr.setXYZ(2, 0, 0, zCrosshair);
+    posAttr.setXYZ(3, baseX - x, 0, zCrosshair);
 
     posAttr.needsUpdate = true;
     this.guideLines.computeLineDistances();
   }
 
-  // Live Position Update from FluidNC DRO (wpos or mpos) - throttled to avoid memory & rendering churn
-  updateToolCursor(coords) {
-    if (!coords) return;
-    if (!this._lastRenderedPos) this._lastRenderedPos = { X: NaN, Y: NaN, Z: NaN, A: NaN };
+  // Sit 3D CAD Workpiece Flush on Top of Spoilboard Surface
+  // Physics Stack: Aluminum Table @ Z = 0.1mm, Spoilboard Thickness = T mm, Surface = 0.1 + T mm
+  sitWorkpieceOnSpoilboard() {
+    const app = window.app || window.xe;
+    if (!app || !app.scene || !app.scene.root) return;
+    const THREE = window.THREE;
+    if (!THREE) return;
 
-    const newX = coords.X !== undefined ? coords.X : this.lastPos.X;
-    const newY = coords.Y !== undefined ? coords.Y : this.lastPos.Y;
-    const newZ = coords.Z !== undefined ? coords.Z : this.lastPos.Z;
-    const newA = coords.A !== undefined ? coords.A : this.lastPos.A;
+    const surfaceZ = 0.10 + (this.config.spoilboardThickness !== undefined ? this.config.spoilboardThickness : 20.0);
 
-    // Only update 3D scene if position has actually moved by > 0.05mm
-    const dx = Math.abs(newX - this._lastRenderedPos.X);
-    const dy = Math.abs(newY - this._lastRenderedPos.Y);
-    const dz = Math.abs(newZ - this._lastRenderedPos.Z);
-    const da = Math.abs(newA - this._lastRenderedPos.A);
-    if (dx < 0.05 && dy < 0.05 && dz < 0.05 && da < 0.1) return;
+    // 1. Compute lowest Z coordinate of active CAD bodies
+    let minZ = 0;
+    let hasBodies = false;
+    try {
+      if (typeof app.scene.allBox === 'function') {
+        const box = app.scene.allBox();
+        if (box && isFinite(box.min.z) && Math.abs(box.min.z) < 1e8) {
+          minZ = box.min.z;
+          hasBodies = true;
+        }
+      }
+    } catch (e) {}
 
-    this.lastPos.X = newX;
-    this.lastPos.Y = newY;
-    this.lastPos.Z = newZ;
-    this.lastPos.A = newA;
-    this._lastRenderedPos = { X: newX, Y: newY, Z: newZ, A: newA };
-
-    if (this.cursorGroup) {
-      this.cursorGroup.position.set(this.lastPos.X, this.lastPos.Y, this.lastPos.Z);
+    if (!hasBodies && app.scene.views) {
+      try {
+        for (const [id, view] of app.scene.views) {
+          if (view.data && view.data.bbox && view.data.bbox.min) {
+            const bMinZ = view.data.bbox.min[2];
+            if (bMinZ < minZ || !hasBodies) {
+              minZ = bMinZ;
+              hasBodies = true;
+            }
+          }
+        }
+      } catch (e) {}
     }
 
-    this.updateCrosshairShadow(this.lastPos.X, this.lastPos.Y);
+    // Delta required to sit workpiece bottom flush on top of spoilboard surface
+    const deltaZ = hasBodies ? (surfaceZ - minZ) : surfaceZ;
+    app.scene.root.position.z = deltaZ;
+    app.scene.root.updateMatrixWorld(true);
+    this.workpieceZ = surfaceZ;
 
-    if (this.coordTag && this.coordTag.material && this.coordTag.material.map) {
-      const text = `X:${this.lastPos.X.toFixed(1)} Y:${this.lastPos.Y.toFixed(1)} Z:${this.lastPos.Z.toFixed(1)}`;
-      if (this._lastCoordText !== text) {
-        this._lastCoordText = text;
-        this.updateSpriteCanvasText(this.coordTag, text);
+    this.requestRender();
+    console.log(`[CLE Bed] Workpiece seated flush on spoilboard surface: Z=${surfaceZ.toFixed(2)}mm (bed Z=0.1mm, spoilboard thickness=${this.config.spoilboardThickness}mm, deltaZ=${deltaZ.toFixed(2)}mm).`);
+  }
+
+  // Live Spoilboard Dimension & Z Thickness Adjuster
+  async setSpoilboardDimensions({ x, y, thickness, cutoutOvercut, saveToVault = true }) {
+    if (x !== undefined && isFinite(x) && x > 0) this.config.spoilboardX = parseFloat(x);
+    if (y !== undefined && isFinite(y) && y > 0) this.config.spoilboardY = parseFloat(y);
+    if (thickness !== undefined && isFinite(thickness) && thickness >= 0) this.config.spoilboardThickness = parseFloat(thickness);
+    if (cutoutOvercut !== undefined && isFinite(cutoutOvercut)) this.config.cutoutOvercut = parseFloat(cutoutOvercut);
+
+    // Rebuild 3D bed scene
+    this.mountToScene();
+
+    // Re-seat workpiece on new spoilboard surface
+    this.sitWorkpieceOnSpoilboard();
+
+    // Persist to Vault
+    if (saveToVault && this.bridge.vault) {
+      const mach = this.bridge.vault.getActiveMachine();
+      if (mach) {
+        mach.spoilboardX = this.config.spoilboardX;
+        mach.spoilboardY = this.config.spoilboardY;
+        mach.spoilboardThickness = this.config.spoilboardThickness;
+        mach.cutoutOvercut = this.config.cutoutOvercut;
+        await this.bridge.vault.saveMachine(mach);
+        console.log('[CLE Bed] Spoilboard dimensions persisted to active machine profile in Vault.');
       }
     }
 
     this.requestRender();
+    this.bridge.notify(`Spoilboard Updated: ${this.config.spoilboardX}x${this.config.spoilboardY}x${this.config.spoilboardThickness}mm (Workpiece seated at Z=${(0.1 + this.config.spoilboardThickness).toFixed(2)}mm)`, 'ok');
   }
 
-  // Re-draw text on sprite canvas
-  updateSpriteCanvasText(sprite, text) {
-    const canvas = sprite.material.map.image;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    ctx.shadowColor = 'rgba(0,0,0,0.9)';
-    ctx.shadowBlur = 6;
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = '#0284c7';
-    ctx.strokeText(text, canvas.width / 2, canvas.height / 2);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
-
-    sprite.material.map.needsUpdate = true;
-  }
-
-  // Toggle Visibility of Bed & Rulers
+  // Toggle Visibility of Bed, Spoilboard & Elevated Workpiece
   toggle() {
     this.visible = !this.visible;
     if (this.bedGroup) {
       this.bedGroup.visible = this.visible;
     }
+    const app = window.app || window.xe;
+    if (app && app.scene && app.scene.root) {
+      if (this.visible) {
+        // Seat workpiece on top of spoilboard
+        this.sitWorkpieceOnSpoilboard();
+      } else {
+        // Return workpiece to standard CAD workspace (Z = 0)
+        app.scene.root.position.z = 0;
+        app.scene.root.updateMatrixWorld(true);
+      }
+    }
     this.requestRender();
-    this.bridge.notify(`Machine Bed & Rulers: ${this.visible ? 'VISIBLE' : 'HIDDEN'}`, 'info');
+    this.bridge.notify(`Machine Bed & Spoilboard: ${this.visible ? 'ACTIVE (Workpiece seated on Spoilboard)' : 'HIDDEN (Workpiece on normal CAD zero)'}`, 'info');
     return this.visible;
   }
 
@@ -5189,6 +5305,19 @@ class CLEBridge {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
       if (this.bed) this.bed.init();
       if (this.slicer) this.slicer.init();
+      // Hook scene refresh so workpiece automatically stays seated on spoilboard
+      if (app.scene && !this._sceneRefreshHooked) {
+        this._sceneRefreshHooked = true;
+        const origRefresh = app.scene.refresh ? app.scene.refresh.bind(app.scene) : null;
+        if (origRefresh) {
+          app.scene.refresh = () => {
+            origRefresh();
+            if (this.bed && this.bed.visible) {
+              this.bed.sitWorkpieceOnSpoilboard();
+            }
+          };
+        }
+      }
     } else {
       setTimeout(() => this.registerWithJumpStart(), 250);
     }
@@ -5260,7 +5389,14 @@ class CLEBridge {
       }},
       { id: "cle-r-connect", label: "Connect", title: "Direct Machine Connect / Disconnect", icon: "drive", pressed: this.fluidnc.isConnected, fn: () => this.connectActiveMachine() },
       { id: "cle-r-fluidnc", label: "FluidNC", title: "FluidTouch 7\" Web GUI / FluidNC Status", icon: "motion", fn: () => this.fluidnc.openFluidTouchWebGUI() },
-      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Rulers", icon: "dim", pressed: this.bed ? this.bed.visible : true, fn: () => this.bed && this.bed.toggle() },
+      { id: "cle-r-bed", label: "Machine Bed", title: "Toggle 3D Bed, Spoilboard & Workpiece Elevation", icon: "dim", pressed: this.bed ? this.bed.visible : true, fn: () => {
+        if (this.bed) {
+          const vis = this.bed.toggle();
+          const el = document.getElementById('cle-r-bed');
+          if (el) el.classList.toggle('pressed', vis);
+        }
+      }},
+      { id: "cle-r-spoilboard", label: "Spoilboard & Z", title: "Adjust Spoilboard Size, Thickness & Sit Workpiece on Surface", icon: "cube", fn: () => this.openModal("spoilboard") },
       { id: "cle-r-fitbed", label: "Fit Bed", title: "Center and Frame 3D View on Machine Bed", icon: "zoomExtents", fn: () => this.bed && this.bed.fitBedView() }
     ]);
 
@@ -5963,8 +6099,125 @@ class CLEBridge {
           <input class="cle-input" id="slice-feed" type="number" value="${this.slicer.feedRate}">
         </div>
 
+        <!-- Spoilboard Clean Cutout Breakthrough Option -->
+        <div class="cle-form-row" style="margin-top:12px; background:rgba(37,99,235,0.08); padding:10px 12px; border-radius:6px; border:1px solid rgba(37,99,235,0.25);">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="checkbox" id="slice-enable-cutout" checked style="width:16px; height:16px;">
+            <span style="font-weight:700;">Spoilboard Clean Cutout (Breakthrough Pass)</span>
+          </label>
+          <div style="font-size:11px; color:var(--ink-2); margin-top:4px;">
+            Mills 0.20mm into the spoilboard for a clean cutout without tabs. Zero risk of touching aluminum bed table (>19mm safe MDF buffer).
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+            <label style="font-size:12px;">Cutout Depth into Spoilboard (mm):</label>
+            <input class="cle-input" id="slice-cutout-depth" type="number" step="0.05" value="${this.bed ? (this.bed.config.cutoutOvercut || 0.20) : 0.20}" style="width:90px;">
+          </div>
+        </div>
+
         <div style="margin-top:14px; display:flex; gap:10px;">
           <button class="cle-btn" id="slice-run-btn" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Slice & Display in 3D Viewport</button>
+        </div>
+      `;
+    } else if (type === 'spoilboard') {
+      title = '🪵 Spoilboard Size, Z Thickness & Workpiece Elevation';
+      const bConf = this.bed ? this.bed.config : { spoilboardX: 600, spoilboardY: 500, spoilboardThickness: 20.0, cutoutOvercut: 0.2 };
+      const curThick = bConf.spoilboardThickness !== undefined ? bConf.spoilboardThickness : 20.0;
+      const curX = bConf.spoilboardX || 600;
+      const curY = bConf.spoilboardY || 500;
+      const curCutout = bConf.cutoutOvercut !== undefined ? bConf.cutoutOvercut : 0.2;
+      const curOffX = bConf.spoilboardOffsetX || 0;
+      const curOffY = bConf.spoilboardOffsetY || 0;
+
+      bodyHtml = `
+        <p style="margin-bottom:12px; font-size:12px; color:var(--ink-2);">
+          Configure the physical spoilboard slab sitting on top of the machine aluminum table bed.
+          The workpiece sits flush on the spoilboard surface, allowing the tool to mill 0.2mm into the spoilboard for 100% clean cutouts without touching the aluminum table.
+        </p>
+
+        <!-- Visual Stack Diagram -->
+        <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px;">
+          <div style="font-weight:700; font-size:12px; color:var(--accent); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px;">
+            Physical 3D Coordinate Stack
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; font-family:monospace; font-size:12px;">
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(56, 189, 248, 0.12); border-left:4px solid #38bdf8; border-radius:4px;">
+              <span><strong>Workpiece (3D CAD Object):</strong> Sits on top of Spoilboard</span>
+              <span id="stack-workpiece-z" style="color:#0284c7; font-weight:700;">Z = +${(0.1 + curThick).toFixed(2)} mm</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(245, 158, 11, 0.12); border-left:4px solid #f59e0b; border-radius:4px;">
+              <span><strong>Clean Cutout Breakthrough Level:</strong> -${curCutout.toFixed(2)}mm into spoilboard</span>
+              <span id="stack-cutout-z" style="color:#d97706; font-weight:700;">Z = +${(0.1 + curThick - curCutout).toFixed(2)} mm</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(37, 99, 235, 0.15); border-left:4px solid #2563eb; border-radius:4px;">
+              <span><strong>Spoilboard Slab (MDF / Sacrificial Fixture):</strong> Thickness = <span id="stack-thick-val">${curThick.toFixed(1)}</span> mm</span>
+              <span id="stack-spoil-span" style="color:#1d4ed8; font-weight:700;">Z = +0.10 .. +${(0.1 + curThick).toFixed(2)} mm</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(100, 116, 139, 0.15); border-left:4px solid #64748b; border-radius:4px;">
+              <span><strong>Aluminum Machine Table Bed:</strong> Safety Limit Floor (Zero Risk)</span>
+              <span style="color:#475569; font-weight:700;">Z = +0.10 mm Hard Floor</span>
+            </div>
+          </div>
+          <div id="stack-safety-margin" style="margin-top:8px; font-size:11px; color:var(--ok); font-weight:600;">
+            ✔ ${(curThick - curCutout).toFixed(2)} mm of protective MDF buffer between cutout pass and aluminum table bed.
+          </div>
+        </div>
+
+        <!-- Spoilboard Dimensions Form -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <div class="cle-form-row">
+            <label>Spoilboard Width (X mm):</label>
+            <input class="cle-input" id="cle-sp-width" type="number" value="${curX}" step="10">
+          </div>
+          <div class="cle-form-row">
+            <label>Spoilboard Depth (Y mm):</label>
+            <input class="cle-input" id="cle-sp-depth" type="number" value="${curY}" step="10">
+          </div>
+        </div>
+
+        <div style="margin-top:10px;">
+          <div class="cle-form-row">
+            <label>Spoilboard Z Thickness (mm):</label>
+            <input class="cle-input" id="cle-sp-thick" type="number" value="${curThick}" step="0.5">
+          </div>
+          <!-- Quick Preset Chips -->
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; align-items:center;">
+            <span style="font-size:11px; color:var(--ink-2);">Presets:</span>
+            <button class="cle-btn cle-sp-preset" data-val="12.0" style="padding:2px 8px; font-size:11px;">12mm (1/2")</button>
+            <button class="cle-btn cle-sp-preset" data-val="15.0" style="padding:2px 8px; font-size:11px;">15mm</button>
+            <button class="cle-btn cle-sp-preset" data-val="18.0" style="padding:2px 8px; font-size:11px;">18mm</button>
+            <button class="cle-btn cle-sp-preset" data-val="19.05" style="padding:2px 8px; font-size:11px;">19.05mm (3/4")</button>
+            <button class="cle-btn cle-sp-preset" data-val="20.0" style="padding:2px 8px; font-size:11px; font-weight:700; border-color:var(--accent);">20mm (Standard)</button>
+            <button class="cle-btn cle-sp-preset" data-val="25.0" style="padding:2px 8px; font-size:11px;">25mm (1")</button>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
+          <div class="cle-form-row">
+            <label>Offset X (mm):</label>
+            <input class="cle-input" id="cle-sp-offx" type="number" value="${curOffX}">
+          </div>
+          <div class="cle-form-row">
+            <label>Offset Y (mm):</label>
+            <input class="cle-input" id="cle-sp-offy" type="number" value="${curOffY}">
+          </div>
+        </div>
+
+        <div class="cle-form-row" style="margin-top:10px;">
+          <label>Breakthrough Cutout Depth into Spoilboard (mm):</label>
+          <input class="cle-input" id="cle-sp-cutout" type="number" step="0.05" value="${curCutout}">
+        </div>
+
+        <!-- Action Buttons -->
+        <div style="margin-top:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <button class="cle-btn" id="cle-sp-btn-sit" style="background:var(--ok); color:#fff; font-weight:700; padding:8px 16px;">
+            🪑 Sit 3D Object on Spoilboard
+          </button>
+          <div style="display:flex; gap:8px;">
+            <button class="cle-btn" id="cle-sp-btn-cancel">Close</button>
+            <button class="cle-btn" id="cle-sp-btn-save" style="background:var(--accent); color:var(--on-accent); font-weight:700; padding:8px 18px;">
+              Apply & Save to Vault
+            </button>
+          </div>
         </div>
       `;
     } else if (type === 'grayscale') {
@@ -6344,8 +6597,73 @@ class CLEBridge {
         const layerH = document.getElementById('slice-layer-h').value;
         const infill = document.getElementById('slice-infill').value;
         const feed = document.getElementById('slice-feed').value;
+        const enableCutout = document.getElementById('slice-enable-cutout') ? document.getElementById('slice-enable-cutout').checked : true;
+        const cutoutOvercut = document.getElementById('slice-cutout-depth') ? (parseFloat(document.getElementById('slice-cutout-depth').value) || 0.20) : 0.20;
+
         this.slicer.feedRate = parseFloat(feed) || 1500;
-        await this.slicer.sliceModel({ mode, layerHeight: layerH, infill });
+        await this.slicer.sliceModel({ mode, layerHeight: layerH, infill, enableCutout, cutoutOvercut });
+        this.closeModal();
+      };
+    } else if (type === 'spoilboard') {
+      const wInput = document.getElementById('cle-sp-width');
+      const dInput = document.getElementById('cle-sp-depth');
+      const tInput = document.getElementById('cle-sp-thick');
+      const cInput = document.getElementById('cle-sp-cutout');
+      const offXInput = document.getElementById('cle-sp-offx');
+      const offYInput = document.getElementById('cle-sp-offy');
+
+      const updateStackDisplay = () => {
+        const t = parseFloat(tInput.value) || 20.0;
+        const c = parseFloat(cInput.value) || 0.20;
+        const surf = 0.10 + t;
+        const cut = surf - c;
+        const safe = t - c;
+        const wElem = document.getElementById('stack-workpiece-z');
+        const cElem = document.getElementById('stack-cutout-z');
+        const tElem = document.getElementById('stack-thick-val');
+        const sElem = document.getElementById('stack-spoil-span');
+        const safeElem = document.getElementById('stack-safety-margin');
+        if (wElem) wElem.textContent = `Z = +${surf.toFixed(2)} mm`;
+        if (cElem) cElem.textContent = `Z = +${cut.toFixed(2)} mm`;
+        if (tElem) tElem.textContent = t.toFixed(1);
+        if (sElem) sElem.textContent = `Z = +0.10 .. +${surf.toFixed(2)} mm`;
+        if (safeElem) safeElem.textContent = `✔ ${safe.toFixed(2)} mm of protective MDF buffer between cutout pass and aluminum table bed.`;
+      };
+
+      tInput.oninput = updateStackDisplay;
+      cInput.oninput = updateStackDisplay;
+
+      document.querySelectorAll('.cle-sp-preset').forEach(btn => {
+        btn.onclick = () => {
+          tInput.value = btn.getAttribute('data-val');
+          updateStackDisplay();
+        };
+      });
+
+      document.getElementById('cle-sp-btn-sit').onclick = () => {
+        if (this.bed) {
+          const t = parseFloat(tInput.value) || 20.0;
+          this.bed.config.spoilboardThickness = t;
+          this.bed.sitWorkpieceOnSpoilboard();
+          this.notify(`Workpiece seated on Spoilboard surface at Z=${(0.1 + t).toFixed(2)}mm`, 'ok');
+        }
+      };
+
+      document.getElementById('cle-sp-btn-cancel').onclick = () => this.closeModal();
+
+      document.getElementById('cle-sp-btn-save').onclick = async () => {
+        const x = parseFloat(wInput.value) || 600;
+        const y = parseFloat(dInput.value) || 500;
+        const thickness = parseFloat(tInput.value) || 20.0;
+        const cutoutOvercut = parseFloat(cInput.value) || 0.20;
+        const offX = parseFloat(offXInput.value) || 0.0;
+        const offY = parseFloat(offYInput.value) || 0.0;
+
+        if (this.bed) {
+          this.bed.config.spoilboardOffsetX = offX;
+          this.bed.config.spoilboardOffsetY = offY;
+          await this.bed.setSpoilboardDimensions({ x, y, thickness, cutoutOvercut, saveToVault: true });
+        }
         this.closeModal();
       };
     } else if (type === 'grayscale') {

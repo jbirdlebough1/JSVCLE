@@ -29,14 +29,10 @@ async def run():
             await asyncio.sleep(1)
             
             checks = [
-                ("(() => { return typeof window.THREE.Material.prototype.onBeforeRender; })()", False),
                 ("(() => { app.setMode('advanced'); return true; })()", False),
                 ("(() => { document.getElementById('ws-cle').click(); return true; })()", False),
-                ("(() => { try { app.vp.render(); return 'RENDER SUCCESSFUL WITH BED ON STARTUP!'; } catch(e) { return 'ERROR: ' + e.message; } })()", False),
-                ("(() => { return { bedVisible: window.CLE.bed.bedGroup.visible }; })()", False),
-                ("(() => { window.CLE.bed.toggle(); app.vp.render(); return { bedVisible: window.CLE.bed.bedGroup.visible }; })()", False),
-                ("(() => { window.CLE.bed.toggle(); app.vp.render(); return { bedVisible: window.CLE.bed.bedGroup.visible }; })()", False),
-                ("(() => { return { spoilboard: window.CLE.bed.bedGroup.getObjectByName('CLE_Spoilboard_Slab') !== null, toolLines: window.CLE.bed.bedGroup.getObjectByName('CLE_MM_LB_Tool_Lines_Overlay') !== null }; })()", False)
+                ("(() => { return { rootZ: app.scene.root.position.z, bedVisible: window.CLE.bed.visible, spoilboardThickness: window.CLE.bed.config.spoilboardThickness }; })()", False),
+                ("(() => { return window.CLE.bed.config; })()", False)
             ]
             for idx, (c, await_promise) in enumerate(checks, start=10):
                 await ws.send(json.dumps({
