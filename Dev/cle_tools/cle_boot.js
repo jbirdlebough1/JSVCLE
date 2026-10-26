@@ -872,6 +872,24 @@ class CLEBridge {
       `;
     } else if (type === 'slicer') {
       title = 'Continuous Slicing & 3D Toolpath Stack';
+
+      const toolsList = (this.toolLibrary && this.toolLibrary.tools && this.toolLibrary.tools.length > 0)
+        ? this.toolLibrary.tools
+        : [
+            { number: 1, name: '1/4" Flat Endmill', type: 'flat', diameter: 6.35 },
+            { number: 2, name: '1/8" Flat Endmill / Drill', type: 'flat', diameter: 3.175 },
+            { number: 3, name: '1/8" Ball Nose Carver', type: 'ball', diameter: 3.175 }
+          ];
+
+      const renderToolOpts = (defaultNum) => toolsList.map(t =>
+        `<option value="${t.number}" ${t.number === defaultNum ? 'selected' : ''}>T${t.number}: ${t.name} (${t.diameter}mm)</option>`
+      ).join('');
+
+      const toolOptionsDrill = renderToolOpts(this.slicer.laminationConfig.toolMapping?.drillingToolNumber || 2);
+      const toolOptionsRough = renderToolOpts(this.slicer.laminationConfig.toolMapping?.roughingToolNumber || 1);
+      const toolOptionsFinish = renderToolOpts(this.slicer.laminationConfig.toolMapping?.finishingToolNumber || 3);
+      const toolOptionsCutout = renderToolOpts(this.slicer.laminationConfig.toolMapping?.cutoutToolNumber || 1);
+
       bodyHtml = `
         <p>Slice JumpStart 3D models with strict device-type awareness. View the continuous layer stack in Three.js and transfer to FluidNC SD Card.</p>
         
@@ -909,6 +927,86 @@ class CLEBridge {
           <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
             <label style="font-size:12px;">Cutout Depth into Spoilboard (mm):</label>
             <input class="cle-input" id="slice-cutout-depth" type="number" step="0.05" value="${this.bed ? (this.bed.config.cutoutOvercut || 0.20) : 0.20}" style="width:90px;">
+          </div>
+        </div>
+
+        <!-- Laminated Multi-Part Slicing (Biradial Horns & Stacks) -->
+        <div class="cle-form-row" style="margin-top:12px; background:rgba(250,204,21,0.08); padding:10px 12px; border-radius:6px; border:1px solid rgba(250,204,21,0.35);">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="checkbox" id="slice-enable-lamination" ${this.slicer.laminationConfig.enabled ? 'checked' : ''} style="width:16px; height:16px;">
+            <span style="font-weight:700; color:var(--ink);">🪵 Laminated Multi-Part Slicing (Biradial Horns & Stacks)</span>
+          </label>
+          <div style="font-size:11px; color:var(--ink-2); margin-top:4px;">
+            Partitions tall complex designs (e.g. Biradial audio horns, Altec 511B style acoustic stacks) into manageable 30mm glued/doweled slabs with alignment pin holes and per-slab G-code export.
+          </div>
+
+          <div id="slice-lam-panel" style="margin-top:10px; display:${this.slicer.laminationConfig.enabled ? 'block' : 'none'};">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+              <div class="cle-form-row">
+                <label style="font-size:12px;">Slab Thickness (mm):</label>
+                <input class="cle-input" id="slice-slab-thick" type="number" step="1.0" value="${this.slicer.laminationConfig.slabThickness || 30.0}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:12px;">Dowel Margin from Edge (mm):</label>
+                <input class="cle-input" id="slice-dowel-margin" type="number" step="1.0" value="${this.slicer.laminationConfig.dowelMargin || 25.0}">
+              </div>
+            </div>
+
+            <!-- Slab Presets -->
+            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; align-items:center;">
+              <span style="font-size:11px; color:var(--ink-2);">Slab Presets:</span>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="18.0" style="padding:2px 8px; font-size:11px;">18mm (3/4" MDF)</button>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="25.0" style="padding:2px 8px; font-size:11px;">25mm (1")</button>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="30.0" style="padding:2px 8px; font-size:11px; font-weight:700; border-color:var(--accent);">30mm (Biradial Horn)</button>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="40.0" style="padding:2px 8px; font-size:11px;">40mm (Heavy Slab)</button>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="50.0" style="padding:2px 8px; font-size:11px;">50mm (2")</button>
+            </div>
+
+            <!-- Alignment Dowel Pins -->
+            <div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(250,204,21,0.3); display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+              <div class="cle-form-row">
+                <label style="font-size:12px;">Dowel Pin Diameter (mm):</label>
+                <input class="cle-input" id="slice-dowel-dia" type="number" step="0.5" value="${this.slicer.laminationConfig.dowelDiameter || 8.0}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:12px;">Registration Dowel Holes:</label>
+                <select class="cle-select" id="slice-dowel-count" style="font-size:12px;">
+                  <option value="4" ${this.slicer.laminationConfig.dowelHoleCount === 4 ? 'selected' : ''}>4 Holes (Symmetric Corners)</option>
+                  <option value="2" ${this.slicer.laminationConfig.dowelHoleCount === 2 ? 'selected' : ''}>2 Holes (Diagonal Alignment)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Tool Mapping for Slices -->
+            <div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(250,204,21,0.3);">
+              <div style="font-size:12px; font-weight:700; color:var(--ink); margin-bottom:6px;">Tool Library Operation Mapping:</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                <div class="cle-form-row">
+                  <label style="font-size:11px;">Op 1: Dowel Pin Drilling:</label>
+                  <select class="cle-select" id="slice-tool-drill" style="font-size:11px;">
+                    ${toolOptionsDrill}
+                  </select>
+                </div>
+                <div class="cle-form-row">
+                  <label style="font-size:11px;">Op 2: Bulk Roughing Pass:</label>
+                  <select class="cle-select" id="slice-tool-rough" style="font-size:11px;">
+                    ${toolOptionsRough}
+                  </select>
+                </div>
+                <div class="cle-form-row">
+                  <label style="font-size:11px;">Op 3: 3D Contour Finishing:</label>
+                  <select class="cle-select" id="slice-tool-finish" style="font-size:11px;">
+                    ${toolOptionsFinish}
+                  </select>
+                </div>
+                <div class="cle-form-row">
+                  <label style="font-size:11px;">Op 4: Spoilboard Cutout:</label>
+                  <select class="cle-select" id="slice-tool-cutout" style="font-size:11px;">
+                    ${toolOptionsCutout}
+                  </select>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1390,6 +1488,21 @@ class CLEBridge {
         this.closeModal();
       };
     } else if (type === 'slicer') {
+      const lamCheck = document.getElementById('slice-enable-lamination');
+      const lamPanel = document.getElementById('slice-lam-panel');
+      if (lamCheck && lamPanel) {
+        lamCheck.onchange = () => {
+          lamPanel.style.display = lamCheck.checked ? 'block' : 'none';
+        };
+      }
+      document.querySelectorAll('.cle-slab-preset').forEach(btn => {
+        btn.onclick = () => {
+          const val = btn.getAttribute('data-val');
+          const thickInput = document.getElementById('slice-slab-thick');
+          if (thickInput) thickInput.value = val;
+        };
+      });
+
       document.getElementById('slice-run-btn').onclick = async () => {
         const mode = document.getElementById('slice-mode').value;
         const layerH = document.getElementById('slice-layer-h').value;
@@ -1398,8 +1511,35 @@ class CLEBridge {
         const enableCutout = document.getElementById('slice-enable-cutout') ? document.getElementById('slice-enable-cutout').checked : true;
         const cutoutOvercut = document.getElementById('slice-cutout-depth') ? (parseFloat(document.getElementById('slice-cutout-depth').value) || 0.20) : 0.20;
 
+        const enableLamination = document.getElementById('slice-enable-lamination') ? document.getElementById('slice-enable-lamination').checked : false;
+        const slabThickness = document.getElementById('slice-slab-thick') ? (parseFloat(document.getElementById('slice-slab-thick').value) || 30.0) : 30.0;
+        const dowelHolesEnabled = true;
+        const dowelDiameter = document.getElementById('slice-dowel-dia') ? (parseFloat(document.getElementById('slice-dowel-dia').value) || 8.0) : 8.0;
+        const dowelMargin = document.getElementById('slice-dowel-margin') ? (parseFloat(document.getElementById('slice-dowel-margin').value) || 25.0) : 25.0;
+        const dowelHoleCount = document.getElementById('slice-dowel-count') ? (parseInt(document.getElementById('slice-dowel-count').value, 10) || 4) : 4;
+        const toolMapping = {
+          drillingToolNumber: parseInt(document.getElementById('slice-tool-drill')?.value || 2, 10),
+          roughingToolNumber: parseInt(document.getElementById('slice-tool-rough')?.value || 1, 10),
+          finishingToolNumber: parseInt(document.getElementById('slice-tool-finish')?.value || 3, 10),
+          cutoutToolNumber: parseInt(document.getElementById('slice-tool-cutout')?.value || 1, 10)
+        };
+
         this.slicer.feedRate = parseFloat(feed) || 1500;
-        await this.slicer.sliceModel({ mode, layerHeight: layerH, infill, enableCutout, cutoutOvercut });
+        await this.slicer.sliceModel({
+          mode,
+          layerHeight: layerH,
+          infill,
+          feedRate: feed,
+          enableCutout,
+          cutoutOvercut,
+          enableLamination,
+          slabThickness,
+          dowelHolesEnabled,
+          dowelDiameter,
+          dowelMargin,
+          dowelHoleCount,
+          toolMapping
+        });
         this.closeModal();
       };
     } else if (type === 'spoilboard') {

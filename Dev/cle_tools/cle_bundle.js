@@ -2981,6 +2981,26 @@ class CLESlicerEngine {
     this.rawGCode = '';
     this.currentPreviewLayer = -1; // -1 = Show All
     this.visualizerGroup = null;
+    this.sliceViewMode = 'stack'; // 'stack' | 'single'
+
+    // Laminated Multi-Part Slicing (Biradial Horns & Stacks)
+    this.laminationConfig = {
+      enabled: false,
+      slabThickness: 30.0,       // Stock slab thickness (30mm for Biradial Horns & hardwood stacks)
+      dowelHolesEnabled: true,   // Drill precision alignment dowel holes through each slab
+      dowelDiameter: 8.0,        // 8.0mm dowels
+      dowelMargin: 25.0,         // Margin from stock outer bounds (mm)
+      dowelHoleCount: 4,         // 2 or 4 registration pins
+      toolMapping: {
+        drillingToolNumber: 2,   // Tool 2 (e.g. 1/8" drill / boring endmill)
+        roughingToolNumber: 1,   // Tool 1 (1/4" Flat Endmill)
+        finishingToolNumber: 3,  // Tool 3 (1/8" Ballnose for smooth 3D contour)
+        cutoutToolNumber: 1      // Tool 1 (1/4" Flat Endmill)
+      }
+    };
+    this.laminatedParts = [];    // Partitioned parts array [{ partIndex, name, minZ, maxZ, height, layers, gcode }]
+    this.activePartIndex = -1;   // -1 = Show All; >= 0 = Isolate specific Part
+    this.dowelPoints = [];       // [{ id, x, y, diameter }]
   }
 
   init() {
@@ -3112,10 +3132,14 @@ class CLESlicerEngine {
       }
     }
 
-    // 3. Fallback Sample 3D Test Object (50x40x15 mm rectangular billet positioned centrally on Spoilboard)
-    console.log('[CLE Slicer] No active meshed CAD bodies found. Generating 50x40x15 mm sample workpiece at bed center.');
-    const sampleTris = this.generateSampleBoxTriangles(50, 40, 15);
-    return { name: 'Sample_Billet_50x40', triangles: sampleTris, isSample: true };
+    // 3. Fallback Sample 3D Test Object (positioned centrally on Spoilboard)
+    const isLam = this.laminationConfig?.enabled;
+    const defW = isLam ? 140 : 50;
+    const defD = isLam ? 120 : 40;
+    const defH = isLam ? Math.max(80, (this.laminationConfig.slabThickness || 40.0) * 3) : 15;
+    console.log(`[CLE Slicer] No active meshed CAD bodies found. Generating ${defW}x${defD}x${defH} mm sample workpiece at bed center.`);
+    const sampleTris = this.generateSampleBoxTriangles(defW, defD, defH);
+    return { name: isLam ? 'Sample_Laminated_Stack' : 'Sample_Billet_50x40', triangles: sampleTris, isSample: true };
   }
 
   generateSampleBoxTriangles(w, d, h) {
@@ -3182,6 +3206,15 @@ class CLESlicerEngine {
     this.infillPercent = parseInt(options.infill, 10) || this.infillPercent;
     this.feedRate = parseInt(options.feedRate, 10) || this.feedRate;
 
+    // Lamination & Tool Mapping Configuration
+    if (options.enableLamination !== undefined) this.laminationConfig.enabled = options.enableLamination;
+    if (options.slabThickness !== undefined) this.laminationConfig.slabThickness = parseFloat(options.slabThickness);
+    if (options.dowelHolesEnabled !== undefined) this.laminationConfig.dowelHolesEnabled = options.dowelHolesEnabled;
+    if (options.dowelDiameter !== undefined) this.laminationConfig.dowelDiameter = parseFloat(options.dowelDiameter);
+    if (options.dowelMargin !== undefined) this.laminationConfig.dowelMargin = parseFloat(options.dowelMargin);
+    if (options.dowelHoleCount !== undefined) this.laminationConfig.dowelHoleCount = parseInt(options.dowelHoleCount, 10);
+    if (options.toolMapping) this.laminationConfig.toolMapping = { ...this.laminationConfig.toolMapping, ...options.toolMapping };
+
     const geom = this.getActiveBodyGeometry();
     this.lastGeometry = geom;
     const { name, triangles } = geom;
@@ -3219,6 +3252,15 @@ class CLESlicerEngine {
 
     this.rawGCode = gcode;
     this.parseGCodeIntoLayers(gcode);
+
+    if (this.laminationConfig.enabled) {
+      this.partitionLaminatedParts();
+    } else {
+      this.laminatedParts = [];
+      this.activePartIndex = -1;
+      this.dowelPoints = [];
+    }
+
     this.renderSlicedStackToVisualizer();
     this.mountLayerHUD();
 
@@ -3419,6 +3461,361 @@ class CLESlicerEngine {
     }
   }
 
+  // Partition master sliced layers into laminated stock slabs (e.g. 40mm MDF / hardwood tiers for biradial horns)
+  partitionLaminatedParts() {
+    this.laminatedParts = [];
+    this.dowelPoints = [];
+    if (!this.slicedLayers || this.slicedLayers.length === 0) return;
+
+    let minZ = Infinity, maxZ = -Infinity;
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+
+    for (const layer of this.slicedLayers) {
+      if (layer.z < minZ) minZ = layer.z;
+      if (layer.z > maxZ) maxZ = layer.z;
+      for (const pt of layer.points) {
+        if (pt.x < minX) minX = pt.x;
+        if (pt.x > maxX) maxX = pt.x;
+        if (pt.y < minY) minY = pt.y;
+        if (pt.y > maxY) maxY = pt.y;
+      }
+    }
+
+    if (!isFinite(minZ) || !isFinite(maxZ)) { minZ = 0; maxZ = 40; }
+    if (!isFinite(minX) || !isFinite(maxX)) { minX = -50; maxX = 50; minY = -50; maxY = 50; }
+
+    const slabThickness = Math.max(1.0, this.laminationConfig.slabThickness || 40.0);
+    const totalHeight = Math.max(0.1, maxZ - minZ);
+    const numParts = Math.max(1, Math.ceil(totalHeight / slabThickness));
+
+    // Calculate symmetric dowel registration pins through all slabs
+    const margin = Math.max(5.0, this.laminationConfig.dowelMargin || 25.0);
+    const dowelDia = this.laminationConfig.dowelDiameter || 8.0;
+    const holeCount = this.laminationConfig.dowelHoleCount || 4;
+
+    const dowelPoints = [];
+    if (this.laminationConfig.dowelHolesEnabled) {
+      dowelPoints.push({ id: 1, x: minX + margin, y: minY + margin, diameter: dowelDia });
+      dowelPoints.push({ id: 2, x: maxX - margin, y: maxY - margin, diameter: dowelDia });
+      if (holeCount >= 4) {
+        dowelPoints.push({ id: 3, x: maxX - margin, y: minY + margin, diameter: dowelDia });
+        dowelPoints.push({ id: 4, x: minX + margin, y: maxY - margin, diameter: dowelDia });
+      }
+    }
+    this.dowelPoints = dowelPoints;
+
+    for (let k = 0; k < numParts; k++) {
+      const partMinZ = minZ + k * slabThickness;
+      const partMaxZ = Math.min(maxZ, minZ + (k + 1) * slabThickness);
+      const partThick = partMaxZ - partMinZ;
+
+      const partLayers = this.slicedLayers.filter(l => {
+        return (l.z >= partMinZ - 0.05 && l.z <= partMaxZ + 0.05);
+      });
+
+      const partObj = {
+        partIndex: k,
+        partNumber: k + 1,
+        totalParts: numParts,
+        name: `Part ${k + 1} of ${numParts} (Z ${partMinZ.toFixed(1)} - ${partMaxZ.toFixed(1)}mm)`,
+        minZ: partMinZ,
+        maxZ: partMaxZ,
+        thickness: partThick,
+        nominalSlabThickness: slabThickness,
+        layers: partLayers,
+        layerCount: partLayers.length,
+        dowelPoints: dowelPoints,
+        bounds: { minX, maxX, minY, maxY, minZ: partMinZ, maxZ: partMaxZ }
+      };
+
+      partObj.gcode = this.generatePartGCode(partObj);
+      this.laminatedParts.push(partObj);
+    }
+
+    console.log(`[CLE Slicer] Partitioned ${numParts} laminated stock parts (${slabThickness}mm slab) with ${dowelPoints.length} dowel pins.`);
+  }
+
+  // Generate production FluidNC G-code for an individual laminated stock slab
+  generatePartGCode(part) {
+    const tm = this.laminationConfig.toolMapping || {};
+    const drillTool = tm.drillingToolNumber || 2;
+    const roughTool = tm.roughingToolNumber || 1;
+    const finishTool = tm.finishingToolNumber || 3;
+    const cutoutTool = tm.cutoutToolNumber || 1;
+    const feed = this.feedRate || 1500;
+    const spindleRPM = this.spindleRPM || 12000;
+    const projName = window.xe?.doc?.name || 'JumpStart_Part';
+
+    const lines = [];
+    lines.push(`; === CLEJS Laminated Part Toolpath ===`);
+    lines.push(`; Project: ${projName} | ${part.name}`);
+    lines.push(`; Slab Thickness: ${part.thickness.toFixed(2)}mm (Nominal: ${part.nominalSlabThickness}mm)`);
+    lines.push(`; Model Master Z Range: ${part.minZ.toFixed(2)} to ${part.maxZ.toFixed(2)}mm`);
+    lines.push(`; Local Slab WCS: Stock Top = Z0.000, Spoilboard Face = Z-${part.thickness.toFixed(2)}, Cutout = Z-${(part.thickness + 0.20).toFixed(2)}`);
+    lines.push(`; Total Slices in Part: ${part.layers.length}`);
+    lines.push(`; Tool Mapping: Drill=T${drillTool}, Rough=T${roughTool}, 3D Finish=T${finishTool}, Cutout=T${cutoutTool}`);
+    lines.push(`G21 ; Millimeters`);
+    lines.push(`G90 ; Absolute Coordinates`);
+    lines.push(`G17 ; XY Plane`);
+    lines.push(`G0 Z15.000 F1000 ; Safe retract above slab`);
+
+    // --- OPERATION 1: Precision Registration Dowel Holes ---
+    if (this.laminationConfig.dowelHolesEnabled && part.dowelPoints.length > 0) {
+      lines.push(``);
+      lines.push(`; ========================================================`);
+      lines.push(`; OPERATION 1: Precision Registration Dowel Holes (T${drillTool})`);
+      lines.push(`; ========================================================`);
+      lines.push(`M5 ; Spindle Stop`);
+      lines.push(`G0 Z20.000 F1000 ; Tool change clearance`);
+      lines.push(`M6 T${drillTool} ; Install Dowel Hole Drill / Boring Tool`);
+      lines.push(`M3 S${spindleRPM} ; Spindle ON`);
+      lines.push(`G4 P2 ; Dwell 2s for spinup`);
+      lines.push(`G0 Z5.000 F1000`);
+
+      const drillTargetZ = -(part.thickness + 0.20); // 0.2mm breakthrough into spoilboard
+
+      part.dowelPoints.forEach(pt => {
+        lines.push(`; Dowel Pin #${pt.id} (⌀${pt.diameter}mm) at X=${pt.x.toFixed(2)}, Y=${pt.y.toFixed(2)}`);
+        lines.push(`G0 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} F3000`);
+        lines.push(`G0 Z1.000`);
+        // Multi-stage peck drill for clean chip evacuation in 40mm slab
+        const peckDepth = 5.0; // 5mm per peck
+        const totalDepth = Math.abs(drillTargetZ);
+        const pecks = Math.ceil(totalDepth / peckDepth);
+        for (let p = 1; p <= pecks; p++) {
+          const curD = -Math.min(totalDepth, p * peckDepth);
+          lines.push(`G1 Z${curD.toFixed(3)} F250 ; Peck plunge`);
+          lines.push(`G0 Z2.000 F1000 ; Chip clearing retract`);
+        }
+        lines.push(`G0 Z5.000 F1000`);
+      });
+    }
+
+    // --- OPERATION 2: Roughing Passes (Stock Clearing) ---
+    lines.push(``);
+    lines.push(`; ========================================================`);
+    lines.push(`; OPERATION 2: Bulk Stock Roughing Passes (T${roughTool})`);
+    lines.push(`; ========================================================`);
+    lines.push(`M5 ; Spindle Stop`);
+    lines.push(`G0 Z20.000 F1000 ; Tool change clearance`);
+    lines.push(`M6 T${roughTool} ; Install Roughing Endmill`);
+    lines.push(`M3 S${spindleRPM} ; Spindle ON`);
+    lines.push(`G4 P2`);
+    lines.push(`G0 Z5.000 F1000`);
+
+    for (let i = 0; i < part.layers.length; i += 2) {
+      const layer = part.layers[i];
+      const localZ = layer.z - part.maxZ; // Top-down negative offset
+      lines.push(`; Roughing Pass ${i} (Local Z=${localZ.toFixed(3)})`);
+      if (layer.points.length > 0) {
+        const p0 = layer.points[0];
+        lines.push(`G0 X${p0.x.toFixed(3)} Y${p0.y.toFixed(3)} F3000`);
+        lines.push(`G1 Z${localZ.toFixed(3)} F400`);
+        for (let ptIdx = 1; ptIdx < layer.points.length; ptIdx += 2) {
+          const pt = layer.points[ptIdx];
+          lines.push(`G1 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} F${feed}`);
+        }
+        lines.push(`G0 Z2.000 F1000`);
+      }
+    }
+
+    // --- OPERATION 3: Smooth 3D Contour Finishing (Ballnose) ---
+    lines.push(``);
+    lines.push(`; ========================================================`);
+    lines.push(`; OPERATION 3: Smooth 3D Contour Finishing Passes (T${finishTool})`);
+    lines.push(`; ========================================================`);
+    lines.push(`M5 ; Spindle Stop`);
+    lines.push(`G0 Z20.000 F1000 ; Tool change clearance`);
+    lines.push(`M6 T${finishTool} ; Install 3D Ballnose Carving Tool`);
+    lines.push(`M3 S18000 ; Spindle ON (18,000 RPM for fine ballnose finish)`);
+    lines.push(`G4 P2`);
+    lines.push(`G0 Z5.000 F1000`);
+
+    for (let i = 0; i < part.layers.length; i++) {
+      const layer = part.layers[i];
+      const localZ = layer.z - part.maxZ;
+      lines.push(`; Contour Finish Pass ${i + 1}/${part.layers.length} (Local Z=${localZ.toFixed(3)})`);
+      let inCut = false;
+      for (const pt of layer.points) {
+        if (pt.isRapid) {
+          if (inCut) {
+            lines.push(`G0 Z${(localZ + 2.0).toFixed(3)} F1000`);
+            inCut = false;
+          }
+          lines.push(`G0 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} F3000`);
+        } else {
+          if (!inCut) {
+            lines.push(`G1 Z${localZ.toFixed(3)} F350`);
+            inCut = true;
+          }
+          lines.push(`G1 X${pt.x.toFixed(3)} Y${pt.y.toFixed(3)} F${Math.round(feed * 0.9)}`);
+        }
+      }
+      if (inCut) {
+        lines.push(`G0 Z2.000 F1000`);
+      }
+    }
+
+    // --- OPERATION 4: Spoilboard Clean Perimeter Cutout (0.2mm Breakthrough) ---
+    lines.push(``);
+    lines.push(`; ========================================================`);
+    lines.push(`; OPERATION 4: Spoilboard Clean Perimeter Cutout (T${cutoutTool})`);
+    lines.push(`; ========================================================`);
+    if (cutoutTool !== finishTool) {
+      lines.push(`M5 ; Spindle Stop`);
+      lines.push(`G0 Z20.000 F1000`);
+      lines.push(`M6 T${cutoutTool} ; Install Perimeter Cutout Tool`);
+      lines.push(`M3 S${spindleRPM} ; Spindle ON`);
+      lines.push(`G4 P2`);
+    }
+    const cutoutZ = -(part.thickness + 0.20);
+    lines.push(`; Perimeter Cutout Level: Local Z=${cutoutZ.toFixed(3)} (-0.20mm into spoilboard)`);
+    const b = part.bounds;
+    lines.push(`G0 X${b.minX.toFixed(3)} Y${b.minY.toFixed(3)} F3000`);
+    lines.push(`G1 Z${cutoutZ.toFixed(3)} F300 ; Penetrate 0.2mm into spoilboard`);
+    lines.push(`G1 X${b.maxX.toFixed(3)} Y${b.minY.toFixed(3)} F${feed}`);
+    lines.push(`G1 X${b.maxX.toFixed(3)} Y${b.maxY.toFixed(3)}`);
+    lines.push(`G1 X${b.minX.toFixed(3)} Y${b.maxY.toFixed(3)}`);
+    lines.push(`G1 X${b.minX.toFixed(3)} Y${b.minY.toFixed(3)}`);
+    lines.push(`G0 Z10.000 F1000 ; Retract`);
+
+    // --- Job End ---
+    lines.push(``);
+    lines.push(`; === Job End & Safe Park ===`);
+    lines.push(`M5 ; Spindle OFF`);
+    lines.push(`G0 Z25.000 F1000 ; Safe Retract`);
+    lines.push(`G0 X0.000 Y0.000 F3000 ; Return to WCS Origin`);
+    lines.push(`M30 ; Program End`);
+
+    return lines.join('\n');
+  }
+
+  exportPartGCode(partIndex) {
+    const part = this.laminatedParts[partIndex];
+    if (!part || !part.gcode) {
+      this.bridge.notify(`Part ${partIndex + 1} not found.`, 'error');
+      return;
+    }
+    const projName = window.xe?.doc?.name || 'JumpStart_Part';
+    const filename = `${projName}_Part_${part.partNumber}_of_${part.totalParts}.nc`;
+    const blob = new Blob([part.gcode], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    this.bridge.notify(`Exported ${filename} (${(part.gcode.length / 1024).toFixed(1)} KB)`, 'ok');
+  }
+
+  async uploadPartGCodeToSD(partIndex) {
+    const part = this.laminatedParts[partIndex];
+    if (!part || !part.gcode) {
+      this.bridge.notify(`Part ${partIndex + 1} not found.`, 'error');
+      return;
+    }
+    const projName = window.xe?.doc?.name || 'JumpStart_Part';
+    const filename = `${projName}_Part_${part.partNumber}.nc`;
+    this.bridge.notify(`Uploading ${filename} to FluidNC SD Card...`, 'info');
+    await this.bridge.fluidnc.uploadFileToSD(filename, part.gcode);
+  }
+
+  exportAllParts() {
+    if (!this.laminatedParts || this.laminatedParts.length === 0) {
+      this.bridge.notify('No laminated parts available to export.', 'error');
+      return;
+    }
+    this.laminatedParts.forEach((p, idx) => {
+      setTimeout(() => this.exportPartGCode(idx), idx * 250);
+    });
+    this.bridge.notify(`Exporting all ${this.laminatedParts.length} laminated parts...`, 'ok');
+  }
+
+  setActivePart(partIndex) {
+    this.activePartIndex = partIndex;
+    if (!this.visualizerGroup) return;
+
+    this.visualizerGroup.children.forEach(child => {
+      const pIdx = child.userData.partIndex;
+      if (pIdx === undefined) return;
+
+      if (partIndex === -1) {
+        child.visible = true;
+        if (child.material) child.material.opacity = 0.95;
+      } else if (pIdx === partIndex) {
+        child.visible = true;
+        if (child.material) child.material.opacity = 1.0;
+      } else {
+        child.visible = true;
+        if (child.material) child.material.opacity = 0.15;
+      }
+    });
+
+    const app = window.app || window.xe;
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
+
+    this.updateHUDPartTabs();
+  }
+
+  updateHUDPartTabs() {
+    const bar = document.getElementById('cle-hud-part-bar');
+    if (!bar) return;
+    const btns = bar.querySelectorAll('.cle-hud-part-btn');
+    btns.forEach(btn => {
+      const idx = parseInt(btn.getAttribute('data-part'), 10);
+      if (idx === this.activePartIndex) {
+        btn.classList.add('active');
+        btn.style.background = 'var(--accent)';
+        btn.style.color = 'var(--on-accent)';
+      } else {
+        btn.classList.remove('active');
+        btn.style.background = 'var(--paper)';
+        btn.style.color = 'var(--ink)';
+      }
+    });
+
+    const expBtn = document.getElementById('cle-hud-export-part');
+    const upBtn = document.getElementById('cle-hud-upload-part');
+    if (this.activePartIndex >= 0 && this.laminatedParts[this.activePartIndex]) {
+      const pNum = this.activePartIndex + 1;
+      if (expBtn) expBtn.textContent = `Export Part ${pNum} .NC`;
+      if (upBtn) upBtn.textContent = `Part ${pNum} to SD`;
+    } else {
+      if (expBtn) expBtn.textContent = 'Export Active Part';
+      if (upBtn) upBtn.textContent = 'Part to SD';
+    }
+  }
+
+  createNumberLabelSprite(THREE, text, color = '#f8fafc') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 160;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+
+    ctx.clearRect(0, 0, 160, 64);
+    ctx.font = 'bold 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.shadowColor = 'rgba(0,0,0,0.9)';
+    ctx.shadowBlur = 6;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#0f172a';
+    ctx.strokeText(text, 80, 32);
+
+    ctx.fillStyle = color;
+    ctx.fillText(text, 80, 32);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.renderOrder = 100005;
+    return sprite;
+  }
+
   // --- Render Sliced Toolpath Stack in JumpStart's Native Three.js Viewport ---
   renderSlicedStackToVisualizer() {
     const app = window.app || window.xe;
@@ -3514,6 +3911,12 @@ class CLESlicerEngine {
         }
       }
 
+      // Find which laminated part contains this layer
+      let layerPartIdx = -1;
+      if (this.laminatedParts && this.laminatedParts.length > 0) {
+        layerPartIdx = this.laminatedParts.findIndex(p => layer.z >= p.minZ - 0.05 && layer.z <= p.maxZ + 0.05);
+      }
+
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
@@ -3529,7 +3932,7 @@ class CLESlicerEngine {
 
       const lineMesh = new THREE.LineSegments(geom, mat);
       lineMesh.renderOrder = 99999;
-      lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z };
+      lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx };
       this.visualizerGroup.add(lineMesh);
 
       // Visible waypoint marks (toolpath nodes / plunge points)
@@ -3557,7 +3960,7 @@ class CLESlicerEngine {
         });
         const ptMesh = new THREE.Points(ptGeo, ptMat);
         ptMesh.renderOrder = 100000;
-        ptMesh.userData = { layerIndex: lIdx, zElevation: layer.z };
+        ptMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx };
         this.visualizerGroup.add(ptMesh);
       }
     });
@@ -3647,6 +4050,80 @@ class CLESlicerEngine {
         app.vp.view.az = 0.55;
         app.vp.view.el = 0.50;
         if (app.vp.updateCamera) app.vp.updateCamera();
+      }
+
+      // 5. 3D Dowel Registration Pins (Vivid Gold Cylinders through laminated stack)
+      if (this.laminationConfig.enabled && this.dowelPoints && this.dowelPoints.length > 0) {
+        const pinH = Math.max(10, maxZ - minZ + 8.0);
+        const pinCenterZ = (minZ + maxZ) / 2;
+
+        this.dowelPoints.forEach(pt => {
+          const pinGeo = new THREE.CylinderGeometry(pt.diameter / 2, pt.diameter / 2, pinH, 24);
+          const pinMat = new THREE.MeshStandardMaterial({
+            color: 0xfacc15, // Vivid Gold
+            metalness: 0.4,
+            roughness: 0.3,
+            transparent: true,
+            opacity: 0.75,
+            depthWrite: false
+          });
+          const pinMesh = new THREE.Mesh(pinGeo, pinMat);
+          pinMesh.rotation.x = Math.PI / 2; // Orient along Z axis
+          pinMesh.position.set(pt.x, pt.y, pinCenterZ);
+          pinMesh.name = `CLE_Dowel_Pin_${pt.id}`;
+          pinMesh.renderOrder = 9995;
+          this.visualizerGroup.add(pinMesh);
+
+          // Dowel Wireframe Edges
+          const edgeGeo = new THREE.EdgesGeometry(pinGeo);
+          const edgeMat = new THREE.LineBasicMaterial({ color: 0xb45309, transparent: true, opacity: 0.85 });
+          const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
+          pinMesh.add(edgeLines);
+
+          // Dowel Label Sprite at Top
+          const labelSprite = this.createNumberLabelSprite(THREE, `Dowel #${pt.id} (⌀${pt.diameter}mm)`, '#facc15');
+          labelSprite.position.set(pt.x, pt.y, maxZ + 6.0);
+          labelSprite.scale.set(24, 10, 1);
+          labelSprite.renderOrder = 100002;
+          this.visualizerGroup.add(labelSprite);
+        });
+      }
+
+      // 6. Horizontal Part Joint Divider Planes (Laminated Slab Tiers)
+      if (this.laminationConfig.enabled && this.laminatedParts && this.laminatedParts.length > 1) {
+        const slabW = Math.max(10, maxX - minX + 10);
+        const slabD = Math.max(10, maxY - minY + 10);
+
+        for (let k = 1; k < this.laminatedParts.length; k++) {
+          const jointZ = this.laminatedParts[k].minZ;
+          const jointPlaneGeo = new THREE.PlaneGeometry(slabW, slabD);
+          const jointPlaneMat = new THREE.MeshBasicMaterial({
+            color: 0x38bdf8,
+            transparent: true,
+            opacity: 0.18,
+            side: THREE.DoubleSide,
+            depthWrite: false
+          });
+          const jointMesh = new THREE.Mesh(jointPlaneGeo, jointPlaneMat);
+          jointMesh.position.set(stockCx, stockCy, jointZ);
+          jointMesh.name = `CLE_Part_Joint_${k}`;
+          jointMesh.renderOrder = 9992;
+          this.visualizerGroup.add(jointMesh);
+
+          // Border around joint divider
+          const jointBorderGeo = new THREE.EdgesGeometry(jointPlaneGeo);
+          const jointBorderMat = new THREE.LineBasicMaterial({ color: 0x0284c7, transparent: true, opacity: 0.65 });
+          const jointBorder = new THREE.LineSegments(jointBorderGeo, jointBorderMat);
+          jointBorder.position.set(stockCx, stockCy, jointZ);
+          this.visualizerGroup.add(jointBorder);
+
+          // Joint Label Sprite
+          const jointSprite = this.createNumberLabelSprite(THREE, `Joint ${k}/${this.laminatedParts.length} (Z=${jointZ.toFixed(1)}mm)`, '#38bdf8');
+          jointSprite.position.set(stockCx, minY - 14.0, jointZ);
+          jointSprite.scale.set(32, 12, 1);
+          jointSprite.renderOrder = 100001;
+          this.visualizerGroup.add(jointSprite);
+        }
       }
     }
 
@@ -3900,6 +4377,14 @@ class CLESlicerEngine {
     this.visualizerGroup.children.forEach(mesh => {
       const lIdx = mesh.userData.layerIndex;
       if (lIdx === undefined) return;
+
+      // If a specific laminated part is active, keep other parts dimmed
+      if (this.activePartIndex >= 0 && mesh.userData.partIndex !== undefined && mesh.userData.partIndex !== this.activePartIndex) {
+        mesh.visible = (targetIndex === -1 && !isSingle);
+        if (mesh.material) mesh.material.opacity = 0.15;
+        return;
+      }
+
       if (targetIndex === -1) {
         mesh.visible = true; // Show all contours in full stack
         if (mesh.material) mesh.material.opacity = 0.95;
@@ -3996,6 +4481,23 @@ class CLESlicerEngine {
       <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600; padding:3px 8px;">Export .NC</button>
       <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600; padding:3px 8px;">To SD</button>
       <button class="cle-btn" id="cle-hud-close" style="padding:2px 6px;" title="Close Visualizer">&times;</button>
+
+      ${(this.laminationConfig.enabled && this.laminatedParts.length > 0) ? `
+      <div id="cle-hud-part-bar" style="display:flex; align-items:center; gap:6px; margin-top:6px; border-top:1px solid var(--line); padding-top:6px; width:100%; flex-wrap:wrap;">
+        <span style="font-weight:700; color:#facc15;">🪵 30mm Laminated Parts (${this.laminatedParts.length}):</span>
+        <button class="cle-btn cle-hud-part-btn ${this.activePartIndex === -1 ? 'active' : ''}" data-part="-1" style="padding:2px 8px; font-weight:700; background:${this.activePartIndex === -1 ? 'var(--accent)' : 'var(--paper)'}; color:${this.activePartIndex === -1 ? 'var(--on-accent)' : 'var(--ink)'};">All Stack</button>
+        ${this.laminatedParts.map(p => `
+          <button class="cle-btn cle-hud-part-btn ${this.activePartIndex === p.partIndex ? 'active' : ''}" data-part="${p.partIndex}" style="padding:2px 8px; font-weight:600; background:${this.activePartIndex === p.partIndex ? 'var(--accent)' : 'var(--paper)'}; color:${this.activePartIndex === p.partIndex ? 'var(--on-accent)' : 'var(--ink)'};" title="${p.name} (${p.layerCount} slices)">
+            Part ${p.partNumber} (${p.thickness.toFixed(0)}mm)
+          </button>
+        `).join('')}
+        <div style="margin-left:auto; display:flex; gap:6px; align-items:center;">
+          <button class="cle-btn" id="cle-hud-export-part" style="background:#facc15; color:#000; font-weight:700; padding:2px 8px;" title="Export G-code for Active Part">Export Part .NC</button>
+          <button class="cle-btn" id="cle-hud-upload-part" style="background:var(--ok); color:#fff; font-weight:700; padding:2px 8px;" title="Upload Active Part to FluidNC SD Card">Part to SD</button>
+          <button class="cle-btn" id="cle-hud-export-all-parts" style="background:var(--paper); padding:2px 8px;" title="Export all ${this.laminatedParts.length} parts sequentially">Export All (${this.laminatedParts.length})</button>
+        </div>
+      </div>
+      ` : ''}
     `;
 
     hud.style.display = 'flex';
@@ -4080,6 +4582,38 @@ class CLESlicerEngine {
         }
       };
     }
+    if (this.laminationConfig.enabled && this.laminatedParts.length > 0) {
+      hud.querySelectorAll('.cle-hud-part-btn').forEach(btn => {
+        btn.onclick = () => {
+          const pIdx = parseInt(btn.getAttribute('data-part'), 10);
+          this.setActivePart(pIdx);
+        };
+      });
+
+      const expPartBtn = document.getElementById('cle-hud-export-part');
+      if (expPartBtn) {
+        expPartBtn.onclick = () => {
+          const target = this.activePartIndex >= 0 ? this.activePartIndex : 0;
+          this.exportPartGCode(target);
+        };
+      }
+
+      const upPartBtn = document.getElementById('cle-hud-upload-part');
+      if (upPartBtn) {
+        upPartBtn.onclick = () => {
+          const target = this.activePartIndex >= 0 ? this.activePartIndex : 0;
+          this.uploadPartGCodeToSD(target);
+        };
+      }
+
+      const expAllBtn = document.getElementById('cle-hud-export-all-parts');
+      if (expAllBtn) {
+        expAllBtn.onclick = () => {
+          this.exportAllParts();
+        };
+      }
+    }
+
     document.getElementById('cle-hud-close').onclick = () => { this.clearVisualizer(); };
   }
 
@@ -6402,6 +6936,24 @@ class CLEBridge {
       `;
     } else if (type === 'slicer') {
       title = 'Continuous Slicing & 3D Toolpath Stack';
+
+      const toolsList = (this.toolLibrary && this.toolLibrary.tools && this.toolLibrary.tools.length > 0)
+        ? this.toolLibrary.tools
+        : [
+            { number: 1, name: '1/4" Flat Endmill', type: 'flat', diameter: 6.35 },
+            { number: 2, name: '1/8" Flat Endmill / Drill', type: 'flat', diameter: 3.175 },
+            { number: 3, name: '1/8" Ball Nose Carver', type: 'ball', diameter: 3.175 }
+          ];
+
+      const renderToolOpts = (defaultNum) => toolsList.map(t =>
+        `<option value="${t.number}" ${t.number === defaultNum ? 'selected' : ''}>T${t.number}: ${t.name} (${t.diameter}mm)</option>`
+      ).join('');
+
+      const toolOptionsDrill = renderToolOpts(this.slicer.laminationConfig.toolMapping?.drillingToolNumber || 2);
+      const toolOptionsRough = renderToolOpts(this.slicer.laminationConfig.toolMapping?.roughingToolNumber || 1);
+      const toolOptionsFinish = renderToolOpts(this.slicer.laminationConfig.toolMapping?.finishingToolNumber || 3);
+      const toolOptionsCutout = renderToolOpts(this.slicer.laminationConfig.toolMapping?.cutoutToolNumber || 1);
+
       bodyHtml = `
         <p>Slice JumpStart 3D models with strict device-type awareness. View the continuous layer stack in Three.js and transfer to FluidNC SD Card.</p>
         
@@ -6439,6 +6991,86 @@ class CLEBridge {
           <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
             <label style="font-size:12px;">Cutout Depth into Spoilboard (mm):</label>
             <input class="cle-input" id="slice-cutout-depth" type="number" step="0.05" value="${this.bed ? (this.bed.config.cutoutOvercut || 0.20) : 0.20}" style="width:90px;">
+          </div>
+        </div>
+
+        <!-- Laminated Multi-Part Slicing (Biradial Horns & Stacks) -->
+        <div class="cle-form-row" style="margin-top:12px; background:rgba(250,204,21,0.08); padding:10px 12px; border-radius:6px; border:1px solid rgba(250,204,21,0.35);">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="checkbox" id="slice-enable-lamination" ${this.slicer.laminationConfig.enabled ? 'checked' : ''} style="width:16px; height:16px;">
+            <span style="font-weight:700; color:var(--ink);">🪵 Laminated Multi-Part Slicing (Biradial Horns & Stacks)</span>
+          </label>
+          <div style="font-size:11px; color:var(--ink-2); margin-top:4px;">
+            Partitions tall complex designs (e.g. Biradial audio horns, Altec 511B style acoustic stacks) into manageable 30mm glued/doweled slabs with alignment pin holes and per-slab G-code export.
+          </div>
+
+          <div id="slice-lam-panel" style="margin-top:10px; display:${this.slicer.laminationConfig.enabled ? 'block' : 'none'};">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+              <div class="cle-form-row">
+                <label style="font-size:12px;">Slab Thickness (mm):</label>
+                <input class="cle-input" id="slice-slab-thick" type="number" step="1.0" value="${this.slicer.laminationConfig.slabThickness || 30.0}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:12px;">Dowel Margin from Edge (mm):</label>
+                <input class="cle-input" id="slice-dowel-margin" type="number" step="1.0" value="${this.slicer.laminationConfig.dowelMargin || 25.0}">
+              </div>
+            </div>
+
+            <!-- Slab Presets -->
+            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; align-items:center;">
+              <span style="font-size:11px; color:var(--ink-2);">Slab Presets:</span>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="18.0" style="padding:2px 8px; font-size:11px;">18mm (3/4" MDF)</button>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="25.0" style="padding:2px 8px; font-size:11px;">25mm (1")</button>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="30.0" style="padding:2px 8px; font-size:11px; font-weight:700; border-color:var(--accent);">30mm (Biradial Horn)</button>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="40.0" style="padding:2px 8px; font-size:11px;">40mm (Heavy Slab)</button>
+              <button type="button" class="cle-btn cle-slab-preset" data-val="50.0" style="padding:2px 8px; font-size:11px;">50mm (2")</button>
+            </div>
+
+            <!-- Alignment Dowel Pins -->
+            <div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(250,204,21,0.3); display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+              <div class="cle-form-row">
+                <label style="font-size:12px;">Dowel Pin Diameter (mm):</label>
+                <input class="cle-input" id="slice-dowel-dia" type="number" step="0.5" value="${this.slicer.laminationConfig.dowelDiameter || 8.0}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:12px;">Registration Dowel Holes:</label>
+                <select class="cle-select" id="slice-dowel-count" style="font-size:12px;">
+                  <option value="4" ${this.slicer.laminationConfig.dowelHoleCount === 4 ? 'selected' : ''}>4 Holes (Symmetric Corners)</option>
+                  <option value="2" ${this.slicer.laminationConfig.dowelHoleCount === 2 ? 'selected' : ''}>2 Holes (Diagonal Alignment)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Tool Mapping for Slices -->
+            <div style="margin-top:10px; padding-top:8px; border-top:1px dashed rgba(250,204,21,0.3);">
+              <div style="font-size:12px; font-weight:700; color:var(--ink); margin-bottom:6px;">Tool Library Operation Mapping:</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                <div class="cle-form-row">
+                  <label style="font-size:11px;">Op 1: Dowel Pin Drilling:</label>
+                  <select class="cle-select" id="slice-tool-drill" style="font-size:11px;">
+                    ${toolOptionsDrill}
+                  </select>
+                </div>
+                <div class="cle-form-row">
+                  <label style="font-size:11px;">Op 2: Bulk Roughing Pass:</label>
+                  <select class="cle-select" id="slice-tool-rough" style="font-size:11px;">
+                    ${toolOptionsRough}
+                  </select>
+                </div>
+                <div class="cle-form-row">
+                  <label style="font-size:11px;">Op 3: 3D Contour Finishing:</label>
+                  <select class="cle-select" id="slice-tool-finish" style="font-size:11px;">
+                    ${toolOptionsFinish}
+                  </select>
+                </div>
+                <div class="cle-form-row">
+                  <label style="font-size:11px;">Op 4: Spoilboard Cutout:</label>
+                  <select class="cle-select" id="slice-tool-cutout" style="font-size:11px;">
+                    ${toolOptionsCutout}
+                  </select>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -6920,6 +7552,21 @@ class CLEBridge {
         this.closeModal();
       };
     } else if (type === 'slicer') {
+      const lamCheck = document.getElementById('slice-enable-lamination');
+      const lamPanel = document.getElementById('slice-lam-panel');
+      if (lamCheck && lamPanel) {
+        lamCheck.onchange = () => {
+          lamPanel.style.display = lamCheck.checked ? 'block' : 'none';
+        };
+      }
+      document.querySelectorAll('.cle-slab-preset').forEach(btn => {
+        btn.onclick = () => {
+          const val = btn.getAttribute('data-val');
+          const thickInput = document.getElementById('slice-slab-thick');
+          if (thickInput) thickInput.value = val;
+        };
+      });
+
       document.getElementById('slice-run-btn').onclick = async () => {
         const mode = document.getElementById('slice-mode').value;
         const layerH = document.getElementById('slice-layer-h').value;
@@ -6928,8 +7575,35 @@ class CLEBridge {
         const enableCutout = document.getElementById('slice-enable-cutout') ? document.getElementById('slice-enable-cutout').checked : true;
         const cutoutOvercut = document.getElementById('slice-cutout-depth') ? (parseFloat(document.getElementById('slice-cutout-depth').value) || 0.20) : 0.20;
 
+        const enableLamination = document.getElementById('slice-enable-lamination') ? document.getElementById('slice-enable-lamination').checked : false;
+        const slabThickness = document.getElementById('slice-slab-thick') ? (parseFloat(document.getElementById('slice-slab-thick').value) || 30.0) : 30.0;
+        const dowelHolesEnabled = true;
+        const dowelDiameter = document.getElementById('slice-dowel-dia') ? (parseFloat(document.getElementById('slice-dowel-dia').value) || 8.0) : 8.0;
+        const dowelMargin = document.getElementById('slice-dowel-margin') ? (parseFloat(document.getElementById('slice-dowel-margin').value) || 25.0) : 25.0;
+        const dowelHoleCount = document.getElementById('slice-dowel-count') ? (parseInt(document.getElementById('slice-dowel-count').value, 10) || 4) : 4;
+        const toolMapping = {
+          drillingToolNumber: parseInt(document.getElementById('slice-tool-drill')?.value || 2, 10),
+          roughingToolNumber: parseInt(document.getElementById('slice-tool-rough')?.value || 1, 10),
+          finishingToolNumber: parseInt(document.getElementById('slice-tool-finish')?.value || 3, 10),
+          cutoutToolNumber: parseInt(document.getElementById('slice-tool-cutout')?.value || 1, 10)
+        };
+
         this.slicer.feedRate = parseFloat(feed) || 1500;
-        await this.slicer.sliceModel({ mode, layerHeight: layerH, infill, enableCutout, cutoutOvercut });
+        await this.slicer.sliceModel({
+          mode,
+          layerHeight: layerH,
+          infill,
+          feedRate: feed,
+          enableCutout,
+          cutoutOvercut,
+          enableLamination,
+          slabThickness,
+          dowelHolesEnabled,
+          dowelDiameter,
+          dowelMargin,
+          dowelHoleCount,
+          toolMapping
+        });
         this.closeModal();
       };
     } else if (type === 'spoilboard') {
