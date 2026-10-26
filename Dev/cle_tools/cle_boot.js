@@ -276,6 +276,9 @@ class CLEBridge {
     m("Rotary & Slicer", "", [
       { id: "cle-r-rotary", label: "4th Axis (A)", title: "Toggle 4th Axis Rotary Chuck & Cylindrical Stock in 3D View", icon: "lathe", pressed: this.rotary.enabled, fn: () => this.rotary.toggle() },
       { id: "cle-r-rot-fit", label: "Clamp Ends", title: "Auto-Clamp Chuck & Opposing Center to CAD Object Ends", icon: "box", fn: () => this.rotary.fitToObject() },
+      { id: "cle-r-rot-center", label: "Center on Obj", title: "Center A-Axis Chuck and Opposing Center Symmetrically on CAD Object", icon: "dim", fn: () => this.rotary.centerOnObject() },
+      { id: "cle-r-rot-tool", label: "Center Tool", title: "Toggle A-Axis Center Point Alignment Tool & Reticle (Chuck & Live Center)", icon: "features", pressed: this.rotary.centerPointVisible, fn: () => this.rotary.toggleCenterPointTool() },
+      { id: "cle-r-rot-jog", label: "Jog Center", title: "Jog Spindle / Laser Toolhead Directly to A-Axis Center Point", icon: "motion", fn: () => this.rotary.jogToolToCenter('workpiece') },
       { id: "cle-r-rot-setup", label: "A-Axis Setup", title: "TwoTrees Rotary Setup: Gear Ratio (5:1), Pulley, Center Y, Z=45mm & Safety", icon: "features", fn: () => this.openModal("rotary") },
       { id: "cle-r-turning", label: "Turning", title: "Lathe Continuous Spindle Turning (RPM & Deg/s)", icon: "motion", pressed: this.rotary.isTurning, fn: () => this.rotary.toggleTurning() },
       { id: "cle-r-index", label: "Index Next", title: "Index A-Axis to Next Facet (Top-Down Milling)", icon: "revolve", fn: () => this.rotary.nextIndex() },
@@ -1158,20 +1161,53 @@ class CLEBridge {
                 <input class="cle-input" id="rot-chuck-h" type="number" value="${rot.chuckAssemblyHeightMm}" title="TwoTrees chuck is 66mm tall (fits under X-axis gantry)">
               </div>
             </div>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-              <div class="cle-form-row">
-                <label style="font-size:11px;">Chuck X Face (mm):</label>
-                <input class="cle-input" id="rot-chuck-x" type="number" value="${rot.chuckX}">
-              </div>
-              <div class="cle-form-row">
-                <label style="font-size:11px;">Opposing Center X (mm):</label>
-                <input class="cle-input" id="rot-tailstock-x" type="number" value="${rot.tailstockX}">
+            <!-- Chuck X with Nudge Controls -->
+            <div style="margin-top:6px;">
+              <div style="font-size:11px; font-weight:600; margin-bottom:2px;">Chuck X Face (Start of Object):</div>
+              <div style="display:flex; gap:3px; align-items:center;">
+                <button class="cle-btn" id="rot-btn-chuck-m10" style="padding:2px 5px; font-size:10px;">-10</button>
+                <button class="cle-btn" id="rot-btn-chuck-m1" style="padding:2px 5px; font-size:10px;">-1</button>
+                <input class="cle-input" id="rot-chuck-x" type="number" style="flex:1; text-align:center;" value="${rot.chuckX}">
+                <button class="cle-btn" id="rot-btn-chuck-p1" style="padding:2px 5px; font-size:10px;">+1</button>
+                <button class="cle-btn" id="rot-btn-chuck-p10" style="padding:2px 5px; font-size:10px;">+10</button>
               </div>
             </div>
-            <div style="margin-top:6px; margin-bottom:6px;">
-              <button class="cle-btn" id="rot-btn-fit-object" style="background:#ea580c; color:#fff; font-size:11px; font-weight:700; width:100%; padding:5px 8px;" title="Automatically align Chuck to object start and Opposing Center to object end">
-                Clamp to Object Ends (Auto-Fit)
+
+            <!-- Opposing Center X with Nudge Controls -->
+            <div style="margin-top:6px;">
+              <div style="font-size:11px; font-weight:600; margin-bottom:2px;">Opposing Center X (End of Object):</div>
+              <div style="display:flex; gap:3px; align-items:center;">
+                <button class="cle-btn" id="rot-btn-tail-m10" style="padding:2px 5px; font-size:10px;">-10</button>
+                <button class="cle-btn" id="rot-btn-tail-m1" style="padding:2px 5px; font-size:10px;">-1</button>
+                <input class="cle-input" id="rot-tailstock-x" type="number" style="flex:1; text-align:center;" value="${rot.tailstockX}">
+                <button class="cle-btn" id="rot-btn-tail-p1" style="padding:2px 5px; font-size:10px;">+1</button>
+                <button class="cle-btn" id="rot-btn-tail-p10" style="padding:2px 5px; font-size:10px;">+10</button>
+              </div>
+            </div>
+
+            <!-- Positioning Actions -->
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; margin-bottom:6px;">
+              <button class="cle-btn" id="rot-btn-fit-object" style="background:#ea580c; color:#fff; font-size:11px; font-weight:700; padding:5px 6px;" title="Align Chuck to Xmin and Center to Xmax">
+                Clamp to Ends
               </button>
+              <button class="cle-btn" id="rot-btn-center-object" style="background:#0284c7; color:#fff; font-size:11px; font-weight:700; padding:5px 6px;" title="Center chuck and center symmetrically around object midpoint">
+                Center on Object
+              </button>
+            </div>
+
+            <!-- Center Point Tool Controls -->
+            <div style="background:rgba(6, 182, 212, 0.08); border:1px solid #06b6d4; border-radius:6px; padding:8px; margin-top:6px;">
+              <div style="font-size:11px; font-weight:700; color:#0891b2; margin-bottom:4px; text-transform:uppercase;">
+                🎯 Center Point Tool
+              </div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+                <button class="cle-btn" id="rot-btn-toggle-tool" style="background:${rot.centerPointVisible ? '#06b6d4' : 'var(--paper)'}; color:${rot.centerPointVisible ? '#fff' : 'var(--ink)'}; font-size:11px; font-weight:600; padding:4px 6px;">
+                  ${rot.centerPointVisible ? 'Hide Center Tool' : 'Show Center Tool'}
+                </button>
+                <button class="cle-btn" id="rot-btn-jog-center" style="background:#f59e0b; color:#000; font-size:11px; font-weight:700; padding:4px 6px;" title="Jog CNC spindle / laser head to rotation center point">
+                  Jog to Center Point
+                </button>
+              </div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
               <div class="cle-form-row">
@@ -1976,6 +2012,61 @@ class CLEBridge {
       const inLen = document.getElementById('rot-stock-len');
       const inDia = document.getElementById('rot-stock-dia');
       const feedbackEl = document.getElementById('rot-clearance-feedback');
+
+      const refreshFields = () => {
+        if (inChuckX) inChuckX.value = rot.chuckX;
+        if (inTailX) inTailX.value = rot.tailstockX;
+        if (inLen) inLen.value = rot.stockLength;
+        if (inDia) inDia.value = rot.stockDiameter;
+        updateClearanceFeedback();
+      };
+
+      // Nudge buttons for Chuck X
+      const btnCm10 = document.getElementById('rot-btn-chuck-m10');
+      if (btnCm10) btnCm10.onclick = () => { rot.nudgeChuck(-10); refreshFields(); };
+      const btnCm1 = document.getElementById('rot-btn-chuck-m1');
+      if (btnCm1) btnCm1.onclick = () => { rot.nudgeChuck(-1); refreshFields(); };
+      const btnCp1 = document.getElementById('rot-btn-chuck-p1');
+      if (btnCp1) btnCp1.onclick = () => { rot.nudgeChuck(1); refreshFields(); };
+      const btnCp10 = document.getElementById('rot-btn-chuck-p10');
+      if (btnCp10) btnCp10.onclick = () => { rot.nudgeChuck(10); refreshFields(); };
+
+      // Nudge buttons for Center X
+      const btnTm10 = document.getElementById('rot-btn-tail-m10');
+      if (btnTm10) btnTm10.onclick = () => { rot.nudgeTailstock(-10); refreshFields(); };
+      const btnTm1 = document.getElementById('rot-btn-tail-m1');
+      if (btnTm1) btnTm1.onclick = () => { rot.nudgeTailstock(-1); refreshFields(); };
+      const btnTp1 = document.getElementById('rot-btn-tail-p1');
+      if (btnTp1) btnTp1.onclick = () => { rot.nudgeTailstock(1); refreshFields(); };
+      const btnTp10 = document.getElementById('rot-btn-tail-p10');
+      if (btnTp10) btnTp10.onclick = () => { rot.nudgeTailstock(10); refreshFields(); };
+
+      // Center on Object button
+      const btnCenterObj = document.getElementById('rot-btn-center-object');
+      if (btnCenterObj) {
+        btnCenterObj.onclick = () => {
+          rot.centerOnObject();
+          refreshFields();
+        };
+      }
+
+      // Center Point Tool toggle & Jog buttons
+      const btnToggleTool = document.getElementById('rot-btn-toggle-tool');
+      if (btnToggleTool) {
+        btnToggleTool.onclick = () => {
+          const vis = rot.toggleCenterPointTool();
+          btnToggleTool.style.background = vis ? '#06b6d4' : 'var(--paper)';
+          btnToggleTool.style.color = vis ? '#fff' : 'var(--ink)';
+          btnToggleTool.textContent = vis ? 'Hide Center Tool' : 'Show Center Tool';
+        };
+      }
+
+      const btnJogCenter = document.getElementById('rot-btn-jog-center');
+      if (btnJogCenter) {
+        btnJogCenter.onclick = () => {
+          rot.jogToolToCenter('workpiece');
+        };
+      }
 
       const updateClearanceFeedback = () => {
         if (!feedbackEl || !inDia) return;

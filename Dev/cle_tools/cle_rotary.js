@@ -67,6 +67,13 @@ export class CLERotaryEngine {
     this.safetyBoundaryMesh = null;
     this.retractPlaneMesh = null;
 
+    // Center Point Tool Subsystems
+    this.centerPointVisible = true;   // Visible by default when A-axis rotary is mounted
+    this.centerPointGroup = null;
+    this.chuckCenterTool = null;
+    this.tailstockCenterTool = null;
+    this.centerVerticalGuide = null;
+
     this._cachedCenterYZ = null;
   }
 
@@ -456,6 +463,89 @@ export class CLERotaryEngine {
     this.retractPlaneMesh.position.set(midX, yCenter, zTop);
     this.rotaryGroup.add(this.retractPlaneMesh);
 
+    // =========================================================================
+    // 4. PRECISION CENTER POINT TOOL & ALIGNMENT RETICLES
+    // =========================================================================
+    this.centerPointGroup = new THREE.Group();
+    this.centerPointGroup.name = 'CLE_Center_Point_Tool_Group';
+
+    // A. Chuck Face Center Point Reticle & Bullseye Target
+    this.chuckCenterTool = new THREE.Group();
+    this.chuckCenterTool.name = 'CLE_Chuck_Center_Point';
+    
+    // Glowing Bullseye Target Ring at (0, 0, 0) of chuck face
+    const chuckReticleGeo = new THREE.RingGeometry(1.5, 5.0, 32);
+    chuckReticleGeo.rotateY(Math.PI / 2); // face along X axis
+    const chuckReticleMat = new THREE.MeshBasicMaterial({
+      color: 0x06b6d4, // Vivid Cyan
+      side: THREE.DoubleSide,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.95
+    });
+    const chuckRing = new THREE.Mesh(chuckReticleGeo, chuckReticleMat);
+    this.chuckCenterTool.add(chuckRing);
+
+    // Crosshair Lines in Y & Z
+    const chCrossGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, -10, 0), new THREE.Vector3(0, 10, 0),
+      new THREE.Vector3(0, 0, -10), new THREE.Vector3(0, 0, 10)
+    ]);
+    const chCrossMat = new THREE.LineBasicMaterial({ color: 0x06b6d4, linewidth: 2.5, depthTest: false });
+    this.chuckCenterTool.add(new THREE.LineSegments(chCrossGeo, chCrossMat));
+
+    // Center Point Pin (Sharp center marker pointing into workpiece)
+    const pinGeo = new THREE.ConeGeometry(1.5, 6.0, 16);
+    pinGeo.rotateZ(-Math.PI / 2); // points along +X into workpiece
+    pinGeo.translate(3.0, 0, 0);
+    const pinMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.9, roughness: 0.2 });
+    this.chuckCenterTool.add(new THREE.Mesh(pinGeo, pinMat));
+    this.chuckCenterTool.position.set(this.chuckX, yCenter, zCenter);
+    this.centerPointGroup.add(this.chuckCenterTool);
+
+    // B. Tailstock Live Center Point Tool & Bullseye Reticle
+    this.tailstockCenterTool = new THREE.Group();
+    this.tailstockCenterTool.name = 'CLE_Tailstock_Center_Point';
+
+    const tailReticleGeo = new THREE.RingGeometry(1.5, 5.0, 32);
+    tailReticleGeo.rotateY(Math.PI / 2);
+    const tailRing = new THREE.Mesh(tailReticleGeo, chuckReticleMat);
+    this.tailstockCenterTool.add(tailRing);
+
+    const tailCrossGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, -10, 0), new THREE.Vector3(0, 10, 0),
+      new THREE.Vector3(0, 0, -10), new THREE.Vector3(0, 0, 10)
+    ]);
+    this.tailstockCenterTool.add(new THREE.LineSegments(tailCrossGeo, chCrossMat));
+
+    // Precision 60-degree Ground Center Point Tool Tip
+    const liveTipGeo = new THREE.ConeGeometry(1.8, 8.0, 16);
+    liveTipGeo.rotateZ(Math.PI / 2); // points along -X into workpiece center
+    liveTipGeo.translate(-4.0, 0, 0);
+    const liveTipMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.95, roughness: 0.1 });
+    this.tailstockCenterTool.add(new THREE.Mesh(liveTipGeo, liveTipMat));
+    this.tailstockCenterTool.position.set(this.tailstockX, yCenter, zCenter);
+    this.centerPointGroup.add(this.tailstockCenterTool);
+
+    // C. Vertical Spindle / Laser Alignment Guide Ray (Perpendicular from Centerline to Safe Retract)
+    const guideZPoints = [
+      new THREE.Vector3(midX, yCenter, zCenter),
+      new THREE.Vector3(midX, yCenter, zTop + 15)
+    ];
+    const guideZGeo = new THREE.BufferGeometry().setFromPoints(guideZPoints);
+    const guideZMat = new THREE.LineDashedMaterial({
+      color: 0xfacc15, // Bright Gold
+      dashSize: 4,
+      gapSize: 3,
+      depthTest: false
+    });
+    this.centerVerticalGuide = new THREE.Line(guideZGeo, guideZMat);
+    this.centerVerticalGuide.computeLineDistances();
+    this.centerPointGroup.add(this.centerVerticalGuide);
+
+    this.centerPointGroup.visible = this.centerPointVisible;
+    this.rotaryGroup.add(this.centerPointGroup);
+
     this.rotaryGroup.visible = this.enabled;
     container.add(this.rotaryGroup);
 
@@ -503,6 +593,21 @@ export class CLERotaryEngine {
     if (this.retractPlaneMesh) {
       this.retractPlaneMesh.position.set(midX, yCenter, zTop);
       this.retractPlaneMesh.scale.set(spanLen / Math.max(1, this.stockLength), 1, 1);
+    }
+
+    // 5. Update Center Point Tools & Guides
+    if (this.chuckCenterTool) {
+      this.chuckCenterTool.position.set(this.chuckX, yCenter, zCenter);
+    }
+    if (this.tailstockCenterTool) {
+      this.tailstockCenterTool.position.set(this.tailstockX, yCenter, zCenter);
+    }
+    if (this.centerVerticalGuide && this.centerVerticalGuide.geometry) {
+      const pos = this.centerVerticalGuide.geometry.attributes.position;
+      pos.setXYZ(0, midX, yCenter, zCenter);
+      pos.setXYZ(1, midX, yCenter, zTop + 15);
+      pos.needsUpdate = true;
+      this.centerVerticalGuide.computeLineDistances();
     }
 
     const app = window.app || window.xe;
@@ -571,6 +676,96 @@ export class CLERotaryEngine {
       this.stockLength = Math.max(10, this.tailstockX - this.chuckX);
       this.updateAssemblyPositions();
     }
+  }
+
+  setTailstockPosition(x) {
+    if (isFinite(x)) {
+      this.tailstockX = parseFloat(x);
+      this.stockLength = Math.max(10, this.tailstockX - this.chuckX);
+      this.updateAssemblyPositions();
+    }
+  }
+
+  // --- Center A-Axis Chuck and Center on CAD Object ---
+  centerOnObject() {
+    const b = this.getObjectBounds();
+    const objMidX = (b.minX + b.maxX) / 2;
+    const span = Math.max(10, this.stockLength);
+    this.chuckX = Math.round(objMidX - span / 2);
+    this.tailstockX = Math.round(objMidX + span / 2);
+
+    if (!this.enabled) this.toggle(true);
+    else this.updateAssemblyPositions();
+
+    if (this.bridge?.bed) {
+      this.bridge.bed.sitWorkpieceOnSpoilboard();
+    }
+
+    this.bridge.notify(`A-Axis centered on object: Midpoint X=${objMidX.toFixed(1)}mm, Chuck at X=${this.chuckX}mm, Center at X=${this.tailstockX}mm (Span=${span}mm).`, 'ok');
+  }
+
+  // --- Nudge Chuck Position along X ---
+  nudgeChuck(deltaMm) {
+    this.setChuckPosition(this.chuckX + deltaMm);
+    this.bridge.notify(`Chuck X: ${this.chuckX}mm`, 'info');
+  }
+
+  // --- Nudge Opposing Center Position along X ---
+  nudgeTailstock(deltaMm) {
+    this.setTailstockPosition(this.tailstockX + deltaMm);
+    this.bridge.notify(`Opposing Center X: ${this.tailstockX}mm (Span: ${this.stockLength}mm)`, 'info');
+  }
+
+  // --- Toggle Center Point Tool Visibility ---
+  toggleCenterPointTool(visible) {
+    this.centerPointVisible = (visible !== undefined) ? visible : !this.centerPointVisible;
+    if (this.centerPointGroup) {
+      this.centerPointGroup.visible = this.centerPointVisible;
+    }
+    const app = window.app || window.xe;
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
+    const stateStr = this.centerPointVisible ? 'VISIBLE' : 'HIDDEN';
+    this.bridge.notify(`Center Point Tool: ${stateStr} (Chuck Center & Live Center Point at Y=${this.centerY}mm Z=${this.getZCenter().toFixed(2)}mm).`, 'info');
+    return this.centerPointVisible;
+  }
+
+  // --- Jog CNC Spindle / Laser Toolhead Directly to Center Point ---
+  jogToolToCenter(which = 'workpiece') {
+    const yCenter = this.centerY;
+    const zCenter = this.getZCenter();
+    const zTop = this.getZTop();
+    const midX = (this.chuckX + this.tailstockX) / 2;
+
+    let targetX = midX;
+    let targetY = yCenter;
+    let targetZ = zTop;
+
+    if (which === 'chuck') {
+      targetX = this.chuckX;
+      targetZ = zCenter;
+    } else if (which === 'tailstock') {
+      targetX = this.tailstockX;
+      targetZ = zCenter;
+    } else {
+      // 'workpiece' top dead center (perpendicular touch-off point)
+      targetX = midX;
+      targetZ = zCenter + (this.stockDiameter / 2);
+    }
+
+    // Update 3D virtual toolhead cursor in JumpStart viewport
+    if (this.bridge?.bed) {
+      this.bridge.bed.updateToolCursor({ X: targetX, Y: targetY, Z: targetZ, A: this.currentAngle });
+    }
+
+    // If FluidNC controller is connected, send jog command
+    if (this.bridge?.fluidnc && this.bridge.fluidnc.isConnected) {
+      this.bridge.fluidnc.sendImmediate(`$J=G90 G21 X${targetX.toFixed(2)} Y${targetY.toFixed(2)} Z${targetZ.toFixed(2)} F1500`);
+    }
+
+    this.bridge.notify(`Toolhead positioned at Center Point: X=${targetX.toFixed(1)}mm, Y=${targetY.toFixed(1)}mm, Z=${targetZ.toFixed(1)}mm (${which}).`, 'ok');
   }
 
   setTailstockPosition(x) {

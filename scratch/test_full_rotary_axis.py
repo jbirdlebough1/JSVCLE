@@ -252,6 +252,69 @@ async def test_full_rotary_axis():
         assert res7["clearsChuckOnSmall"], "Retract plane on small stock must clear the 66mm chuck"
         assert res7["clearsStockOnLarge"], "Retract plane on large stock must clear the stock top"
 
+        # 8. Test Center Point Tool & Chuck/Center Positioning on Object
+        res8 = await page.evaluate("""() => {
+            const rot = window.CLE.rotary;
+            const bed = window.CLE.bed;
+
+            // 1. Center Point Tool existence and toggling
+            const initialToolVis = rot.centerPointVisible;
+            rot.toggleCenterPointTool(false);
+            const hiddenVis = rot.centerPointVisible;
+            const groupHidden = rot.centerPointGroup ? !rot.centerPointGroup.visible : true;
+            rot.toggleCenterPointTool(true);
+            const restoredVis = rot.centerPointVisible;
+            const groupVisible = rot.centerPointGroup ? rot.centerPointGroup.visible : false;
+
+            // 2. Center Point 3D positions
+            const chuckToolX = rot.chuckCenterTool ? rot.chuckCenterTool.position.x : null;
+            const tailToolX = rot.tailstockCenterTool ? rot.tailstockCenterTool.position.x : null;
+
+            // 3. Positioning on Object (centerOnObject & nudges)
+            rot.centerOnObject();
+            const b = rot.getObjectBounds();
+            const objMidX = (b.minX + b.maxX) / 2;
+            const spanAfterCenter = rot.tailstockX - rot.chuckX;
+            const centerMidX = (rot.chuckX + rot.tailstockX) / 2;
+            const isCenteredOnObj = Math.abs(centerMidX - objMidX) < 1.0;
+
+            // Nudge chuck and center
+            const oldChuck = rot.chuckX;
+            rot.nudgeChuck(5);
+            const nudgedChuck = (rot.chuckX === oldChuck + 5);
+
+            const oldTail = rot.tailstockX;
+            rot.nudgeTailstock(-5);
+            const nudgedTail = (rot.tailstockX === oldTail - 5);
+
+            // 4. Jog Toolhead to Center Point
+            rot.jogToolToCenter('workpiece');
+            const toolPos = bed ? { ...bed.lastPos } : null;
+            const toolCenteredY = toolPos ? (toolPos.Y === rot.centerY) : false;
+
+            return {
+                initialToolVis: initialToolVis,
+                hiddenVis: hiddenVis,
+                groupHidden: groupHidden,
+                restoredVis: restoredVis,
+                groupVisible: groupVisible,
+                chuckToolX: chuckToolX,
+                tailToolX: tailToolX,
+                isCenteredOnObj: isCenteredOnObj,
+                nudgedChuck: nudgedChuck,
+                nudgedTail: nudgedTail,
+                toolPos: toolPos,
+                toolCenteredY: toolCenteredY
+            };
+        }""")
+        print("Test 8 (Center Point Tool & Object Positioning):", res8)
+        assert res8["groupVisible"], "Center point tool group must be visible when toggled on"
+        assert res8["groupHidden"], "Center point tool group must be hidden when toggled off"
+        assert res8["isCenteredOnObj"], "centerOnObject() must center chuck & tailstock on CAD object midpoint"
+        assert res8["nudgedChuck"], "nudgeChuck(5) must increment chuckX by 5mm"
+        assert res8["nudgedTail"], "nudgeTailstock(-5) must decrement tailstockX by 5mm"
+        assert res8["toolCenteredY"], "jogToolToCenter() must place toolhead exactly at centerY"
+
         await browser.close()
 
 asyncio.run(test_full_rotary_axis())

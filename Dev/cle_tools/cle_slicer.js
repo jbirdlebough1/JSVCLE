@@ -1790,6 +1790,9 @@ export class CLESlicerEngine {
       <button class="cle-btn" id="cle-hud-trace" style="background:#059669; color:#fff; font-weight:600; padding:3px 8px;" title="Simulate 3D toolhead movement over slices">Trace 3D</button>
       <button class="cle-btn" id="cle-hud-rot-a" style="background:#ea580c; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Rotate Object 90° about A-Axis (X) for 4th Axis Rotary Milling">Rot 90° A</button>
       <button class="cle-btn" id="cle-hud-rot-fit" style="background:#d97706; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Auto-clamp Chuck and Opposing Center to CAD workpiece ends">Clamp Ends</button>
+      <button class="cle-btn" id="cle-hud-center-obj" style="background:#0284c7; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Center Chuck & Opposing Center on CAD workpiece">Center Obj</button>
+      <button class="cle-btn" id="cle-hud-center-tool" style="background:#0891b2; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Toggle Center Point Tool Reticle">Center Tool</button>
+      <button class="cle-btn" id="cle-hud-jog-center" style="background:#f59e0b; color:#000; font-weight:700; padding:3px 8px; border-radius:5px;" title="Jog CNC Spindle / Laser to A-Axis Center Point">Jog Center</button>
       <div style="border-left:1px solid var(--line); height:18px;"></div>
       <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600; padding:3px 8px;">Export .NC</button>
       <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600; padding:3px 8px;">To SD</button>
@@ -2005,6 +2008,31 @@ export class CLESlicerEngine {
         if (this.bridge?.rotary) {
           this.bridge.rotary.fitToObject();
         }
+      };
+    }
+
+    const centerObjBtn = document.getElementById('cle-hud-center-obj');
+    if (centerObjBtn) {
+      centerObjBtn.onclick = () => {
+        if (this.bridge?.rotary) this.bridge.rotary.centerOnObject();
+      };
+    }
+
+    const centerToolBtn = document.getElementById('cle-hud-center-tool');
+    if (centerToolBtn) {
+      centerToolBtn.onclick = () => {
+        if (this.bridge?.rotary) {
+          const vis = this.bridge.rotary.toggleCenterPointTool();
+          centerToolBtn.style.background = vis ? '#0891b2' : 'var(--paper)';
+          centerToolBtn.style.color = vis ? '#fff' : 'var(--ink)';
+        }
+      };
+    }
+
+    const jogCenterBtn = document.getElementById('cle-hud-jog-center');
+    if (jogCenterBtn) {
+      jogCenterBtn.onclick = () => {
+        if (this.bridge?.rotary) this.bridge.rotary.jogToolToCenter('workpiece');
       };
     }
 
