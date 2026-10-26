@@ -681,6 +681,7 @@ export class CLEBedVisualizer {
     const tzMat = new THREE.LineBasicMaterial({ color: 0x3b82f6, linewidth: 3, depthTest: false });
     tipAxisGroup.add(new THREE.LineSegments(tzGeo, tzMat));
 
+    this.tipAxisGroup = tipAxisGroup;
     this.cursorGroup.add(tipAxisGroup);
 
     // Floating 3D DRO Coordinate Badge
@@ -742,9 +743,23 @@ export class CLEBedVisualizer {
     this.updateCrosshairShadow(this.lastPos.X, this.lastPos.Y);
   }
 
+  // Toggle extended guide rays and tip lines on/off (clean tool view during slicing/trace)
+  setRaysVisible(visible) {
+    this._raysHidden = !visible;
+    if (this.guideLines) this.guideLines.visible = visible;
+    if (this.tipAxisGroup) this.tipAxisGroup.visible = visible;
+    if (this.shadowCrosshair) this.shadowCrosshair.visible = visible;
+    this.requestRender();
+  }
+
   // Update Crosshair Position & Projection Lines
   updateCrosshairShadow(x, y) {
     if (!this.shadowCrosshair || !this.guideLines) return;
+    if (this._raysHidden) {
+      this.shadowCrosshair.visible = false;
+      this.guideLines.visible = false;
+      return;
+    }
 
     this.shadowCrosshair.position.set(x, y, 0);
 
@@ -777,6 +792,9 @@ export class CLEBedVisualizer {
     if (this.cursorGroup) {
       this.cursorGroup.position.set(x, y, z);
       this.cursorGroup.visible = true;
+      if (this._raysHidden && this.tipAxisGroup) {
+        this.tipAxisGroup.visible = false;
+      }
     }
     this.updateCrosshairShadow(x, y);
 

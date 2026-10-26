@@ -1557,12 +1557,14 @@ class CLEFluidNCClient {
   }
 
   sendGCode(gcode) {
+    const clean = gcode.trim();
+    if (!clean) return;
+
     if (!this.isConnected) {
+      this.logConsole(`[SEND FAIL] "${clean}" — FluidNC is offline. Connect machine first.`);
       this.bridge.notify('FluidNC is not connected', 'error');
       return;
     }
-    const clean = gcode.trim();
-    if (!clean) return;
 
     this.logConsole(`[SEND] ${clean}`);
     if (this.isRecordingGCode) {
@@ -1713,13 +1715,15 @@ class CLEFluidNCClient {
   }
 
   logConsole(msg) {
-    this.consoleLogs.push(msg);
+    const timestamp = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const formatted = `[${timestamp}] ${msg}`;
+    this.consoleLogs.push(formatted);
     if (this.consoleLogs.length > this.maxConsoleLogs) {
       this.consoleLogs.shift();
     }
-    const consoleEl = document.getElementById('cle-man-console-body');
+    const consoleEl = document.getElementById('cle-man-console') || document.getElementById('cle-man-console-body');
     if (consoleEl) {
-      consoleEl.innerHTML = this.consoleLogs.map(l => `<div>${l}</div>`).join('');
+      consoleEl.innerHTML = this.consoleLogs.map(l => `<div style="margin-bottom:2px;">${l}</div>`).join('');
       consoleEl.scrollTop = consoleEl.scrollHeight;
     }
   }
@@ -4102,37 +4106,39 @@ class CLESlicerEngine {
     this.activeTraceLine.visible = false;
     this.visualizerGroup.add(this.activeTraceLine);
 
-    // Shared materials to eliminate WebGL shader and JS memory bloat
+    // Solid Bright Green Slice Microtome Slabs (Visible from ANY viewing angle)
     this.sharedSolidMat = new THREE.MeshBasicMaterial({
-      color: 0x22c55e, // Solid Transparent Green Slice Disc (User: "fill it solid with transparent green")
+      color: 0x00ff66, // Vivid Bright Neon/Emerald Green Slice Microtome Fill
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.70,
       side: THREE.DoubleSide,
       depthWrite: false
     });
     this.sharedFadeSolidMat = new THREE.MeshBasicMaterial({
-      color: 0x22c55e,
+      color: 0x00e676, // Bright Green for Range and Full Stack Slices
       transparent: true,
-      opacity: 0.25,
+      opacity: 0.38,
       side: THREE.DoubleSide,
       depthWrite: false
     });
     this.sharedBorderMat = new THREE.LineBasicMaterial({
-      color: 0x22c55e, // Vivid Emerald Green Outline Contour
+      color: 0x00ff66, // Bright Green Perimeter Contour Outline Loop
       linewidth: 4.0,
       transparent: true,
       opacity: 1.0,
       depthWrite: false
     });
     this.sharedFadeBorderMat = new THREE.LineBasicMaterial({
-      color: 0x10b981,
+      color: 0x00e676,
       linewidth: 2.0,
       transparent: true,
-      opacity: 0.50,
+      opacity: 0.60,
       depthWrite: false
     });
 
-    // Build ultra-lightweight 2D planar slice contours (uses ShapeGeometry to save >90% memory)
+    // Build true 3D microtome slice slabs with physical layer thickness (visible from ALL angles)
+    const sliceThickness = Math.max(0.4, this.layerHeight || 1.0);
+
     this.slicedLayers.forEach((layer, lIdx) => {
       // Find which laminated part contains this layer
       let layerPartIdx = -1;
@@ -4153,17 +4159,24 @@ class CLESlicerEngine {
         }
         shape.closePath();
 
-        const shapeGeo = new THREE.ShapeGeometry(shape);
-        shapeGeo.translate(0, 0, layer.z);
+        // 3D Physical Microtome Slice Slab: extrude along Z so slice is solid and fully visible from ANY angle
+        let solidGeo;
+        try {
+          solidGeo = new THREE.ExtrudeGeometry(shape, { depth: sliceThickness, bevelEnabled: false });
+          solidGeo.translate(0, 0, layer.z - sliceThickness / 2);
+        } catch (e) {
+          solidGeo = new THREE.ShapeGeometry(shape);
+          solidGeo.translate(0, 0, layer.z);
+        }
 
-        const solidSliceMesh = new THREE.Mesh(shapeGeo, this.sharedSolidMat);
+        const solidSliceMesh = new THREE.Mesh(solidGeo, this.sharedSolidMat);
         solidSliceMesh.name = `CLE_Solid_Slice_${lIdx}`;
         solidSliceMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isSolidSlice: true };
         solidSliceMesh.renderOrder = 99990;
         solidSliceMesh.visible = false;
         this.visualizerGroup.add(solidSliceMesh);
 
-        // Vivid Glowing Green Perimeter Contour Outline Loop (User: "green outline of conture so we can clearly see")
+        // Vivid Glowing Green Perimeter Contour Outline Loop (User: "bright green slice that is filled to the outside conture")
         const loopPts = contourPts.map(p => new THREE.Vector3(p.x, p.y, layer.z));
         const loopGeo = new THREE.BufferGeometry().setFromPoints(loopPts);
         const contourBorder = new THREE.LineLoop(loopGeo, this.sharedBorderMat);
@@ -4550,6 +4563,7 @@ class CLESlicerEngine {
     this.stopSphereRoll();
     this.stopLayerRoll();
     this.stopTraceSimulation();
+    if (this.bridge.bed) this.bridge.bed.setRaysVisible(true);
 
     const app = window.app || window.xe;
     if (this.visualizerGroup) {
@@ -4669,10 +4683,13 @@ class CLESlicerEngine {
 
       } else {
         // --- FULL STACK MODE ---
-        // Clean contour stack across the workpiece
+        // Clean contour stack across the workpiece showing every slice filled in bright green
         if (isSolidSlice) {
           mesh.visible = true;
-          if (this.sharedFadeSolidMat) mesh.material = this.sharedFadeSolidMat;
+          const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
+          if (this.sharedSolidMat && this.sharedFadeSolidMat) {
+            mesh.material = isTarget ? this.sharedSolidMat : this.sharedFadeSolidMat;
+          }
         } else if (isContourBorder) {
           mesh.visible = true;
           const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
@@ -5129,6 +5146,11 @@ class CLESlicerEngine {
     this.isSimulating = true;
     this.simSpeed = speedMultiplier;
 
+    // Remove extended crosshair guide rays and tip lines so only the tool moving on the slice is visible
+    if (this.bridge.bed) {
+      this.bridge.bed.setRaysVisible(false);
+    }
+
     const numLayers = this.slicedLayers.length;
     let curLayerIdx = (this.currentPreviewLayer >= 0 && this.currentPreviewLayer < numLayers)
       ? this.currentPreviewLayer
@@ -5249,6 +5271,7 @@ class CLESlicerEngine {
       this.isSimulating = false;
       this._activeSimLayer = -1;
       if (this.activeTraceLine) this.activeTraceLine.visible = false;
+      if (this.bridge.bed) this.bridge.bed.setRaysVisible(true);
       this.bridge.notify(`Trace simulation complete: ${numLayers} slices traced.`, 'ok');
       if (traceBtn) traceBtn.textContent = 'Trace 3D';
       this.setPreviewLayer(this.currentPreviewLayer >= 0 ? this.currentPreviewLayer : 0);
@@ -5267,6 +5290,8 @@ class CLESlicerEngine {
     }
     const traceBtn = document.getElementById('cle-hud-trace');
     if (traceBtn) traceBtn.textContent = 'Trace 3D';
+
+    if (this.bridge.bed) this.bridge.bed.setRaysVisible(true);
 
     if (this.activeTraceLine) {
       this.activeTraceLine.visible = false;
@@ -6296,6 +6321,7 @@ class CLEBedVisualizer {
     const tzMat = new THREE.LineBasicMaterial({ color: 0x3b82f6, linewidth: 3, depthTest: false });
     tipAxisGroup.add(new THREE.LineSegments(tzGeo, tzMat));
 
+    this.tipAxisGroup = tipAxisGroup;
     this.cursorGroup.add(tipAxisGroup);
 
     // Floating 3D DRO Coordinate Badge
@@ -6357,9 +6383,23 @@ class CLEBedVisualizer {
     this.updateCrosshairShadow(this.lastPos.X, this.lastPos.Y);
   }
 
+  // Toggle extended guide rays and tip lines on/off (clean tool view during slicing/trace)
+  setRaysVisible(visible) {
+    this._raysHidden = !visible;
+    if (this.guideLines) this.guideLines.visible = visible;
+    if (this.tipAxisGroup) this.tipAxisGroup.visible = visible;
+    if (this.shadowCrosshair) this.shadowCrosshair.visible = visible;
+    this.requestRender();
+  }
+
   // Update Crosshair Position & Projection Lines
   updateCrosshairShadow(x, y) {
     if (!this.shadowCrosshair || !this.guideLines) return;
+    if (this._raysHidden) {
+      this.shadowCrosshair.visible = false;
+      this.guideLines.visible = false;
+      return;
+    }
 
     this.shadowCrosshair.position.set(x, y, 0);
 
@@ -6392,6 +6432,9 @@ class CLEBedVisualizer {
     if (this.cursorGroup) {
       this.cursorGroup.position.set(x, y, z);
       this.cursorGroup.visible = true;
+      if (this._raysHidden && this.tipAxisGroup) {
+        this.tipAxisGroup.visible = false;
+      }
     }
     this.updateCrosshairShadow(x, y);
 
@@ -6858,6 +6901,11 @@ class CLEBridge {
       hub.style.display = 'flex';
       if (this.fluidnc) {
         this.fluidnc.updateConnectionUI(this.fluidnc.isConnected);
+        const conEl = document.getElementById('cle-man-console');
+        if (conEl) {
+          conEl.innerHTML = this.fluidnc.consoleLogs.map(l => `<div style="margin-bottom:2px;">${l}</div>`).join('');
+          conEl.scrollTop = conEl.scrollHeight;
+        }
       }
       if (this.camera) {
         this.camera.syncUI();
@@ -7051,9 +7099,19 @@ class CLEBridge {
       }
     }
 
-    // Sync live connection state to manual card badge
+    // Sync live connection state to manual card badge and initialize Terminal Console
     if (this.fluidnc) {
       this.fluidnc.updateConnectionUI(this.fluidnc.isConnected);
+      const conEl = document.getElementById('cle-man-console');
+      if (conEl) {
+        if (this.fluidnc.consoleLogs.length === 0) {
+          this.fluidnc.logConsole('[SYSTEM] FluidNC Terminal Console Initialized.');
+          this.fluidnc.logConsole(`[STATUS] Machine: ${this.vault.getActiveMachine().name} | State: ${this.fluidnc.isConnected ? 'Connected' : 'Offline'}`);
+        } else {
+          conEl.innerHTML = this.fluidnc.consoleLogs.map(l => `<div style="margin-bottom:2px;">${l}</div>`).join('');
+          conEl.scrollTop = conEl.scrollHeight;
+        }
+      }
     }
 
     // Wire Events

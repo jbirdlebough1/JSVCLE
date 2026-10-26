@@ -284,6 +284,11 @@ class CLEBridge {
       hub.style.display = 'flex';
       if (this.fluidnc) {
         this.fluidnc.updateConnectionUI(this.fluidnc.isConnected);
+        const conEl = document.getElementById('cle-man-console');
+        if (conEl) {
+          conEl.innerHTML = this.fluidnc.consoleLogs.map(l => `<div style="margin-bottom:2px;">${l}</div>`).join('');
+          conEl.scrollTop = conEl.scrollHeight;
+        }
       }
       if (this.camera) {
         this.camera.syncUI();
@@ -477,9 +482,19 @@ class CLEBridge {
       }
     }
 
-    // Sync live connection state to manual card badge
+    // Sync live connection state to manual card badge and initialize Terminal Console
     if (this.fluidnc) {
       this.fluidnc.updateConnectionUI(this.fluidnc.isConnected);
+      const conEl = document.getElementById('cle-man-console');
+      if (conEl) {
+        if (this.fluidnc.consoleLogs.length === 0) {
+          this.fluidnc.logConsole('[SYSTEM] FluidNC Terminal Console Initialized.');
+          this.fluidnc.logConsole(`[STATUS] Machine: ${this.vault.getActiveMachine().name} | State: ${this.fluidnc.isConnected ? 'Connected' : 'Offline'}`);
+        } else {
+          conEl.innerHTML = this.fluidnc.consoleLogs.map(l => `<div style="margin-bottom:2px;">${l}</div>`).join('');
+          conEl.scrollTop = conEl.scrollHeight;
+        }
+      }
     }
 
     // Wire Events

@@ -1053,37 +1053,39 @@ export class CLESlicerEngine {
     this.activeTraceLine.visible = false;
     this.visualizerGroup.add(this.activeTraceLine);
 
-    // Shared materials to eliminate WebGL shader and JS memory bloat
+    // Solid Bright Green Slice Microtome Slabs (Visible from ANY viewing angle)
     this.sharedSolidMat = new THREE.MeshBasicMaterial({
-      color: 0x22c55e, // Solid Transparent Green Slice Disc (User: "fill it solid with transparent green")
+      color: 0x00ff66, // Vivid Bright Neon/Emerald Green Slice Microtome Fill
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.70,
       side: THREE.DoubleSide,
       depthWrite: false
     });
     this.sharedFadeSolidMat = new THREE.MeshBasicMaterial({
-      color: 0x22c55e,
+      color: 0x00e676, // Bright Green for Range and Full Stack Slices
       transparent: true,
-      opacity: 0.25,
+      opacity: 0.38,
       side: THREE.DoubleSide,
       depthWrite: false
     });
     this.sharedBorderMat = new THREE.LineBasicMaterial({
-      color: 0x22c55e, // Vivid Emerald Green Outline Contour
+      color: 0x00ff66, // Bright Green Perimeter Contour Outline Loop
       linewidth: 4.0,
       transparent: true,
       opacity: 1.0,
       depthWrite: false
     });
     this.sharedFadeBorderMat = new THREE.LineBasicMaterial({
-      color: 0x10b981,
+      color: 0x00e676,
       linewidth: 2.0,
       transparent: true,
-      opacity: 0.50,
+      opacity: 0.60,
       depthWrite: false
     });
 
-    // Build ultra-lightweight 2D planar slice contours (uses ShapeGeometry to save >90% memory)
+    // Build true 3D microtome slice slabs with physical layer thickness (visible from ALL angles)
+    const sliceThickness = Math.max(0.4, this.layerHeight || 1.0);
+
     this.slicedLayers.forEach((layer, lIdx) => {
       // Find which laminated part contains this layer
       let layerPartIdx = -1;
@@ -1104,17 +1106,24 @@ export class CLESlicerEngine {
         }
         shape.closePath();
 
-        const shapeGeo = new THREE.ShapeGeometry(shape);
-        shapeGeo.translate(0, 0, layer.z);
+        // 3D Physical Microtome Slice Slab: extrude along Z so slice is solid and fully visible from ANY angle
+        let solidGeo;
+        try {
+          solidGeo = new THREE.ExtrudeGeometry(shape, { depth: sliceThickness, bevelEnabled: false });
+          solidGeo.translate(0, 0, layer.z - sliceThickness / 2);
+        } catch (e) {
+          solidGeo = new THREE.ShapeGeometry(shape);
+          solidGeo.translate(0, 0, layer.z);
+        }
 
-        const solidSliceMesh = new THREE.Mesh(shapeGeo, this.sharedSolidMat);
+        const solidSliceMesh = new THREE.Mesh(solidGeo, this.sharedSolidMat);
         solidSliceMesh.name = `CLE_Solid_Slice_${lIdx}`;
         solidSliceMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isSolidSlice: true };
         solidSliceMesh.renderOrder = 99990;
         solidSliceMesh.visible = false;
         this.visualizerGroup.add(solidSliceMesh);
 
-        // Vivid Glowing Green Perimeter Contour Outline Loop (User: "green outline of conture so we can clearly see")
+        // Vivid Glowing Green Perimeter Contour Outline Loop (User: "bright green slice that is filled to the outside conture")
         const loopPts = contourPts.map(p => new THREE.Vector3(p.x, p.y, layer.z));
         const loopGeo = new THREE.BufferGeometry().setFromPoints(loopPts);
         const contourBorder = new THREE.LineLoop(loopGeo, this.sharedBorderMat);
@@ -1501,6 +1510,7 @@ export class CLESlicerEngine {
     this.stopSphereRoll();
     this.stopLayerRoll();
     this.stopTraceSimulation();
+    if (this.bridge.bed) this.bridge.bed.setRaysVisible(true);
 
     const app = window.app || window.xe;
     if (this.visualizerGroup) {
@@ -1620,10 +1630,13 @@ export class CLESlicerEngine {
 
       } else {
         // --- FULL STACK MODE ---
-        // Clean contour stack across the workpiece
+        // Clean contour stack across the workpiece showing every slice filled in bright green
         if (isSolidSlice) {
           mesh.visible = true;
-          if (this.sharedFadeSolidMat) mesh.material = this.sharedFadeSolidMat;
+          const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
+          if (this.sharedSolidMat && this.sharedFadeSolidMat) {
+            mesh.material = isTarget ? this.sharedSolidMat : this.sharedFadeSolidMat;
+          }
         } else if (isContourBorder) {
           mesh.visible = true;
           const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
@@ -2080,6 +2093,11 @@ export class CLESlicerEngine {
     this.isSimulating = true;
     this.simSpeed = speedMultiplier;
 
+    // Remove extended crosshair guide rays and tip lines so only the tool moving on the slice is visible
+    if (this.bridge.bed) {
+      this.bridge.bed.setRaysVisible(false);
+    }
+
     const numLayers = this.slicedLayers.length;
     let curLayerIdx = (this.currentPreviewLayer >= 0 && this.currentPreviewLayer < numLayers)
       ? this.currentPreviewLayer
@@ -2200,6 +2218,7 @@ export class CLESlicerEngine {
       this.isSimulating = false;
       this._activeSimLayer = -1;
       if (this.activeTraceLine) this.activeTraceLine.visible = false;
+      if (this.bridge.bed) this.bridge.bed.setRaysVisible(true);
       this.bridge.notify(`Trace simulation complete: ${numLayers} slices traced.`, 'ok');
       if (traceBtn) traceBtn.textContent = 'Trace 3D';
       this.setPreviewLayer(this.currentPreviewLayer >= 0 ? this.currentPreviewLayer : 0);
@@ -2218,6 +2237,8 @@ export class CLESlicerEngine {
     }
     const traceBtn = document.getElementById('cle-hud-trace');
     if (traceBtn) traceBtn.textContent = 'Trace 3D';
+
+    if (this.bridge.bed) this.bridge.bed.setRaysVisible(true);
 
     if (this.activeTraceLine) {
       this.activeTraceLine.visible = false;

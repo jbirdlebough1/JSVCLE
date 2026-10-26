@@ -652,12 +652,14 @@ export class CLEFluidNCClient {
   }
 
   sendGCode(gcode) {
+    const clean = gcode.trim();
+    if (!clean) return;
+
     if (!this.isConnected) {
+      this.logConsole(`[SEND FAIL] "${clean}" — FluidNC is offline. Connect machine first.`);
       this.bridge.notify('FluidNC is not connected', 'error');
       return;
     }
-    const clean = gcode.trim();
-    if (!clean) return;
 
     this.logConsole(`[SEND] ${clean}`);
     if (this.isRecordingGCode) {
@@ -808,13 +810,15 @@ export class CLEFluidNCClient {
   }
 
   logConsole(msg) {
-    this.consoleLogs.push(msg);
+    const timestamp = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const formatted = `[${timestamp}] ${msg}`;
+    this.consoleLogs.push(formatted);
     if (this.consoleLogs.length > this.maxConsoleLogs) {
       this.consoleLogs.shift();
     }
-    const consoleEl = document.getElementById('cle-man-console-body');
+    const consoleEl = document.getElementById('cle-man-console') || document.getElementById('cle-man-console-body');
     if (consoleEl) {
-      consoleEl.innerHTML = this.consoleLogs.map(l => `<div>${l}</div>`).join('');
+      consoleEl.innerHTML = this.consoleLogs.map(l => `<div style="margin-bottom:2px;">${l}</div>`).join('');
       consoleEl.scrollTop = consoleEl.scrollHeight;
     }
   }
