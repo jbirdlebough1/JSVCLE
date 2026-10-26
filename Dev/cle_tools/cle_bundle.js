@@ -1932,6 +1932,11 @@ class CLERotaryEngine {
     this.centerHeightMm = 45.0;      // Center of A-axis rotation is 45.0mm from bed surface
     this.centerY = 250.0;            // Center of chuck in Y (center of 500mm machine travel, settable)
 
+    // --- Chuck Physical Geometry & Machine Z Clearances ---
+    this.chuckAssemblyHeightMm = 66.0; // TwoTrees chuck assembly is 66mm tall (fits under X-axis gantry)
+    this.bedSafetyMarginMm = 5.0;      // 5mm minimum clearance between rotating material bottom and aluminum bed
+    this.machineMaxZ = 100.0;          // Max Z travel of machine (from active machine config or 100mm default)
+
     // Chuck & Opposing Center X clamping positions
     this.chuckX = 20.0;              // Headstock chuck face position along X-axis
     this.tailstockX = 170.0;         // Opposing live center tip position along X-axis
@@ -1940,7 +1945,7 @@ class CLERotaryEngine {
 
     // --- Safety Boundaries ---
     this.zSafetyLimit = -5.0;        // -5mm safety boundary below rotation axis (never plunge below this!)
-    this.zClearance = 10.0;          // mm safe retract clearance height above top of stock
+    this.zClearance = 10.0;          // mm safe retract clearance height above top of stock / chuck
 
     // --- Live Motion State ---
     this.currentAngle = 0.0;         // Current A-axis angle in degrees [0..360)
@@ -1983,15 +1988,68 @@ class CLERotaryEngine {
     return 0.10 + this.centerHeightMm; // 45.10mm from world origin Z=0
   }
 
-  // Safe retract clearance plane (Top of stock + clearance)
+  // Maximum safe stock diameter permitted by bed clearance (distance from centerline to aluminum bed)
+  getMaxStockDiameter(safetyMargin = this.bedSafetyMarginMm) {
+    const maxRadius = Math.max(5.0, this.centerHeightMm - safetyMargin);
+    return maxRadius * 2.0; // (45.0 - 5.0) * 2 = 80.0mm safe limit (90mm absolute bed contact)
+  }
+
+  // Check physical clearances against aluminum bed and 66mm chuck height
+  checkClearances(diameter = this.stockDiameter) {
+    const dia = parseFloat(diameter) || 0;
+    const radius = dia / 2;
+    const bedMargin = this.centerHeightMm - radius; // mm clearance between bottom of rotating material and bed
+    const matTop = this.centerHeightMm + radius;    // mm height from bed to top of material
+    const chuckTop = this.chuckAssemblyHeightMm;    // 66mm from bed (fits under X-axis)
+    const zTop = this.getZTop();
+    const maxSafeDia = this.getMaxStockDiameter(this.bedSafetyMarginMm); // 80mm
+    const absoluteMaxDia = this.centerHeightMm * 2.0; // 90mm
+
+    let status = 'ok';
+    let message = `Material clears bed by ${bedMargin.toFixed(1)}mm. Top is at ${matTop.toFixed(1)}mm.`;
+
+    if (dia > absoluteMaxDia) {
+      status = 'collision';
+      message = `CRITICAL COLLISION: Material (Ø${dia.toFixed(1)}mm) strikes the aluminum bed table! Exceeds 90mm physical limit by ${(dia - absoluteMaxDia).toFixed(1)}mm.`;
+    } else if (dia > maxSafeDia) {
+      status = 'warning';
+      message = `WARNING: Material (Ø${dia.toFixed(1)}mm) leaves only ${bedMargin.toFixed(1)}mm clearance to bed (safe limit is Ø${maxSafeDia.toFixed(0)}mm).`;
+    } else if (matTop > chuckTop) {
+      status = 'notice';
+      message = `Material top (${matTop.toFixed(1)}mm) extends ${(matTop - chuckTop).toFixed(1)}mm above 66mm chuck. Verify X-axis gantry clearance.`;
+    } else {
+      status = 'shielded';
+      message = `Material fits within 66mm chuck profile (${(chuckTop - matTop).toFixed(1)}mm below chuck top). Full X-axis gantry clearance.`;
+    }
+
+    return {
+      status,
+      message,
+      diameter: dia,
+      bedMargin,
+      matTop,
+      chuckTop,
+      zTop,
+      maxSafeDia,
+      absoluteMaxDia
+    };
+  }
+
+  // Safe retract clearance plane (must clear both top of material and 66mm chuck assembly)
   getZTop() {
-    const radius = this.stockDiameter / 2;
-    return this.getZCenter() + radius + this.zClearance;
+    const matRadius = this.stockDiameter / 2;
+    const matTop = this.getZCenter() + matRadius;
+    const chuckTop = 0.10 + this.chuckAssemblyHeightMm; // 0.10 + 66.0 = 66.10mm
+    const highestObstacle = Math.max(matTop, chuckTop);
+    return highestObstacle + this.zClearance;
   }
 
   // Lowest allowable cutting depth (-5mm safety boundary from centerline)
   getZBot() {
-    return this.getZCenter() + this.zSafetyLimit; // 45.10 - 5.0 = 40.10mm
+    const zCenter = this.getZCenter();
+    const floorLimit = 0.10 + this.bedSafetyMarginMm; // 5.10mm above bed
+    const nominalBot = zCenter + this.zSafetyLimit;   // 45.10 - 5.0 = 40.10mm
+    return Math.max(floorLimit, nominalBot);
   }
 
   getWorldContainer() {
@@ -2083,7 +2141,15 @@ class CLERotaryEngine {
     this.tailstockX = Math.round(b.maxX);
     this.stockLength = Math.max(10, Math.round(b.length));
     const maxDim = Math.max(b.width, b.height);
-    this.stockDiameter = Math.max(10, Math.round(maxDim));
+    const rawDia = Math.max(10, Math.round(maxDim));
+    const maxSafe = this.getMaxStockDiameter();
+
+    if (rawDia > maxSafe) {
+      this.stockDiameter = maxSafe;
+      this.bridge.notify(`Object diameter exceeds 80mm bed clearance limit! Clamped to Ø${maxSafe}mm to prevent hitting machine bed.`, 'warn');
+    } else {
+      this.stockDiameter = rawDia;
+    }
 
     if (!this.enabled) this.toggle(true);
     else this.updateAssemblyPositions();
@@ -2433,7 +2499,8 @@ class CLERotaryEngine {
 
   // --- Stock Dimensions ---
   setStockDimensions(diameter, length) {
-    this.stockDiameter = parseFloat(diameter) || 50.0;
+    const dia = parseFloat(diameter) || 50.0;
+    this.stockDiameter = dia;
     if (length && isFinite(length)) {
       this.stockLength = parseFloat(length);
       this.tailstockX = this.chuckX + this.stockLength;
@@ -2441,6 +2508,9 @@ class CLERotaryEngine {
     if (this.enabled) {
       this.updateAssemblyPositions();
     }
+    const clr = this.checkClearances(this.stockDiameter);
+    this.bridge.notify(`Rotary Stock: Ø${this.stockDiameter}mm × ${this.stockLength}mm (Ztop=${this.getZTop().toFixed(1)}mm). ${clr.message}`, (clr.status === 'ok' || clr.status === 'shielded') ? 'ok' : 'warn');
+    return;
     this.bridge.notify(`Rotary Stock: Ø${this.stockDiameter}mm × ${this.stockLength}mm (Ztop=${this.getZTop().toFixed(1)}mm, Zbot=${this.getZBot().toFixed(1)}mm).`);
   }
 
@@ -4039,8 +4109,9 @@ class CLESlicerEngine {
 
       lines.push('; === TwoTrees 4th Axis Rotary (A) Index / Turning Toolpath ===');
       lines.push(`; Ratio: ${rot ? rot.gearRatio : 5}:1 (${rot ? rot.motorPulleyMm : 15}mm/${rot ? rot.chuckPulleyMm : 55}mm pulleys)`);
-      lines.push(`; Center of Chuck: Y=${rot ? rot.centerY : 250}mm, Z_center=${rot ? rot.getZCenter().toFixed(2) : 45.1}mm`);
-      lines.push(`; Safety Floor: Zbot=${zBot.toFixed(2)}mm (-5mm limit), Retract: Ztop=${zTop.toFixed(2)}mm`);
+      lines.push(`; Center of Chuck: Y=${rot ? rot.centerY : 250}mm, Z_center=${rot ? rot.getZCenter().toFixed(2) : 45.1}mm (45mm from bed)`);
+      lines.push(`; Chuck Assy Height: ${rot ? rot.chuckAssemblyHeightMm : 66}mm (fits under X-axis), Max Stock Dia: ${rot ? rot.getMaxStockDiameter().toFixed(0) : 80}mm`);
+      lines.push(`; Safety Floor: Zbot=${zBot.toFixed(2)}mm (-5mm limit), Retract: Ztop=${zTop.toFixed(2)}mm (clears chuck & stock)`);
       lines.push('G21 ; mm mode');
       lines.push('G90 ; Absolute coordinates');
       lines.push(`M3 S${this.spindleRPM} ; Spindle ON`);
@@ -8523,9 +8594,15 @@ class CLEBridge {
               <label>Center of Chuck in Y (mm):</label>
               <input class="cle-input" id="rot-center-y" type="number" value="${rot.centerY}">
             </div>
-            <div class="cle-form-row">
-              <label>Center Height from Bed (mm):</label>
-              <input class="cle-input" id="rot-center-z" type="number" value="${rot.centerHeightMm}">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Centerline to Bed (mm):</label>
+                <input class="cle-input" id="rot-center-z" type="number" value="${rot.centerHeightMm}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Chuck Assy Height (mm):</label>
+                <input class="cle-input" id="rot-chuck-h" type="number" value="${rot.chuckAssemblyHeightMm}" title="TwoTrees chuck is 66mm tall (fits under X-axis gantry)">
+              </div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
               <div class="cle-form-row">
@@ -8555,15 +8632,35 @@ class CLEBridge {
           </div>
         </div>
 
-        <!-- 3. Stock Dimensions -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
-          <div class="cle-form-row">
-            <label>Stock Diameter (mm):</label>
-            <input class="cle-input" id="rot-stock-dia" type="number" step="1" value="${rot.stockDiameter}">
+        <!-- 3. Stock Dimensions & Machine Z Clearance Accounting -->
+        <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:10px;">
+          <div style="font-weight:700; color:var(--accent); font-size:12px; margin-bottom:8px; text-transform:uppercase;">
+            Stock Dimensions & Bed / Gantry Clearance Accounting
           </div>
-          <div class="cle-form-row">
-            <label>Stock Length (mm):</label>
-            <input class="cle-input" id="rot-stock-len" type="number" step="5" value="${rot.stockLength}">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="cle-form-row">
+              <label>Stock Diameter (mm):</label>
+              <input class="cle-input" id="rot-stock-dia" type="number" step="1" max="80" value="${rot.stockDiameter}">
+            </div>
+            <div class="cle-form-row">
+              <label>Stock Length (mm):</label>
+              <input class="cle-input" id="rot-stock-len" type="number" step="5" value="${rot.stockLength}">
+            </div>
+          </div>
+          <div id="rot-clearance-feedback" style="margin-top:8px; font-size:11px; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,0.06); border:1px solid var(--line);">
+            ${(() => {
+              const clr = rot.checkClearances(rot.stockDiameter);
+              const color = clr.status === 'ok' || clr.status === 'shielded' ? 'var(--ok)' : (clr.status === 'collision' ? 'var(--err)' : '#d97706');
+              return `
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-weight:600;">
+                  <span>Bed Floor Margin: <strong>${clr.bedMargin.toFixed(1)} mm</strong> (Min 5mm | Max Ø${clr.maxSafeDia.toFixed(0)}mm)</span>
+                  <span>Material Top: <strong>${clr.matTop.toFixed(1)} mm from bed</strong> (Chuck is ${clr.chuckTop}mm)</span>
+                </div>
+                <div style="color:${color}; font-weight:700;">
+                  ${clr.message}
+                </div>
+              `;
+            })()}
           </div>
         </div>
 
@@ -9320,26 +9417,47 @@ class CLEBridge {
       }
 
       // Auto-Fit Chuck & Opposing Center to CAD Object Ends
+      const inChuckX = document.getElementById('rot-chuck-x');
+      const inTailX = document.getElementById('rot-tailstock-x');
+      const inLen = document.getElementById('rot-stock-len');
+      const inDia = document.getElementById('rot-stock-dia');
+      const feedbackEl = document.getElementById('rot-clearance-feedback');
+
+      const updateClearanceFeedback = () => {
+        if (!feedbackEl || !inDia) return;
+        const val = parseFloat(inDia.value) || 0;
+        const clr = rot.checkClearances(val);
+        const color = clr.status === 'ok' || clr.status === 'shielded' ? 'var(--ok)' : (clr.status === 'collision' ? 'var(--err)' : '#d97706');
+        feedbackEl.innerHTML = `
+          <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-weight:600;">
+            <span>Bed Floor Margin: <strong>${clr.bedMargin.toFixed(1)} mm</strong> (Min 5mm | Max Ø${clr.maxSafeDia.toFixed(0)}mm)</span>
+            <span>Material Top: <strong>${clr.matTop.toFixed(1)} mm from bed</strong> (Chuck is ${clr.chuckTop}mm)</span>
+          </div>
+          <div style="color:${color}; font-weight:700;">
+            ${clr.message}
+          </div>
+        `;
+      };
+
+      if (inDia) {
+        inDia.oninput = updateClearanceFeedback;
+      }
+
       const btnFit = document.getElementById('rot-btn-fit-object');
       if (btnFit) {
         btnFit.onclick = () => {
           rot.fitToObject();
-          const inChuckX = document.getElementById('rot-chuck-x');
-          const inTailX = document.getElementById('rot-tailstock-x');
-          const inLen = document.getElementById('rot-stock-len');
-          const inDia = document.getElementById('rot-stock-dia');
           if (inChuckX) inChuckX.value = rot.chuckX;
           if (inTailX) inTailX.value = rot.tailstockX;
           if (inLen) inLen.value = rot.stockLength;
           if (inDia) inDia.value = rot.stockDiameter;
+          updateClearanceFeedback();
         };
       }
 
-      const inChuckX = document.getElementById('rot-chuck-x');
       if (inChuckX) {
         inChuckX.onchange = () => rot.setChuckPosition(parseFloat(inChuckX.value) || 0);
       }
-      const inTailX = document.getElementById('rot-tailstock-x');
       if (inTailX) {
         inTailX.onchange = () => rot.setTailstockPosition(parseFloat(inTailX.value) || 0);
       }

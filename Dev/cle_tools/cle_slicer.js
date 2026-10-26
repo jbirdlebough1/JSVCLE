@@ -343,8 +343,9 @@ export class CLESlicerEngine {
 
       lines.push('; === TwoTrees 4th Axis Rotary (A) Index / Turning Toolpath ===');
       lines.push(`; Ratio: ${rot ? rot.gearRatio : 5}:1 (${rot ? rot.motorPulleyMm : 15}mm/${rot ? rot.chuckPulleyMm : 55}mm pulleys)`);
-      lines.push(`; Center of Chuck: Y=${rot ? rot.centerY : 250}mm, Z_center=${rot ? rot.getZCenter().toFixed(2) : 45.1}mm`);
-      lines.push(`; Safety Floor: Zbot=${zBot.toFixed(2)}mm (-5mm limit), Retract: Ztop=${zTop.toFixed(2)}mm`);
+      lines.push(`; Center of Chuck: Y=${rot ? rot.centerY : 250}mm, Z_center=${rot ? rot.getZCenter().toFixed(2) : 45.1}mm (45mm from bed)`);
+      lines.push(`; Chuck Assy Height: ${rot ? rot.chuckAssemblyHeightMm : 66}mm (fits under X-axis), Max Stock Dia: ${rot ? rot.getMaxStockDiameter().toFixed(0) : 80}mm`);
+      lines.push(`; Safety Floor: Zbot=${zBot.toFixed(2)}mm (-5mm limit), Retract: Ztop=${zTop.toFixed(2)}mm (clears chuck & stock)`);
       lines.push('G21 ; mm mode');
       lines.push('G90 ; Absolute coordinates');
       lines.push(`M3 S${this.spindleRPM} ; Spindle ON`);

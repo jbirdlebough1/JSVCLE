@@ -199,6 +199,59 @@ async def test_full_rotary_axis():
         assert not res6["hasDummyCylinder"], "No dummy orange cylinder must exist"
         assert not res6["hasDowelPins"], "No dowel registration pins must exist in rotary mode"
 
+        # 7. Test Chuck Assembly Height (66mm), Centerline (45mm), and Max Material Clearances
+        res7 = await page.evaluate("""() => {
+            const rot = window.CLE.rotary;
+            
+            // Check chuck assembly height & centerline
+            const chuckH = rot.chuckAssemblyHeightMm;
+            const centerH = rot.centerHeightMm;
+            const maxSafeDia = rot.getMaxStockDiameter(5.0);
+            const absoluteMaxDia = rot.getMaxStockDiameter(0.0);
+
+            // Test clearance check with small stock (shielded within 66mm chuck)
+            const clr30 = rot.checkClearances(30.0);
+            
+            // Test clearance check with 70mm stock (extends above 66mm chuck, but clears bed)
+            const clr70 = rot.checkClearances(70.0);
+            
+            // Test clearance check with 95mm stock (hits bed!)
+            const clr95 = rot.checkClearances(95.0);
+
+            // Test Ztop clears 66mm chuck height even with small stock
+            rot.stockDiameter = 20.0;
+            rot.zClearance = 10.0;
+            const zTopSmall = rot.getZTop(); // must be at least 66.10 + 10 = 76.10mm
+
+            // Test Ztop with large 70mm stock
+            rot.stockDiameter = 70.0;
+            const zTopLarge = rot.getZTop(); // 45.10 + 35 + 10 = 90.10mm
+
+            return {
+                chuckH: chuckH,
+                centerH: centerH,
+                maxSafeDia: maxSafeDia,
+                absoluteMaxDia: absoluteMaxDia,
+                clr30Status: clr30.status,
+                clr70Status: clr70.status,
+                clr95Status: clr95.status,
+                zTopSmall: zTopSmall,
+                zTopLarge: zTopLarge,
+                clearsChuckOnSmall: zTopSmall >= 76.10,
+                clearsStockOnLarge: zTopLarge >= 90.10
+            };
+        }""")
+        print("Test 7 (Chuck Height & Material Clearances):", res7)
+        assert res7["chuckH"] == 66.0, "TwoTrees chuck assembly must be 66mm tall"
+        assert res7["centerH"] == 45.0, "A-axis centerline must be 45mm from bed"
+        assert res7["maxSafeDia"] == 80.0, "Max safe stock diameter with 5mm bed margin must be 80mm"
+        assert res7["absoluteMaxDia"] == 90.0, "Absolute max stock diameter to touch bed must be 90mm"
+        assert res7["clr30Status"] == "shielded", "30mm stock must be shielded within 66mm chuck profile"
+        assert res7["clr70Status"] == "notice", "70mm stock must notify that it extends above 66mm chuck"
+        assert res7["clr95Status"] == "collision", "95mm stock must detect bed collision"
+        assert res7["clearsChuckOnSmall"], "Retract plane on small stock must clear the 66mm chuck"
+        assert res7["clearsStockOnLarge"], "Retract plane on large stock must clear the stock top"
+
         await browser.close()
 
 asyncio.run(test_full_rotary_axis())

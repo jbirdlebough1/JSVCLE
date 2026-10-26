@@ -1148,9 +1148,15 @@ class CLEBridge {
               <label>Center of Chuck in Y (mm):</label>
               <input class="cle-input" id="rot-center-y" type="number" value="${rot.centerY}">
             </div>
-            <div class="cle-form-row">
-              <label>Center Height from Bed (mm):</label>
-              <input class="cle-input" id="rot-center-z" type="number" value="${rot.centerHeightMm}">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Centerline to Bed (mm):</label>
+                <input class="cle-input" id="rot-center-z" type="number" value="${rot.centerHeightMm}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Chuck Assy Height (mm):</label>
+                <input class="cle-input" id="rot-chuck-h" type="number" value="${rot.chuckAssemblyHeightMm}" title="TwoTrees chuck is 66mm tall (fits under X-axis gantry)">
+              </div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
               <div class="cle-form-row">
@@ -1180,15 +1186,35 @@ class CLEBridge {
           </div>
         </div>
 
-        <!-- 3. Stock Dimensions -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
-          <div class="cle-form-row">
-            <label>Stock Diameter (mm):</label>
-            <input class="cle-input" id="rot-stock-dia" type="number" step="1" value="${rot.stockDiameter}">
+        <!-- 3. Stock Dimensions & Machine Z Clearance Accounting -->
+        <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:10px;">
+          <div style="font-weight:700; color:var(--accent); font-size:12px; margin-bottom:8px; text-transform:uppercase;">
+            Stock Dimensions & Bed / Gantry Clearance Accounting
           </div>
-          <div class="cle-form-row">
-            <label>Stock Length (mm):</label>
-            <input class="cle-input" id="rot-stock-len" type="number" step="5" value="${rot.stockLength}">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="cle-form-row">
+              <label>Stock Diameter (mm):</label>
+              <input class="cle-input" id="rot-stock-dia" type="number" step="1" max="80" value="${rot.stockDiameter}">
+            </div>
+            <div class="cle-form-row">
+              <label>Stock Length (mm):</label>
+              <input class="cle-input" id="rot-stock-len" type="number" step="5" value="${rot.stockLength}">
+            </div>
+          </div>
+          <div id="rot-clearance-feedback" style="margin-top:8px; font-size:11px; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,0.06); border:1px solid var(--line);">
+            ${(() => {
+              const clr = rot.checkClearances(rot.stockDiameter);
+              const color = clr.status === 'ok' || clr.status === 'shielded' ? 'var(--ok)' : (clr.status === 'collision' ? 'var(--err)' : '#d97706');
+              return `
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-weight:600;">
+                  <span>Bed Floor Margin: <strong>${clr.bedMargin.toFixed(1)} mm</strong> (Min 5mm | Max Ø${clr.maxSafeDia.toFixed(0)}mm)</span>
+                  <span>Material Top: <strong>${clr.matTop.toFixed(1)} mm from bed</strong> (Chuck is ${clr.chuckTop}mm)</span>
+                </div>
+                <div style="color:${color}; font-weight:700;">
+                  ${clr.message}
+                </div>
+              `;
+            })()}
           </div>
         </div>
 
@@ -1945,26 +1971,47 @@ class CLEBridge {
       }
 
       // Auto-Fit Chuck & Opposing Center to CAD Object Ends
+      const inChuckX = document.getElementById('rot-chuck-x');
+      const inTailX = document.getElementById('rot-tailstock-x');
+      const inLen = document.getElementById('rot-stock-len');
+      const inDia = document.getElementById('rot-stock-dia');
+      const feedbackEl = document.getElementById('rot-clearance-feedback');
+
+      const updateClearanceFeedback = () => {
+        if (!feedbackEl || !inDia) return;
+        const val = parseFloat(inDia.value) || 0;
+        const clr = rot.checkClearances(val);
+        const color = clr.status === 'ok' || clr.status === 'shielded' ? 'var(--ok)' : (clr.status === 'collision' ? 'var(--err)' : '#d97706');
+        feedbackEl.innerHTML = `
+          <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-weight:600;">
+            <span>Bed Floor Margin: <strong>${clr.bedMargin.toFixed(1)} mm</strong> (Min 5mm | Max Ø${clr.maxSafeDia.toFixed(0)}mm)</span>
+            <span>Material Top: <strong>${clr.matTop.toFixed(1)} mm from bed</strong> (Chuck is ${clr.chuckTop}mm)</span>
+          </div>
+          <div style="color:${color}; font-weight:700;">
+            ${clr.message}
+          </div>
+        `;
+      };
+
+      if (inDia) {
+        inDia.oninput = updateClearanceFeedback;
+      }
+
       const btnFit = document.getElementById('rot-btn-fit-object');
       if (btnFit) {
         btnFit.onclick = () => {
           rot.fitToObject();
-          const inChuckX = document.getElementById('rot-chuck-x');
-          const inTailX = document.getElementById('rot-tailstock-x');
-          const inLen = document.getElementById('rot-stock-len');
-          const inDia = document.getElementById('rot-stock-dia');
           if (inChuckX) inChuckX.value = rot.chuckX;
           if (inTailX) inTailX.value = rot.tailstockX;
           if (inLen) inLen.value = rot.stockLength;
           if (inDia) inDia.value = rot.stockDiameter;
+          updateClearanceFeedback();
         };
       }
 
-      const inChuckX = document.getElementById('rot-chuck-x');
       if (inChuckX) {
         inChuckX.onchange = () => rot.setChuckPosition(parseFloat(inChuckX.value) || 0);
       }
-      const inTailX = document.getElementById('rot-tailstock-x');
       if (inTailX) {
         inTailX.onchange = () => rot.setTailstockPosition(parseFloat(inTailX.value) || 0);
       }
