@@ -498,7 +498,7 @@ export class CLERotaryEngine {
     const pinGeo = new THREE.ConeGeometry(1.5, 6.0, 16);
     pinGeo.rotateZ(-Math.PI / 2); // points along +X into workpiece
     pinGeo.translate(3.0, 0, 0);
-    const pinMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.9, roughness: 0.2 });
+    const pinMat = new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.9, roughness: 0.2 });
     this.chuckCenterTool.add(new THREE.Mesh(pinGeo, pinMat));
     this.chuckCenterTool.position.set(this.chuckX, yCenter, zCenter);
     this.centerPointGroup.add(this.chuckCenterTool);
@@ -522,7 +522,7 @@ export class CLERotaryEngine {
     const liveTipGeo = new THREE.ConeGeometry(1.8, 8.0, 16);
     liveTipGeo.rotateZ(Math.PI / 2); // points along -X into workpiece center
     liveTipGeo.translate(-4.0, 0, 0);
-    const liveTipMat = new THREE.MeshStandardMaterial({ color: 0x00d2ff, metalness: 0.95, roughness: 0.1 });
+    const liveTipMat = new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.95, roughness: 0.1 });
     this.tailstockCenterTool.add(new THREE.Mesh(liveTipGeo, liveTipMat));
     this.tailstockCenterTool.position.set(this.tailstockX, yCenter, zCenter);
     this.centerPointGroup.add(this.tailstockCenterTool);
@@ -534,7 +534,7 @@ export class CLERotaryEngine {
     ];
     const guideZGeo = new THREE.BufferGeometry().setFromPoints(guideZPoints);
     const guideZMat = new THREE.LineDashedMaterial({
-      color: 0x00e5ff, // Bright Electric Blue
+      color: 0xef4444, // Bright Red
       dashSize: 4,
       gapSize: 3,
       depthTest: false

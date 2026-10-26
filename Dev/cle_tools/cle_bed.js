@@ -626,17 +626,17 @@ export class CLEBedVisualizer {
     const activeHead = this.bridge.vault ? this.bridge.vault.getActiveHead() : { type: 'spindle' };
 
     if (activeHead.type === 'laser') {
-      // LASER HEAD: Anodized Heatsink Body + Laser Cone Beam (Bright Blue for high contrast on workpiece)
-      const headMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, metalness: 0.7, roughness: 0.25 });
+      // LASER HEAD: Anodized Heatsink Body + Laser Cone Beam in Vivid Bright Red
+      const headMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, metalness: 0.7, roughness: 0.25 });
       const headMesh = new THREE.Mesh(new THREE.BoxGeometry(16, 16, 26), headMat);
       headMesh.position.set(0, 0, 15);
       this.cursorGroup.add(headMesh);
 
-      // Laser focal cone beam (Bright Electric Blue)
+      // Laser focal cone beam (Bright Red)
       const beamMat = new THREE.MeshBasicMaterial({
-        color: 0x00d2ff,
+        color: 0xff0033,
         transparent: true,
-        opacity: 0.65,
+        opacity: 0.75,
         depthWrite: false
       });
       const beamCone = new THREE.Mesh(new THREE.ConeGeometry(5, 12, 16, 1, true), beamMat);
@@ -644,24 +644,24 @@ export class CLEBedVisualizer {
       beamCone.rotation.x = Math.PI;
       this.cursorGroup.add(beamCone);
     } else {
-      // SPINDLE HEAD: ER11/ER16 Collet Nut + Carbide Endmill Bit (Bright Blue for high contrast on orange/grey objects)
-      const colletMat = new THREE.MeshStandardMaterial({ color: 0x00b4d8, metalness: 0.8, roughness: 0.2 });
+      // SPINDLE HEAD: ER11/ER16 Collet Nut + Carbide Endmill Bit in Bright Red for high-contrast surface contact
+      const colletMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, metalness: 0.8, roughness: 0.2 }); // Vivid Crimson/Red
       const colletMesh = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 4.5, 12, 16), colletMat);
       colletMesh.position.set(0, 0, 10);
       colletMesh.rotation.x = Math.PI / 2;
       this.cursorGroup.add(colletMesh);
 
-      // Bit shank & flutes pointing down to (0,0,0) in Bright Vivid Blue
-      const bitMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.9, roughness: 0.1 });
+      // Bit shank & flutes pointing down to (0,0,0) in Bright Vivid Red
+      const bitMat = new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.85, roughness: 0.15 }); // Bright Electric Red
       const bitMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 12, 12), bitMat);
       bitMesh.position.set(0, 0, 4);
       bitMesh.rotation.x = Math.PI / 2;
       this.cursorGroup.add(bitMesh);
 
-      // Glowing Neon Blue Contact Reticle at Cutting Tip (Z=0) so tool contact is instantly visible on object surface
-      const tipRingGeo = new THREE.RingGeometry(0.8, 3.2, 24);
+      // Glowing Neon Red Contact Reticle at Cutting Tip (Z=0) so tool contact surface is instantly visible
+      const tipRingGeo = new THREE.RingGeometry(0.6, 3.6, 24);
       const tipRingMat = new THREE.MeshBasicMaterial({
-        color: 0x00e5ff,
+        color: 0xff0033, // Vivid Glowing Neon Red
         side: THREE.DoubleSide,
         depthTest: false,
         transparent: true,
@@ -670,6 +670,17 @@ export class CLEBedVisualizer {
       const tipRing = new THREE.Mesh(tipRingGeo, tipRingMat);
       tipRing.position.set(0, 0, 0.05);
       this.cursorGroup.add(tipRing);
+
+      // Pinpoint White Center Contact Dot at (0,0,0) inside the Red Reticle
+      const tipDotGeo = new THREE.CircleGeometry(0.8, 16);
+      const tipDotMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff, // Pure white center dot
+        side: THREE.DoubleSide,
+        depthTest: false
+      });
+      const tipDot = new THREE.Mesh(tipDotGeo, tipDotMat);
+      tipDot.position.set(0, 0, 0.06);
+      this.cursorGroup.add(tipDot);
     }
 
     // 3D Tool Lines at Cursor Tip (think of tool lines X, Y, Z)
@@ -698,7 +709,7 @@ export class CLEBedVisualizer {
     this.cursorGroup.add(tipAxisGroup);
 
     // Floating 3D DRO Coordinate Badge
-    this.coordTag = this.createNumberLabelSprite(THREE, 'X0.00 Y0.00 Z0.00', '#38bdf8');
+    this.coordTag = this.createNumberLabelSprite(THREE, 'X0.00 Y0.00 Z0.00', '#ef4444');
     this.coordTag.position.set(0, 0, 32);
     this.coordTag.scale.set(28, 12, 1);
     this.cursorGroup.add(this.coordTag);
@@ -726,7 +737,7 @@ export class CLEBedVisualizer {
     // Concentric Target Ring on Spoilboard Surface
     const ringGeo = new THREE.RingGeometry(3.0, 4.0, 32);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
+      color: 0xef4444,
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.85,

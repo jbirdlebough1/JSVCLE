@@ -1190,73 +1190,6 @@ export class CLESlicerEngine {
       const stockCz = (minZ + maxZ) / 2;
       this.stockCenter = { x: stockCx, y: stockCy, z: stockCz };
 
-      // 1. Semi-transparent shape outline in transparent orange (User: "outline of the shape in transperent orange")
-      if (this.lastGeometry?.isSample) {
-        const stockGeo = new THREE.BoxGeometry(stockW, stockD, stockH);
-        const stockMat = new THREE.MeshStandardMaterial({
-          color: 0xf97316, // Transparent Orange
-          transparent: true,
-          opacity: 0.28,
-          roughness: 0.4,
-          depthWrite: false
-        });
-        const stockMesh = new THREE.Mesh(stockGeo, stockMat);
-        stockMesh.position.set(stockCx, stockCy, stockCz);
-        stockMesh.name = 'CLE_Sample_Workpiece_Ghost';
-        stockMesh.renderOrder = 9990;
-        this.visualizerGroup.add(stockMesh);
-
-        // Fine wireframe edges around workpiece in transparent orange
-        const stockEdgeGeo = new THREE.EdgesGeometry(stockGeo);
-        const stockEdgeMat = new THREE.LineBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0.65 });
-        const stockEdges = new THREE.LineSegments(stockEdgeGeo, stockEdgeMat);
-        stockMesh.add(stockEdges);
-      }
-
-      // 2. Safe Clearance / Retract Plane wireframe (Z = maxZ + 5.0mm)
-      const retractZ = maxZ + 5.0;
-      const retVectors = [
-        new THREE.Vector3(minX - 5, minY - 5, retractZ),
-        new THREE.Vector3(maxX + 5, minY - 5, retractZ),
-        new THREE.Vector3(maxX + 5, maxY + 5, retractZ),
-        new THREE.Vector3(minX - 5, maxY + 5, retractZ),
-        new THREE.Vector3(minX - 5, minY - 5, retractZ)
-      ];
-      const retGeo = new THREE.BufferGeometry().setFromPoints(retVectors);
-      const retMat = new THREE.LineDashedMaterial({ color: 0xf59e0b, dashSize: 4, gapSize: 3, depthTest: false, transparent: true, opacity: 0.7 });
-      const retLine = new THREE.Line(retGeo, retMat);
-      retLine.computeLineDistances();
-      this.visualizerGroup.add(retLine);
-
-      // 3. Translucent Orange Mode Indicator Layer:
-      // CNC / Laser (Top-Down): Translucent Orange Cap on TOP layer where milling begins
-      // 3D Printing (Bottom-Up): Translucent Orange Base on BOTTOM layer where depositing begins on the bed
-      const modePlaneGeo = new THREE.PlaneGeometry(stockW, stockD);
-      const modePlaneMat = new THREE.MeshBasicMaterial({
-        color: 0xf97316, // Vivid Orange
-        transparent: true,
-        opacity: 0.38,
-        side: THREE.DoubleSide,
-        depthWrite: false
-      });
-      const modePlane = new THREE.Mesh(modePlaneGeo, modePlaneMat);
-      const modePlaneZ = isTopDown ? maxZ : minZ;
-      modePlane.position.set(stockCx, stockCy, modePlaneZ);
-      modePlane.name = isTopDown ? 'CLE_CNC_Top_Start_Surface' : 'CLE_3D_Bottom_Bed_Contact';
-      this.visualizerGroup.add(modePlane);
-
-      // Distinct orange perimeter outline border around start layer
-      const modeBorderGeo = new THREE.EdgesGeometry(modePlaneGeo);
-      const modeBorderMat = new THREE.LineBasicMaterial({
-        color: 0xea580c,
-        linewidth: 3,
-        transparent: true,
-        opacity: 0.95
-      });
-      const modeBorder = new THREE.LineSegments(modeBorderGeo, modeBorderMat);
-      modeBorder.position.set(stockCx, stockCy, modePlaneZ);
-      this.visualizerGroup.add(modeBorder);
-
       // 4. Center & Frame Visualizer Sphere around the Workpiece Slices
       const sphereRadius = Math.max(stockW, stockD, stockH) * 0.85;
       if (app?.vp?.view) {
@@ -1386,7 +1319,7 @@ export class CLESlicerEngine {
           m.transparent = true;
           m.opacity = 0.22;
           m.depthWrite = false;
-          if (m.color && m.color.setHex) m.color.setHex(0xf97316); // Vivid Transparent Orange
+          // Keep natural CAD body color with translucent opacity
           m.needsUpdate = true;
         } else if (m._cleOrigOpacity !== undefined) {
           m.opacity = m._cleOrigOpacity;
@@ -1403,17 +1336,8 @@ export class CLESlicerEngine {
         }
       });
 
-      // Orange shape outline edges
-      if (transparent && THREE && obj.geometry && !obj._cleEdges) {
-        try {
-          const edgeGeo = new THREE.EdgesGeometry(obj.geometry);
-          const edgeMat = new THREE.LineBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0.65 });
-          const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
-          edgeLines.name = 'CLE_Body_Orange_Edges';
-          obj.add(edgeLines);
-          obj._cleEdges = edgeLines;
-        } catch (e) {}
-      } else if (!transparent && obj._cleEdges) {
+      // Clear any legacy orange edge outlines if present
+      if (obj._cleEdges) {
         obj.remove(obj._cleEdges);
         try { obj._cleEdges.geometry.dispose(); } catch (e) {}
         try { obj._cleEdges.material.dispose(); } catch (e) {}

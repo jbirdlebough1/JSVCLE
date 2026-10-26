@@ -2404,7 +2404,7 @@ class CLERotaryEngine {
     const pinGeo = new THREE.ConeGeometry(1.5, 6.0, 16);
     pinGeo.rotateZ(-Math.PI / 2); // points along +X into workpiece
     pinGeo.translate(3.0, 0, 0);
-    const pinMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.9, roughness: 0.2 });
+    const pinMat = new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.9, roughness: 0.2 });
     this.chuckCenterTool.add(new THREE.Mesh(pinGeo, pinMat));
     this.chuckCenterTool.position.set(this.chuckX, yCenter, zCenter);
     this.centerPointGroup.add(this.chuckCenterTool);
@@ -2428,7 +2428,7 @@ class CLERotaryEngine {
     const liveTipGeo = new THREE.ConeGeometry(1.8, 8.0, 16);
     liveTipGeo.rotateZ(Math.PI / 2); // points along -X into workpiece center
     liveTipGeo.translate(-4.0, 0, 0);
-    const liveTipMat = new THREE.MeshStandardMaterial({ color: 0x00d2ff, metalness: 0.95, roughness: 0.1 });
+    const liveTipMat = new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.95, roughness: 0.1 });
     this.tailstockCenterTool.add(new THREE.Mesh(liveTipGeo, liveTipMat));
     this.tailstockCenterTool.position.set(this.tailstockX, yCenter, zCenter);
     this.centerPointGroup.add(this.tailstockCenterTool);
@@ -2440,7 +2440,7 @@ class CLERotaryEngine {
     ];
     const guideZGeo = new THREE.BufferGeometry().setFromPoints(guideZPoints);
     const guideZMat = new THREE.LineDashedMaterial({
-      color: 0x00e5ff, // Bright Electric Blue
+      color: 0xef4444, // Bright Red
       dashSize: 4,
       gapSize: 3,
       depthTest: false
@@ -5151,73 +5151,6 @@ class CLESlicerEngine {
       const stockCz = (minZ + maxZ) / 2;
       this.stockCenter = { x: stockCx, y: stockCy, z: stockCz };
 
-      // 1. Semi-transparent shape outline in transparent orange (User: "outline of the shape in transperent orange")
-      if (this.lastGeometry?.isSample) {
-        const stockGeo = new THREE.BoxGeometry(stockW, stockD, stockH);
-        const stockMat = new THREE.MeshStandardMaterial({
-          color: 0xf97316, // Transparent Orange
-          transparent: true,
-          opacity: 0.28,
-          roughness: 0.4,
-          depthWrite: false
-        });
-        const stockMesh = new THREE.Mesh(stockGeo, stockMat);
-        stockMesh.position.set(stockCx, stockCy, stockCz);
-        stockMesh.name = 'CLE_Sample_Workpiece_Ghost';
-        stockMesh.renderOrder = 9990;
-        this.visualizerGroup.add(stockMesh);
-
-        // Fine wireframe edges around workpiece in transparent orange
-        const stockEdgeGeo = new THREE.EdgesGeometry(stockGeo);
-        const stockEdgeMat = new THREE.LineBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0.65 });
-        const stockEdges = new THREE.LineSegments(stockEdgeGeo, stockEdgeMat);
-        stockMesh.add(stockEdges);
-      }
-
-      // 2. Safe Clearance / Retract Plane wireframe (Z = maxZ + 5.0mm)
-      const retractZ = maxZ + 5.0;
-      const retVectors = [
-        new THREE.Vector3(minX - 5, minY - 5, retractZ),
-        new THREE.Vector3(maxX + 5, minY - 5, retractZ),
-        new THREE.Vector3(maxX + 5, maxY + 5, retractZ),
-        new THREE.Vector3(minX - 5, maxY + 5, retractZ),
-        new THREE.Vector3(minX - 5, minY - 5, retractZ)
-      ];
-      const retGeo = new THREE.BufferGeometry().setFromPoints(retVectors);
-      const retMat = new THREE.LineDashedMaterial({ color: 0xf59e0b, dashSize: 4, gapSize: 3, depthTest: false, transparent: true, opacity: 0.7 });
-      const retLine = new THREE.Line(retGeo, retMat);
-      retLine.computeLineDistances();
-      this.visualizerGroup.add(retLine);
-
-      // 3. Translucent Orange Mode Indicator Layer:
-      // CNC / Laser (Top-Down): Translucent Orange Cap on TOP layer where milling begins
-      // 3D Printing (Bottom-Up): Translucent Orange Base on BOTTOM layer where depositing begins on the bed
-      const modePlaneGeo = new THREE.PlaneGeometry(stockW, stockD);
-      const modePlaneMat = new THREE.MeshBasicMaterial({
-        color: 0xf97316, // Vivid Orange
-        transparent: true,
-        opacity: 0.38,
-        side: THREE.DoubleSide,
-        depthWrite: false
-      });
-      const modePlane = new THREE.Mesh(modePlaneGeo, modePlaneMat);
-      const modePlaneZ = isTopDown ? maxZ : minZ;
-      modePlane.position.set(stockCx, stockCy, modePlaneZ);
-      modePlane.name = isTopDown ? 'CLE_CNC_Top_Start_Surface' : 'CLE_3D_Bottom_Bed_Contact';
-      this.visualizerGroup.add(modePlane);
-
-      // Distinct orange perimeter outline border around start layer
-      const modeBorderGeo = new THREE.EdgesGeometry(modePlaneGeo);
-      const modeBorderMat = new THREE.LineBasicMaterial({
-        color: 0xea580c,
-        linewidth: 3,
-        transparent: true,
-        opacity: 0.95
-      });
-      const modeBorder = new THREE.LineSegments(modeBorderGeo, modeBorderMat);
-      modeBorder.position.set(stockCx, stockCy, modePlaneZ);
-      this.visualizerGroup.add(modeBorder);
-
       // 4. Center & Frame Visualizer Sphere around the Workpiece Slices
       const sphereRadius = Math.max(stockW, stockD, stockH) * 0.85;
       if (app?.vp?.view) {
@@ -5347,7 +5280,7 @@ class CLESlicerEngine {
           m.transparent = true;
           m.opacity = 0.22;
           m.depthWrite = false;
-          if (m.color && m.color.setHex) m.color.setHex(0xf97316); // Vivid Transparent Orange
+          // Keep natural CAD body color with translucent opacity
           m.needsUpdate = true;
         } else if (m._cleOrigOpacity !== undefined) {
           m.opacity = m._cleOrigOpacity;
@@ -5364,17 +5297,8 @@ class CLESlicerEngine {
         }
       });
 
-      // Orange shape outline edges
-      if (transparent && THREE && obj.geometry && !obj._cleEdges) {
-        try {
-          const edgeGeo = new THREE.EdgesGeometry(obj.geometry);
-          const edgeMat = new THREE.LineBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0.65 });
-          const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
-          edgeLines.name = 'CLE_Body_Orange_Edges';
-          obj.add(edgeLines);
-          obj._cleEdges = edgeLines;
-        } catch (e) {}
-      } else if (!transparent && obj._cleEdges) {
+      // Clear any legacy orange edge outlines if present
+      if (obj._cleEdges) {
         obj.remove(obj._cleEdges);
         try { obj._cleEdges.geometry.dispose(); } catch (e) {}
         try { obj._cleEdges.material.dispose(); } catch (e) {}
@@ -7244,17 +7168,17 @@ class CLEBedVisualizer {
     const activeHead = this.bridge.vault ? this.bridge.vault.getActiveHead() : { type: 'spindle' };
 
     if (activeHead.type === 'laser') {
-      // LASER HEAD: Anodized Heatsink Body + Laser Cone Beam (Bright Blue for high contrast on workpiece)
-      const headMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, metalness: 0.7, roughness: 0.25 });
+      // LASER HEAD: Anodized Heatsink Body + Laser Cone Beam in Vivid Bright Red
+      const headMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, metalness: 0.7, roughness: 0.25 });
       const headMesh = new THREE.Mesh(new THREE.BoxGeometry(16, 16, 26), headMat);
       headMesh.position.set(0, 0, 15);
       this.cursorGroup.add(headMesh);
 
-      // Laser focal cone beam (Bright Electric Blue)
+      // Laser focal cone beam (Bright Red)
       const beamMat = new THREE.MeshBasicMaterial({
-        color: 0x00d2ff,
+        color: 0xff0033,
         transparent: true,
-        opacity: 0.65,
+        opacity: 0.75,
         depthWrite: false
       });
       const beamCone = new THREE.Mesh(new THREE.ConeGeometry(5, 12, 16, 1, true), beamMat);
@@ -7262,24 +7186,24 @@ class CLEBedVisualizer {
       beamCone.rotation.x = Math.PI;
       this.cursorGroup.add(beamCone);
     } else {
-      // SPINDLE HEAD: ER11/ER16 Collet Nut + Carbide Endmill Bit (Bright Blue for high contrast on orange/grey objects)
-      const colletMat = new THREE.MeshStandardMaterial({ color: 0x00b4d8, metalness: 0.8, roughness: 0.2 });
+      // SPINDLE HEAD: ER11/ER16 Collet Nut + Carbide Endmill Bit in Bright Red for high-contrast surface contact
+      const colletMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, metalness: 0.8, roughness: 0.2 }); // Vivid Crimson/Red
       const colletMesh = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 4.5, 12, 16), colletMat);
       colletMesh.position.set(0, 0, 10);
       colletMesh.rotation.x = Math.PI / 2;
       this.cursorGroup.add(colletMesh);
 
-      // Bit shank & flutes pointing down to (0,0,0) in Bright Vivid Blue
-      const bitMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.9, roughness: 0.1 });
+      // Bit shank & flutes pointing down to (0,0,0) in Bright Vivid Red
+      const bitMat = new THREE.MeshStandardMaterial({ color: 0xef4444, metalness: 0.85, roughness: 0.15 }); // Bright Electric Red
       const bitMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 12, 12), bitMat);
       bitMesh.position.set(0, 0, 4);
       bitMesh.rotation.x = Math.PI / 2;
       this.cursorGroup.add(bitMesh);
 
-      // Glowing Neon Blue Contact Reticle at Cutting Tip (Z=0) so tool contact is instantly visible on object surface
-      const tipRingGeo = new THREE.RingGeometry(0.8, 3.2, 24);
+      // Glowing Neon Red Contact Reticle at Cutting Tip (Z=0) so tool contact surface is instantly visible
+      const tipRingGeo = new THREE.RingGeometry(0.6, 3.6, 24);
       const tipRingMat = new THREE.MeshBasicMaterial({
-        color: 0x00e5ff,
+        color: 0xff0033, // Vivid Glowing Neon Red
         side: THREE.DoubleSide,
         depthTest: false,
         transparent: true,
@@ -7288,6 +7212,17 @@ class CLEBedVisualizer {
       const tipRing = new THREE.Mesh(tipRingGeo, tipRingMat);
       tipRing.position.set(0, 0, 0.05);
       this.cursorGroup.add(tipRing);
+
+      // Pinpoint White Center Contact Dot at (0,0,0) inside the Red Reticle
+      const tipDotGeo = new THREE.CircleGeometry(0.8, 16);
+      const tipDotMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff, // Pure white center dot
+        side: THREE.DoubleSide,
+        depthTest: false
+      });
+      const tipDot = new THREE.Mesh(tipDotGeo, tipDotMat);
+      tipDot.position.set(0, 0, 0.06);
+      this.cursorGroup.add(tipDot);
     }
 
     // 3D Tool Lines at Cursor Tip (think of tool lines X, Y, Z)
@@ -7316,7 +7251,7 @@ class CLEBedVisualizer {
     this.cursorGroup.add(tipAxisGroup);
 
     // Floating 3D DRO Coordinate Badge
-    this.coordTag = this.createNumberLabelSprite(THREE, 'X0.00 Y0.00 Z0.00', '#38bdf8');
+    this.coordTag = this.createNumberLabelSprite(THREE, 'X0.00 Y0.00 Z0.00', '#ef4444');
     this.coordTag.position.set(0, 0, 32);
     this.coordTag.scale.set(28, 12, 1);
     this.cursorGroup.add(this.coordTag);
@@ -7344,7 +7279,7 @@ class CLEBedVisualizer {
     // Concentric Target Ring on Spoilboard Surface
     const ringGeo = new THREE.RingGeometry(3.0, 4.0, 32);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
+      color: 0xef4444,
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.85,

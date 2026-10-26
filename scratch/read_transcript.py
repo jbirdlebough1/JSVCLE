@@ -17,3 +17,4 @@ with open(path, 'r', encoding='utf-8') as f:
                 print("Tool:", c['name'], c.get('args'))
             if obj.get('content') and typ == 'PLANNER_RESPONSE':
                 print("Content:", obj.get('content')[:300].replace('\n', ' '))
+
