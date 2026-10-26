@@ -4087,25 +4087,6 @@ class CLESlicerEngine {
       }
     });
 
-    // Single reusable dynamic toolpath line for Trace 3D (Draws active cutting contour in real time with ZERO memory bloat)
-    const maxTracePts = 1024;
-    const traceGeo = new THREE.BufferGeometry();
-    const tracePositions = new Float32Array(maxTracePts * 3);
-    traceGeo.setAttribute('position', new THREE.BufferAttribute(tracePositions, 3));
-    traceGeo.setDrawRange(0, 0);
-    const traceMat = new THREE.LineBasicMaterial({
-      color: 0x00ff66, // Electric Neon Green cutting contour
-      linewidth: 4.5,
-      transparent: true,
-      opacity: 1.0,
-      depthTest: false
-    });
-    this.activeTraceLine = new THREE.Line(traceGeo, traceMat);
-    this.activeTraceLine.name = 'CLE_Active_Trace_Line';
-    this.activeTraceLine.renderOrder = 100010;
-    this.activeTraceLine.visible = false;
-    this.visualizerGroup.add(this.activeTraceLine);
-
     // Solid Bright Green Slice Microtome Slabs (Visible from ANY viewing angle)
     this.sharedSolidMat = new THREE.MeshBasicMaterial({
       color: 0x00ff66, // Vivid Bright Neon/Emerald Green Slice Microtome Fill
@@ -4592,7 +4573,6 @@ class CLESlicerEngine {
         this.visualizerGroup.parent.remove(this.visualizerGroup);
       }
       this.visualizerGroup = null;
-      this.activeTraceLine = null;
     }
 
     if (this._crossSectionCache) {
@@ -4657,8 +4637,7 @@ class CLESlicerEngine {
           mesh.visible = isTarget;
           if (isTarget && this.sharedSolidMat) mesh.material = this.sharedSolidMat;
         } else if (isContourBorder) {
-          // If simulating trace, keep border hidden until tool cuts it; otherwise show active slice contour
-          mesh.visible = this.isSimulating ? (this._activeSimLayer === lIdx && !this.activeTraceLine?.visible) : isTarget;
+          mesh.visible = isTarget;
           if (isTarget && this.sharedBorderMat) mesh.material = this.sharedBorderMat;
         } else if (isRawToolpath) {
           // Raw toolpath lines: NEVER displayed statically! Only visible for active slice currently being traced
@@ -5175,22 +5154,7 @@ class CLESlicerEngine {
       this._activeSimLayer = lIdx;
       this.currentPreviewLayer = lIdx;
       if (hudSlider) hudSlider.value = lIdx;
-
-      // Update slice display: keep planar disc visible, but hide contour border initially
-      // so the toolhead visibly cuts and draws the green contour around the perimeter in real time!
       this.setPreviewLayer(lIdx);
-      if (this.visualizerGroup) {
-        this.visualizerGroup.children.forEach(mesh => {
-          if (mesh.userData && mesh.userData.layerIndex === lIdx && mesh.userData.isContourBorder) {
-            mesh.visible = false; // Hide until tool finishes tracing it!
-          }
-        });
-      }
-
-      if (this.activeTraceLine) {
-        this.activeTraceLine.geometry.setDrawRange(0, 0);
-        this.activeTraceLine.visible = true;
-      }
     };
 
     setupSliceForTrace(curLayerIdx);
@@ -5220,16 +5184,6 @@ class CLESlicerEngine {
         this.bridge.bed.updateToolCursor({ X: pt.x, Y: pt.y, Z: layer.z, A: pt.a || 0 });
       }
 
-      // Visibly draw the cutting contour path in real time directly behind the toolhead!
-      if (this.activeTraceLine && pt) {
-        const posAttr = this.activeTraceLine.geometry.attributes.position;
-        const count = Math.min(ptIdx + 1, posAttr.count);
-        posAttr.setXYZ(ptIdx, pt.x, pt.y, layer.z);
-        posAttr.needsUpdate = true;
-        this.activeTraceLine.geometry.setDrawRange(0, count);
-        this.activeTraceLine.visible = true;
-      }
-
       // Update HUD status label with live coordinates
       if (hudLabel && pt) {
         const hasRotary = (this.mode === 'rotary' || (this.bridge?.vault?.getActiveMachine()?.type === 'rotary'));
@@ -5246,23 +5200,6 @@ class CLESlicerEngine {
       ptIdx += Math.max(1, Math.floor(this.simSpeed));
 
       if (ptIdx >= contour.length) {
-        // Complete the loop by drawing segment back to start point
-        if (this.activeTraceLine && contour[0]) {
-          const posAttr = this.activeTraceLine.geometry.attributes.position;
-          posAttr.setXYZ(contour.length, contour[0].x, contour[0].y, layer.z);
-          posAttr.needsUpdate = true;
-          this.activeTraceLine.geometry.setDrawRange(0, contour.length + 1);
-        }
-
-        // Active slice contour cut is complete! Reveal completed green contour border
-        if (this.visualizerGroup) {
-          this.visualizerGroup.children.forEach(mesh => {
-            if (mesh.userData && mesh.userData.layerIndex === curLayerIdx && mesh.userData.isContourBorder) {
-              mesh.visible = true;
-            }
-          });
-        }
-
         // Advance to next slice
         curLayerIdx++;
         ptIdx = 0;
@@ -5279,7 +5216,6 @@ class CLESlicerEngine {
     const finishTrace = () => {
       this.isSimulating = false;
       this._activeSimLayer = -1;
-      if (this.activeTraceLine) this.activeTraceLine.visible = false;
       if (this.bridge.bed) this.bridge.bed.setRaysVisible(true);
       this.bridge.notify(`Trace simulation complete: ${numLayers} slices traced.`, 'ok');
       if (traceBtn) traceBtn.textContent = 'Trace 3D';
@@ -5301,11 +5237,6 @@ class CLESlicerEngine {
     if (traceBtn) traceBtn.textContent = 'Trace 3D';
 
     if (this.bridge.bed) this.bridge.bed.setRaysVisible(true);
-
-    if (this.activeTraceLine) {
-      this.activeTraceLine.visible = false;
-      if (this.activeTraceLine.geometry) this.activeTraceLine.geometry.setDrawRange(0, 0);
-    }
 
     this.setPreviewLayer(this.currentPreviewLayer >= 0 ? this.currentPreviewLayer : 0);
 
