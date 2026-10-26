@@ -4779,9 +4779,11 @@ class CLESlicerEngine {
       </select>
 
       <button class="cle-btn" id="cle-hud-trace" style="background:#059669; color:#fff; font-weight:600; padding:3px 8px;" title="Simulate 3D toolhead movement over slices">Trace 3D</button>
+      <button class="cle-btn" id="cle-hud-rot-a" style="background:#ea580c; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Rotate Object 90° about A-Axis (X) for 4th Axis Rotary Milling">Rot 90° A</button>
       <div style="border-left:1px solid var(--line); height:18px;"></div>
       <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600; padding:3px 8px;">Export .NC</button>
       <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600; padding:3px 8px;">To SD</button>
+      <button class="cle-btn" id="cle-hud-return" style="background:#2563eb; color:#fff; font-weight:700; padding:3px 12px; border-radius:5px;" title="Return to JumpStart CAD Design Workspace">Return</button>
       <button class="cle-btn" id="cle-hud-close" style="padding:2px 6px;" title="Close Visualizer">&times;</button>
 
       ${(this.laminationConfig.enabled && this.laminatedParts.length > 0) ? `
@@ -4961,6 +4963,30 @@ class CLESlicerEngine {
 
     // Initialize HUD and Visualizer to Slice 1 in Orange Contour mode
     updateHUD(0);
+
+    // Return to JumpStart Design CAD Workspace
+    const returnBtn = document.getElementById('cle-hud-return');
+    if (returnBtn) {
+      returnBtn.onclick = () => {
+        this.clearVisualizer();
+        const wsBtn = document.getElementById('ws-design');
+        if (wsBtn) wsBtn.click();
+        else if (window.app && window.app.setWorkspace) window.app.setWorkspace('design');
+        if (this.bridge) this.bridge.notify('Returned to JumpStart Design CAD workspace.', 'info');
+      };
+    }
+
+    // Rotate Object 90° around A-Axis (X) for 4th Axis Rotary
+    const rotABtn = document.getElementById('cle-hud-rot-a');
+    if (rotABtn) {
+      rotABtn.onclick = async () => {
+        if (this.bridge?.bed) {
+          this.bridge.bed.rotateWorkpiece('X', 90);
+          this.clearVisualizer();
+          await this.sliceModel();
+        }
+      };
+    }
 
     document.getElementById('cle-hud-close').onclick = () => { this.clearVisualizer(); };
   }
@@ -6457,6 +6483,40 @@ class CLEBedVisualizer {
     console.log(`[CLE Bed] Workpiece seated flush on spoilboard surface: Z=${surfaceZ.toFixed(2)}mm (bed Z=0.1mm, spoilboard thickness=${this.config.spoilboardThickness}mm, deltaZ=${deltaZ.toFixed(2)}mm).`);
   }
 
+  // Rotate Workpiece around X (A-Axis), Y, or Z
+  rotateWorkpiece(axis = 'X', angleDeg = 90) {
+    const app = window.app || window.xe;
+    if (!app || !app.scene) return;
+    const rad = (angleDeg * Math.PI) / 180;
+    const THREE = window.THREE;
+    if (!THREE) return;
+
+    if (app.scene.views && app.scene.views.size > 0) {
+      for (const [id, view] of app.scene.views) {
+        if (view.group) {
+          if (axis === 'X') view.group.rotation.x += rad;
+          else if (axis === 'Y') view.group.rotation.y += rad;
+          else if (axis === 'Z') view.group.rotation.z += rad;
+          view.group.updateMatrixWorld(true);
+        } else if (view.mesh) {
+          if (axis === 'X') view.mesh.rotation.x += rad;
+          else if (axis === 'Y') view.mesh.rotation.y += rad;
+          else if (axis === 'Z') view.mesh.rotation.z += rad;
+          view.mesh.updateMatrixWorld(true);
+        }
+      }
+    } else if (app.scene.root) {
+      if (axis === 'X') app.scene.root.rotation.x += rad;
+      else if (axis === 'Y') app.scene.root.rotation.y += rad;
+      else if (axis === 'Z') app.scene.root.rotation.z += rad;
+      app.scene.root.updateMatrixWorld(true);
+    }
+
+    this.sitWorkpieceOnSpoilboard();
+    this.requestRender();
+    if (this.bridge) this.bridge.notify(`Rotated workpiece ${angleDeg}° about ${axis}-axis (A-Axis alignment).`, 'ok');
+  }
+
   // Live Spoilboard Dimension & Z Thickness Adjuster
   async setSpoilboardDimensions({ x, y, thickness, cutoutOvercut, saveToVault = true }) {
     if (x !== undefined && isFinite(x) && x > 0) this.config.spoilboardX = parseFloat(x);
@@ -6732,6 +6792,24 @@ class CLEBridge {
     const activeMach = this.vault.getActiveMachine();
     this.machineName = activeMach.name;
 
+    // 0. Return to Design Workspace (JumpStart CAD)
+    m("Design", "", [
+      {
+        id: "cle-r-return-design",
+        label: "Return",
+        title: "Return to JumpStart CAD Design Workspace",
+        icon: "select",
+        cls: "accent",
+        fn: () => {
+          if (this.slicer) this.slicer.clearVisualizer();
+          const btn = document.getElementById('ws-design');
+          if (btn) btn.click();
+          else if (window.app && window.app.setWorkspace) window.app.setWorkspace('design');
+          this.notify('Returned to JumpStart Design CAD workspace.', 'info');
+        }
+      }
+    ]);
+
     // 1. Machine Section (Devices like LightBurn / MillMage)
     m(activeMach.name, "", [
       { id: "cle-r-devices", label: "Devices", title: "Select or Configure Machine Profiles (Like LightBurn/MillMage)", icon: "features", fn: () => this.openModal("machines") },
@@ -6800,6 +6878,7 @@ class CLEBridge {
     // 3. 4th Axis & Slicer
     m("Rotary & Slicer", "", [
       { id: "cle-r-rotary", label: "4th Axis (A)", title: "Toggle 4th Axis Rotary Chuck & Cylindrical Stock in 3D View", icon: "lathe", pressed: this.rotary.enabled, fn: () => this.rotary.toggle() },
+      { id: "cle-r-rot-a", label: "Rotate A 90°", title: "Rotate Object 90° around A-Axis (X) for 4th Axis Rotary Mill", icon: "revolve", fn: () => { if (this.bed) this.bed.rotateWorkpiece('X', 90); } },
       { id: "cle-r-slicer", label: "Slice & 3D Stack", title: "Slice Model (Top-Down for CNC/Laser, Bottom-Up for 3D) & Display in Visualizer", icon: "printer3d", fn: () => this.openModal("slicer") }
     ]);
 
@@ -6881,6 +6960,7 @@ class CLEBridge {
         <span style="font-weight:700; font-size:13px; color:var(--accent);">Manual Control of ${this.machineName}</span>
         <div style="display:flex; gap:6px; align-items:center;">
           <span class="cle-badge" id="cle-man-conn-status" style="font-size:10px;">Offline</span>
+          <button class="cle-btn" id="cle-man-return" style="padding:2px 8px; font-size:11px; font-weight:700; background:#2563eb; color:#fff;" title="Return to JumpStart CAD Design Workspace">Return</button>
           <button class="cle-modal-close" id="cle-man-close" style="font-size:18px; cursor:pointer; background:none; border:none; color:inherit;">&times;</button>
         </div>
       </div>
@@ -7056,6 +7136,15 @@ class CLEBridge {
 
     // Wire Events
     document.getElementById('cle-man-close').onclick = () => { hub.style.display = 'none'; };
+    const manReturn = document.getElementById('cle-man-return');
+    if (manReturn) {
+      manReturn.onclick = () => {
+        hub.style.display = 'none';
+        const wsBtn = document.getElementById('ws-design');
+        if (wsBtn) wsBtn.click();
+        this.notify('Returned to JumpStart Design CAD workspace.', 'info');
+      };
+    }
     
     document.getElementById('cle-man-spindle-btn').onclick = () => {
       const rpm = parseInt(document.getElementById('cle-man-spindle-rpm').value, 10);
@@ -7606,6 +7695,7 @@ class CLEBridge {
 
         <div style="margin-top:14px; display:flex; gap:10px;">
           <button class="cle-btn" id="slice-run-btn" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Slice & Display in 3D Viewport</button>
+          <button class="cle-btn" id="slice-return-btn" style="background:#2563eb; color:#fff; padding:8px 18px; font-weight:700;" title="Return to JumpStart CAD Design Workspace">Return to Design</button>
         </div>
       `;
     } else if (type === 'spoilboard') {
@@ -8082,6 +8172,15 @@ class CLEBridge {
         this.closeModal();
       };
     } else if (type === 'slicer') {
+      const returnBtn = document.getElementById('slice-return-btn');
+      if (returnBtn) {
+        returnBtn.onclick = () => {
+          this.closeModal();
+          const wsBtn = document.getElementById('ws-design');
+          if (wsBtn) wsBtn.click();
+          this.notify('Returned to JumpStart Design CAD workspace.', 'info');
+        };
+      }
       const lamCheck = document.getElementById('slice-enable-lamination');
       const lamPanel = document.getElementById('slice-lam-panel');
       if (lamCheck && lamPanel) {

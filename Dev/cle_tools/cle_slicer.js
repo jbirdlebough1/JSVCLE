@@ -1726,9 +1726,11 @@ export class CLESlicerEngine {
       </select>
 
       <button class="cle-btn" id="cle-hud-trace" style="background:#059669; color:#fff; font-weight:600; padding:3px 8px;" title="Simulate 3D toolhead movement over slices">Trace 3D</button>
+      <button class="cle-btn" id="cle-hud-rot-a" style="background:#ea580c; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Rotate Object 90° about A-Axis (X) for 4th Axis Rotary Milling">Rot 90° A</button>
       <div style="border-left:1px solid var(--line); height:18px;"></div>
       <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600; padding:3px 8px;">Export .NC</button>
       <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600; padding:3px 8px;">To SD</button>
+      <button class="cle-btn" id="cle-hud-return" style="background:#2563eb; color:#fff; font-weight:700; padding:3px 12px; border-radius:5px;" title="Return to JumpStart CAD Design Workspace">Return</button>
       <button class="cle-btn" id="cle-hud-close" style="padding:2px 6px;" title="Close Visualizer">&times;</button>
 
       ${(this.laminationConfig.enabled && this.laminatedParts.length > 0) ? `
@@ -1908,6 +1910,30 @@ export class CLESlicerEngine {
 
     // Initialize HUD and Visualizer to Slice 1 in Orange Contour mode
     updateHUD(0);
+
+    // Return to JumpStart Design CAD Workspace
+    const returnBtn = document.getElementById('cle-hud-return');
+    if (returnBtn) {
+      returnBtn.onclick = () => {
+        this.clearVisualizer();
+        const wsBtn = document.getElementById('ws-design');
+        if (wsBtn) wsBtn.click();
+        else if (window.app && window.app.setWorkspace) window.app.setWorkspace('design');
+        if (this.bridge) this.bridge.notify('Returned to JumpStart Design CAD workspace.', 'info');
+      };
+    }
+
+    // Rotate Object 90° around A-Axis (X) for 4th Axis Rotary
+    const rotABtn = document.getElementById('cle-hud-rot-a');
+    if (rotABtn) {
+      rotABtn.onclick = async () => {
+        if (this.bridge?.bed) {
+          this.bridge.bed.rotateWorkpiece('X', 90);
+          this.clearVisualizer();
+          await this.sliceModel();
+        }
+      };
+    }
 
     document.getElementById('cle-hud-close').onclick = () => { this.clearVisualizer(); };
   }

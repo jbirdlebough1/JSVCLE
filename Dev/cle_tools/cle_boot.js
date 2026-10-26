@@ -175,6 +175,24 @@ class CLEBridge {
     const activeMach = this.vault.getActiveMachine();
     this.machineName = activeMach.name;
 
+    // 0. Return to Design Workspace (JumpStart CAD)
+    m("Design", "", [
+      {
+        id: "cle-r-return-design",
+        label: "Return",
+        title: "Return to JumpStart CAD Design Workspace",
+        icon: "select",
+        cls: "accent",
+        fn: () => {
+          if (this.slicer) this.slicer.clearVisualizer();
+          const btn = document.getElementById('ws-design');
+          if (btn) btn.click();
+          else if (window.app && window.app.setWorkspace) window.app.setWorkspace('design');
+          this.notify('Returned to JumpStart Design CAD workspace.', 'info');
+        }
+      }
+    ]);
+
     // 1. Machine Section (Devices like LightBurn / MillMage)
     m(activeMach.name, "", [
       { id: "cle-r-devices", label: "Devices", title: "Select or Configure Machine Profiles (Like LightBurn/MillMage)", icon: "features", fn: () => this.openModal("machines") },
@@ -243,6 +261,7 @@ class CLEBridge {
     // 3. 4th Axis & Slicer
     m("Rotary & Slicer", "", [
       { id: "cle-r-rotary", label: "4th Axis (A)", title: "Toggle 4th Axis Rotary Chuck & Cylindrical Stock in 3D View", icon: "lathe", pressed: this.rotary.enabled, fn: () => this.rotary.toggle() },
+      { id: "cle-r-rot-a", label: "Rotate A 90°", title: "Rotate Object 90° around A-Axis (X) for 4th Axis Rotary Mill", icon: "revolve", fn: () => { if (this.bed) this.bed.rotateWorkpiece('X', 90); } },
       { id: "cle-r-slicer", label: "Slice & 3D Stack", title: "Slice Model (Top-Down for CNC/Laser, Bottom-Up for 3D) & Display in Visualizer", icon: "printer3d", fn: () => this.openModal("slicer") }
     ]);
 
@@ -324,6 +343,7 @@ class CLEBridge {
         <span style="font-weight:700; font-size:13px; color:var(--accent);">Manual Control of ${this.machineName}</span>
         <div style="display:flex; gap:6px; align-items:center;">
           <span class="cle-badge" id="cle-man-conn-status" style="font-size:10px;">Offline</span>
+          <button class="cle-btn" id="cle-man-return" style="padding:2px 8px; font-size:11px; font-weight:700; background:#2563eb; color:#fff;" title="Return to JumpStart CAD Design Workspace">Return</button>
           <button class="cle-modal-close" id="cle-man-close" style="font-size:18px; cursor:pointer; background:none; border:none; color:inherit;">&times;</button>
         </div>
       </div>
@@ -499,6 +519,15 @@ class CLEBridge {
 
     // Wire Events
     document.getElementById('cle-man-close').onclick = () => { hub.style.display = 'none'; };
+    const manReturn = document.getElementById('cle-man-return');
+    if (manReturn) {
+      manReturn.onclick = () => {
+        hub.style.display = 'none';
+        const wsBtn = document.getElementById('ws-design');
+        if (wsBtn) wsBtn.click();
+        this.notify('Returned to JumpStart Design CAD workspace.', 'info');
+      };
+    }
     
     document.getElementById('cle-man-spindle-btn').onclick = () => {
       const rpm = parseInt(document.getElementById('cle-man-spindle-rpm').value, 10);
@@ -1049,6 +1078,7 @@ class CLEBridge {
 
         <div style="margin-top:14px; display:flex; gap:10px;">
           <button class="cle-btn" id="slice-run-btn" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Slice & Display in 3D Viewport</button>
+          <button class="cle-btn" id="slice-return-btn" style="background:#2563eb; color:#fff; padding:8px 18px; font-weight:700;" title="Return to JumpStart CAD Design Workspace">Return to Design</button>
         </div>
       `;
     } else if (type === 'spoilboard') {
@@ -1525,6 +1555,15 @@ class CLEBridge {
         this.closeModal();
       };
     } else if (type === 'slicer') {
+      const returnBtn = document.getElementById('slice-return-btn');
+      if (returnBtn) {
+        returnBtn.onclick = () => {
+          this.closeModal();
+          const wsBtn = document.getElementById('ws-design');
+          if (wsBtn) wsBtn.click();
+          this.notify('Returned to JumpStart Design CAD workspace.', 'info');
+        };
+      }
       const lamCheck = document.getElementById('slice-enable-lamination');
       const lamPanel = document.getElementById('slice-lam-panel');
       if (lamCheck && lamPanel) {

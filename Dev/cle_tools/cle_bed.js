@@ -877,6 +877,40 @@ export class CLEBedVisualizer {
     console.log(`[CLE Bed] Workpiece seated flush on spoilboard surface: Z=${surfaceZ.toFixed(2)}mm (bed Z=0.1mm, spoilboard thickness=${this.config.spoilboardThickness}mm, deltaZ=${deltaZ.toFixed(2)}mm).`);
   }
 
+  // Rotate Workpiece around X (A-Axis), Y, or Z
+  rotateWorkpiece(axis = 'X', angleDeg = 90) {
+    const app = window.app || window.xe;
+    if (!app || !app.scene) return;
+    const rad = (angleDeg * Math.PI) / 180;
+    const THREE = window.THREE;
+    if (!THREE) return;
+
+    if (app.scene.views && app.scene.views.size > 0) {
+      for (const [id, view] of app.scene.views) {
+        if (view.group) {
+          if (axis === 'X') view.group.rotation.x += rad;
+          else if (axis === 'Y') view.group.rotation.y += rad;
+          else if (axis === 'Z') view.group.rotation.z += rad;
+          view.group.updateMatrixWorld(true);
+        } else if (view.mesh) {
+          if (axis === 'X') view.mesh.rotation.x += rad;
+          else if (axis === 'Y') view.mesh.rotation.y += rad;
+          else if (axis === 'Z') view.mesh.rotation.z += rad;
+          view.mesh.updateMatrixWorld(true);
+        }
+      }
+    } else if (app.scene.root) {
+      if (axis === 'X') app.scene.root.rotation.x += rad;
+      else if (axis === 'Y') app.scene.root.rotation.y += rad;
+      else if (axis === 'Z') app.scene.root.rotation.z += rad;
+      app.scene.root.updateMatrixWorld(true);
+    }
+
+    this.sitWorkpieceOnSpoilboard();
+    this.requestRender();
+    if (this.bridge) this.bridge.notify(`Rotated workpiece ${angleDeg}° about ${axis}-axis (A-Axis alignment).`, 'ok');
+  }
+
   // Live Spoilboard Dimension & Z Thickness Adjuster
   async setSpoilboardDimensions({ x, y, thickness, cutoutOvercut, saveToVault = true }) {
     if (x !== undefined && isFinite(x) && x > 0) this.config.spoilboardX = parseFloat(x);
