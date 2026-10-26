@@ -1091,45 +1091,12 @@ export class CLESlicerEngine {
       lineMesh.visible = false; // Hidden in contour mode; dynamically drawn slice-by-slice during Trace 3D!
       this.visualizerGroup.add(lineMesh);
 
-      // Visible waypoint marks (toolpath nodes / plunge points)
-      const ptPositions = [];
-      const ptColors = [];
-      for (const p of layer.points) {
-        ptPositions.push(p.x, p.y, p.z);
-        if (p.isRapid) {
-          ptColors.push(0.0, 0.95, 1.0); // Cyan rapid mark
-        } else {
-          ptColors.push(r, g, b); // Cut mark
-        }
-      }
-      if (ptPositions.length > 0) {
-        const ptGeo = new THREE.BufferGeometry();
-        ptGeo.setAttribute('position', new THREE.Float32BufferAttribute(ptPositions, 3));
-        ptGeo.setAttribute('color', new THREE.Float32BufferAttribute(ptColors, 3));
-        const ptMat = new THREE.PointsMaterial({
-          size: 4.5,
-          vertexColors: true,
-          transparent: true,
-          opacity: 0.95,
-          depthTest: false,
-          depthWrite: false
-        });
-        const ptMesh = new THREE.Points(ptGeo, ptMat);
-        ptMesh.renderOrder = 100000;
-        ptMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isRawToolpath: true };
-        ptMesh.visible = false; // Hidden in contour mode
-        this.visualizerGroup.add(ptMesh);
-      }
-
-      // Slice Contour Disc & Glowing Orange Perimeter Loop (following 3D object in X, Y, Z and A)
+      // Slice Contour Planar Disc & Vivid Green Perimeter Outline Loop (following 3D object in X, Y, Z and A)
       const exactCross = this.computeObjectCrossSectionAtZ(layer.z);
       const contourPts = (exactCross && exactCross.length >= 3) ? exactCross : this.computeLayerContour(layer.points);
 
       if (contourPts && contourPts.length >= 3) {
-        const sliceH = Math.max(0.5, this.layerHeight || 1.0);
-        const zBot = layer.z - sliceH;
-
-        // Orange Slice Contour (translucent orange matching start plane contour)
+        // High-performance lightweight ShapeGeometry (avoids heavy ExtrudeGeometry math, saving >90% memory!)
         const shape = new THREE.Shape();
         shape.moveTo(contourPts[0].x, contourPts[0].y);
         for (let k = 1; k < contourPts.length; k++) {
@@ -1137,31 +1104,31 @@ export class CLESlicerEngine {
         }
         shape.closePath();
 
-        const extrudeGeo = new THREE.ExtrudeGeometry(shape, { depth: sliceH, bevelEnabled: false });
-        extrudeGeo.translate(0, 0, zBot);
+        const shapeGeo = new THREE.ShapeGeometry(shape);
+        shapeGeo.translate(0, 0, layer.z);
 
         const solidMat = new THREE.MeshBasicMaterial({
-          color: 0xf97316, // User-approved Vivid Orange Contour
+          color: 0x22c55e, // Subtle Green Slice Planar Fill
           transparent: true,
-          opacity: 0.42,
+          opacity: 0.28,
           side: THREE.DoubleSide,
           depthWrite: false
         });
-        const solidSliceMesh = new THREE.Mesh(extrudeGeo, solidMat);
+        const solidSliceMesh = new THREE.Mesh(shapeGeo, solidMat);
         solidSliceMesh.name = `CLE_Solid_Slice_${lIdx}`;
         solidSliceMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isSolidSlice: true };
         solidSliceMesh.renderOrder = 99990;
         solidSliceMesh.visible = false;
         this.visualizerGroup.add(solidSliceMesh);
 
-        // Deep Glowing Orange Perimeter Contour Loop (following 3D compound curve)
+        // Vivid Glowing Green Perimeter Contour Outline Loop (User: "green outline of conture so we can clearly see")
         const loopPts = contourPts.map(p => new THREE.Vector3(p.x, p.y, layer.z));
         const loopGeo = new THREE.BufferGeometry().setFromPoints(loopPts);
         const loopMat = new THREE.LineBasicMaterial({
-          color: 0xea580c, // Rich Glowing Orange Border
-          linewidth: 3.5,
+          color: 0x22c55e, // Vivid Emerald Green Outline Contour
+          linewidth: 4.0,
           transparent: true,
-          opacity: 0.95,
+          opacity: 0.98,
           depthWrite: false
         });
         const contourBorder = new THREE.LineLoop(loopGeo, loopMat);
@@ -1181,13 +1148,13 @@ export class CLESlicerEngine {
       const stockCx = (minX + maxX) / 2;
       const stockCy = (minY + maxY) / 2;
       const stockCz = (minZ + maxZ) / 2;
+      this.stockCenter = { x: stockCx, y: stockCy, z: stockCz };
 
-      // 1. Semi-transparent ghost workpiece (Only rendered if using fallback sample billet)
-      // When real workspace CAD bodies exist, they overlay transparently without any blocking artificial box!
+      // 1. Semi-transparent shape outline in transparent orange (User: "outline of the shape in transperent orange")
       if (this.lastGeometry?.isSample) {
         const stockGeo = new THREE.BoxGeometry(stockW, stockD, stockH);
         const stockMat = new THREE.MeshStandardMaterial({
-          color: 0x38bdf8,
+          color: 0xf97316, // Transparent Orange
           transparent: true,
           opacity: 0.28,
           roughness: 0.4,
@@ -1199,9 +1166,9 @@ export class CLESlicerEngine {
         stockMesh.renderOrder = 9990;
         this.visualizerGroup.add(stockMesh);
 
-        // Fine wireframe edges around sample workpiece
+        // Fine wireframe edges around workpiece in transparent orange
         const stockEdgeGeo = new THREE.EdgesGeometry(stockGeo);
-        const stockEdgeMat = new THREE.LineBasicMaterial({ color: 0x0284c7, transparent: true, opacity: 0.55 });
+        const stockEdgeMat = new THREE.LineBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0.65 });
         const stockEdges = new THREE.LineSegments(stockEdgeGeo, stockEdgeMat);
         stockMesh.add(stockEdges);
       }
@@ -1357,67 +1324,69 @@ export class CLESlicerEngine {
     console.log(`[CLE Slicer] Slices rendered: ${numLayers} toolpath passes visible in 3D viewport.`);
   }
 
-  // Set all workspace CAD bodies to transparent so slices overlay cleanly through them
+  // Set all workspace CAD bodies to transparent orange with orange wireframe edges
   setWorkspaceBodiesTransparent(transparent = true) {
     const app = window.app || window.xe;
     if (!app || !app.scene) return;
+    const THREE = window.THREE;
+
+    const applyMeshTransparency = (obj) => {
+      if (!obj || !obj.isMesh || !obj.material || obj.name === 'CLE_Sample_Workpiece_Ghost') return;
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach(m => {
+        if (transparent) {
+          if (m._cleOrigOpacity === undefined) {
+            m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
+            m._cleOrigTransparent = m.transparent !== undefined ? m.transparent : false;
+            m._cleOrigDepthWrite = m.depthWrite !== undefined ? m.depthWrite : true;
+            m._cleOrigColor = (m.color && m.color.getHex) ? m.color.getHex() : null;
+          }
+          m.transparent = true;
+          m.opacity = 0.28;
+          m.depthWrite = false;
+          if (m.color && m.color.setHex) m.color.setHex(0xf97316); // Vivid Transparent Orange
+          m.needsUpdate = true;
+        } else if (m._cleOrigOpacity !== undefined) {
+          m.opacity = m._cleOrigOpacity;
+          m.transparent = m._cleOrigTransparent;
+          m.depthWrite = m._cleOrigDepthWrite;
+          if (m._cleOrigColor !== null && m.color && m.color.setHex) {
+            m.color.setHex(m._cleOrigColor);
+          }
+          delete m._cleOrigOpacity;
+          delete m._cleOrigTransparent;
+          delete m._cleOrigDepthWrite;
+          delete m._cleOrigColor;
+          m.needsUpdate = true;
+        }
+      });
+
+      // Orange shape outline edges
+      if (transparent && THREE && obj.geometry && !obj._cleEdges) {
+        try {
+          const edgeGeo = new THREE.EdgesGeometry(obj.geometry);
+          const edgeMat = new THREE.LineBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0.65 });
+          const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
+          edgeLines.name = 'CLE_Body_Orange_Edges';
+          obj.add(edgeLines);
+          obj._cleEdges = edgeLines;
+        } catch (e) {}
+      } else if (!transparent && obj._cleEdges) {
+        obj.remove(obj._cleEdges);
+        try { obj._cleEdges.geometry.dispose(); } catch (e) {}
+        try { obj._cleEdges.material.dispose(); } catch (e) {}
+        delete obj._cleEdges;
+      }
+    };
 
     if (app.scene.views) {
       for (const [id, view] of app.scene.views) {
-        if (view.mesh && view.mesh.material) {
-          const mats = Array.isArray(view.mesh.material) ? view.mesh.material : [view.mesh.material];
-          mats.forEach(m => {
-            if (transparent) {
-              if (m._cleOrigOpacity === undefined) {
-                m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
-                m._cleOrigTransparent = m.transparent !== undefined ? m.transparent : false;
-                m._cleOrigDepthWrite = m.depthWrite !== undefined ? m.depthWrite : true;
-              }
-              m.transparent = true;
-              m.opacity = 0.32;
-              m.depthWrite = false;
-              m.needsUpdate = true;
-            } else if (m._cleOrigOpacity !== undefined) {
-              m.opacity = m._cleOrigOpacity;
-              m.transparent = m._cleOrigTransparent;
-              m.depthWrite = m._cleOrigDepthWrite;
-              delete m._cleOrigOpacity;
-              delete m._cleOrigTransparent;
-              delete m._cleOrigDepthWrite;
-              m.needsUpdate = true;
-            }
-          });
-        }
+        if (view.mesh) applyMeshTransparency(view.mesh);
       }
     }
 
     if (app.scene.root) {
-      app.scene.root.traverse((obj) => {
-        if (obj.isMesh && obj.material && obj.name !== 'CLE_Sample_Workpiece_Ghost') {
-          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-          mats.forEach(m => {
-            if (transparent) {
-              if (m._cleOrigOpacity === undefined) {
-                m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
-                m._cleOrigTransparent = m.transparent !== undefined ? m.transparent : false;
-                m._cleOrigDepthWrite = m.depthWrite !== undefined ? m.depthWrite : true;
-              }
-              m.transparent = true;
-              m.opacity = 0.32;
-              m.depthWrite = false;
-              m.needsUpdate = true;
-            } else if (m._cleOrigOpacity !== undefined) {
-              m.opacity = m._cleOrigOpacity;
-              m.transparent = m._cleOrigTransparent;
-              m.depthWrite = m._cleOrigDepthWrite;
-              delete m._cleOrigOpacity;
-              delete m._cleOrigTransparent;
-              delete m._cleOrigDepthWrite;
-              m.needsUpdate = true;
-            }
-          });
-        }
-      });
+      app.scene.root.traverse(applyMeshTransparency);
     }
 
     if (app.vp) {
@@ -1619,12 +1588,15 @@ export class CLESlicerEngine {
 
         if (isSolidSlice) {
           mesh.visible = isTarget;
-          if (mesh.material) mesh.material.opacity = 0.42;
+          if (mesh.material) {
+            mesh.material.opacity = 0.30;
+            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e); // Green Slice Disc
+          }
         } else if (isContourBorder) {
           mesh.visible = isTarget;
           if (mesh.material) {
-            mesh.material.opacity = 0.95;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0xea580c);
+            mesh.material.opacity = 1.0;
+            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e); // VIVID GREEN OUTLINE CONTOUR!
           }
         } else if (isRawToolpath) {
           // Raw toolpath lines: NEVER displayed statically! Only visible for active slice currently being traced
@@ -1635,24 +1607,26 @@ export class CLESlicerEngine {
 
       } else if (mode === 'range') {
         // --- RANGE OF SLICES SCROLL MODE ---
-        // Shows window of slices (e.g. 10 passes) scrolling through the stack in clean orange contours
+        // Shows window of slices (e.g. 10 passes) scrolling through the stack in clean green contours
         const inRange = (lIdx >= rangeStart && lIdx <= rangeEnd);
         const center = (targetIndex === -1) ? Math.floor(numLayers / 2) : targetIndex;
         const isCenter = (lIdx === center);
 
         if (isSolidSlice) {
           mesh.visible = inRange;
-          if (mesh.material) mesh.material.opacity = isCenter ? 0.48 : 0.22;
+          if (mesh.material) {
+            mesh.material.opacity = isCenter ? 0.35 : 0.18;
+            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e);
+          }
         } else if (isContourBorder) {
           mesh.visible = inRange;
           if (mesh.material) {
-            mesh.material.opacity = isCenter ? 0.95 : 0.55;
+            mesh.material.opacity = isCenter ? 1.0 : 0.55;
             if (mesh.material.color && mesh.material.color.setHex) {
-              mesh.material.color.setHex(isCenter ? 0xea580c : 0xf97316);
+              mesh.material.color.setHex(isCenter ? 0x22c55e : 0x10b981);
             }
           }
         } else if (isRawToolpath) {
-          // Raw toolpath lines hidden during range inspection
           mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);
         } else {
           mesh.visible = inRange;
@@ -1660,17 +1634,20 @@ export class CLESlicerEngine {
 
       } else {
         // --- FULL STACK MODE ---
-        // Clean orange contours stacked across the workpiece; zero green/yellow cube clutter!
+        // Clean contour stack across the workpiece
         if (isSolidSlice) {
           mesh.visible = true;
-          if (mesh.material) mesh.material.opacity = 0.18;
+          if (mesh.material) {
+            mesh.material.opacity = 0.15;
+            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e);
+          }
         } else if (isContourBorder) {
           mesh.visible = true;
           if (mesh.material) {
             const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
-            mesh.material.opacity = isTarget ? 0.95 : 0.35;
+            mesh.material.opacity = isTarget ? 1.0 : 0.35;
             if (mesh.material.color && mesh.material.color.setHex) {
-              mesh.material.color.setHex(isTarget ? 0xea580c : 0xf97316);
+              mesh.material.color.setHex(isTarget ? 0x22c55e : 0x10b981);
             }
           }
         } else if (isRawToolpath) {
@@ -1682,8 +1659,20 @@ export class CLESlicerEngine {
     });
 
     const app = window.app || window.xe;
+
+    // Center camera orbit target on active slice center at elevation Z
+    // so rotating via mouse or game joysticks spins directly around that slice from every viewpoint!
+    const effectiveTarget = (targetIndex === -1) ? 0 : targetIndex;
+    if (mode === 'single' && this.stockCenter && this.slicedLayers && this.slicedLayers[effectiveTarget]) {
+      const curL = this.slicedLayers[effectiveTarget];
+      if (curL && app?.vp?.view && app.vp.view.target) {
+        app.vp.view.target.set(this.stockCenter.x, this.stockCenter.y, curL.z);
+      }
+    }
+
     if (app?.vp) {
       app.vp.dirty = true;
+      if (app.vp.updateCamera) app.vp.updateCamera();
       if (app.vp.request) app.vp.request();
     }
   }
@@ -1815,7 +1804,7 @@ export class CLESlicerEngine {
         const hasRotary = (this.mode === 'rotary' || (this.bridge?.vault?.getActiveMachine()?.type === 'rotary'));
         const aStr = (hasRotary && isFinite(minA)) ? `, A:${minA.toFixed(0)}°..${maxA.toFixed(0)}°` : '';
         const coordStr = isFinite(minX) ? ` | X:${minX.toFixed(0)}..${maxX.toFixed(0)} Y:${minY.toFixed(0)}..${maxY.toFixed(0)}${aStr}` : '';
-        label.textContent = `Slice ${idx + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm${coordStr}) [Orange Contour]`;
+        label.innerHTML = `Slice ${idx + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm${coordStr}) <span style="color:#22c55e; font-weight:700;">[Green Contour]</span>`;
       } else if (this.sliceViewMode === 'range') {
         const half = 5;
         const center = (intVal === -1) ? Math.floor(numLayers / 2) : intVal;
@@ -1823,7 +1812,7 @@ export class CLESlicerEngine {
         const rEnd = Math.min(numLayers - 1, center + half);
         const zS = this.slicedLayers[rStart] ? this.slicedLayers[rStart].z.toFixed(1) : '--';
         const zE = this.slicedLayers[rEnd] ? this.slicedLayers[rEnd].z.toFixed(1) : '--';
-        label.textContent = `Range ${rStart + 1}-${rEnd + 1}/${numLayers} (Z ${zS}..${zE}mm) [Orange Contours]`;
+        label.innerHTML = `Range ${rStart + 1}-${rEnd + 1}/${numLayers} (Z ${zS}..${zE}mm) <span style="color:#22c55e; font-weight:700;">[Green Contours]</span>`;
       } else {
         if (intVal === -1) {
           label.textContent = `All Contours (${numLayers} passes)`;

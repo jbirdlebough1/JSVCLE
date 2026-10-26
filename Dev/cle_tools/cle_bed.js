@@ -782,13 +782,17 @@ export class CLEBedVisualizer {
 
     if (this.coordTag) {
       const aText = (a !== undefined && a !== 0) ? ` A${a.toFixed(1)}°` : '';
-      const THREE = window.THREE;
-      if (THREE) {
-        // Re-render coordinate label sprite text
-        const canvas = document.createElement('canvas');
-        canvas.width = 256;
-        canvas.height = 64;
-        const ctx = canvas.getContext('2d');
+      const textStr = `X${x.toFixed(1)} Y${y.toFixed(1)} Z${z.toFixed(1)}${aText}`;
+      if (textStr !== this._lastCoordText) {
+        this._lastCoordText = textStr;
+        if (!this._coordCanvas) {
+          this._coordCanvas = document.createElement('canvas');
+          this._coordCanvas.width = 256;
+          this._coordCanvas.height = 64;
+          this._coordCtx = this._coordCanvas.getContext('2d');
+        }
+        const ctx = this._coordCtx;
+        ctx.clearRect(0, 0, 256, 64);
         ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
         ctx.strokeStyle = '#38bdf8';
         ctx.lineWidth = 3;
@@ -798,12 +802,10 @@ export class CLEBedVisualizer {
         ctx.font = 'bold 22px monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`X${x.toFixed(1)} Y${y.toFixed(1)} Z${z.toFixed(1)}${aText}`, 128, 32);
+        ctx.fillText(textStr, 128, 32);
 
         if (this.coordTag.material && this.coordTag.material.map) {
-          const tex = this.coordTag.material.map;
-          tex.image = canvas;
-          tex.needsUpdate = true;
+          this.coordTag.material.map.needsUpdate = true;
         }
       }
     }
@@ -943,6 +945,9 @@ export class CLEBedVisualizer {
     this.shadowCrosshair = null;
     this.guideLines = null;
     this.coordTag = null;
+    this._coordCanvas = null;
+    this._coordCtx = null;
+    this._lastCoordText = null;
   }
 
   // Full Rebuild when Machine Profile or Spoilboard Size is changed in Vault

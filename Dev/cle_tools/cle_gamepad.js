@@ -391,6 +391,19 @@ export class CLEGamepadEngine {
       needsUpdate = true;
     }
 
+    // 5. Bumpers L / R (Buttons 4 / 5): Step Previous / Next Slice when Slicer Visualizer is open
+    const lJust = this.isJustPressed(gp, 4);
+    const rJust = this.isJustPressed(gp, 5);
+    if ((lJust || rJust) && this.bridge?.slicer?.visualizerGroup) {
+      if (lJust) {
+        const prevBtn = document.getElementById('cle-hud-prev');
+        if (prevBtn) prevBtn.click();
+      } else if (rJust) {
+        const nextBtn = document.getElementById('cle-hud-next');
+        if (nextBtn) nextBtn.click();
+      }
+    }
+
     if (needsUpdate) {
       if (app.vp.updateCamera) app.vp.updateCamera();
       if (app.vp.request) app.vp.request();

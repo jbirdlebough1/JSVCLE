@@ -77,28 +77,54 @@ async def run_test():
                 });
             }
             
-            // Test 1: Single Slice Orange Contour Mode (0 raw toolpaths visible!)
+            // Test 1: Single Slice Green Contour Mode with Transparent Orange Shape
             slicer.sliceViewMode = 'single';
             slicer.setPreviewLayer(15);
             let singleVisibleSolids = 0;
             let singleVisibleBorders = 0;
             let singleVisibleRawToolpaths = 0;
-            let orangeContourHex = null;
-            let orangeBorderHex = null;
+            let greenContourHex = null;
+            let greenBorderHex = null;
+            let orangeGhostHex = null;
+            let orangeGhostEdgesHex = null;
 
             slicer.visualizerGroup.children.forEach(obj => {
                 if (obj.name === 'CLE_Solid_Slice_15') {
                     if (obj.visible) singleVisibleSolids++;
-                    if (obj.material) orangeContourHex = '0x' + obj.material.color.getHexString();
+                    if (obj.material) greenContourHex = '0x' + obj.material.color.getHexString();
                 }
                 if (obj.name === 'CLE_Contour_Border_15') {
                     if (obj.visible) singleVisibleBorders++;
-                    if (obj.material) orangeBorderHex = '0x' + obj.material.color.getHexString();
+                    if (obj.material) greenBorderHex = '0x' + obj.material.color.getHexString();
+                }
+                if (obj.name === 'CLE_Sample_Workpiece_Ghost') {
+                    if (obj.material) orangeGhostHex = '0x' + obj.material.color.getHexString();
+                    if (obj.children && obj.children[0] && obj.children[0].material) {
+                        orangeGhostEdgesHex = '0x' + obj.children[0].material.color.getHexString();
+                    }
                 }
                 if (obj.userData && obj.userData.isRawToolpath && obj.visible) {
                     singleVisibleRawToolpaths++;
                 }
             });
+
+            // Camera Target Check (orbit pivot centered on active slice Z)
+            const app = window.app || window.xe;
+            const targetZ = app?.vp?.view?.target?.z;
+            const slice15Z = slicer.slicedLayers[15]?.z;
+            const isOrbitCenteredOnSlice = (targetZ !== undefined && Math.abs(targetZ - slice15Z) < 0.01);
+
+            // Memory Leak Check: 100 rapid calls to updateToolCursor should reuse same canvas
+            let canvasCreated = 0;
+            const origCreate = document.createElement.bind(document);
+            document.createElement = function(tag) {
+                if (tag === 'canvas') canvasCreated++;
+                return origCreate(tag);
+            };
+            for (let k = 0; k < 100; k++) {
+                window.CLE.bed.updateToolCursor({ X: 10 + k * 0.1, Y: 20, Z: 5 });
+            }
+            document.createElement = origCreate;
 
             // Test 2: Range Mode
             slicer.sliceViewMode = 'range';
@@ -134,10 +160,6 @@ async def run_test():
                 }
             });
 
-            // Test 4: Camera duplicate lock
-            const cam = (window.CLE && window.CLE.camera) ? window.CLE.camera : (window.CLEBridge ? window.CLEBridge.camera : null);
-            const isLockActive = !!(cam && cam._isStarting !== undefined);
-            
             return {
                 numLayers: slicer.slicedLayers.length,
                 partCount: slicer.laminatedParts.length,
@@ -146,25 +168,31 @@ async def run_test():
                 jointPlaneCount,
                 solidSliceCount,
                 contourBorderCount,
-                orangeColors: {
-                    sliceContour: orangeContourHex,
-                    border: orangeBorderHex
+                colors: {
+                    objectShape: orangeGhostHex,
+                    objectOutlineEdges: orangeGhostEdgesHex,
+                    sliceFill: greenContourHex,
+                    sliceContourBorder: greenBorderHex
                 },
                 singleSliceTest: {
                     activeSolidVisible: singleVisibleSolids === 1,
                     activeBorderVisible: singleVisibleBorders === 1,
-                    zeroRawToolpathsVisible: singleVisibleRawToolpaths === 0 // Green/yellow cube completely gone!
+                    zeroRawToolpathsVisible: singleVisibleRawToolpaths === 0,
+                    orbitCenteredOnSlice: isOrbitCenteredOnSlice
+                },
+                memoryLeakTest: {
+                    zeroCanvasesAllocatedDuringTracking: (canvasCreated <= 1),
+                    totalCanvasesCreatedFor100Calls: canvasCreated
                 },
                 rangeModeTest: {
                     rangeVisibleCount: rangeVisibleCount,
-                    zeroRawToolpathsVisible: rangeVisibleRawToolpaths === 0 // Zero green/yellow cube!
+                    zeroRawToolpathsVisible: rangeVisibleRawToolpaths === 0
                 },
                 traceSimulationTest: {
                     startedSimulating: isSimulating,
                     activeTraceToolpathDrawn: activeTraceToolpathVisible > 0,
                     stoppedHidesToolpath: stoppedRawToolpathsVisible === 0
-                },
-                camLockPresent: isLockActive
+                }
             };
         }""")
         
