@@ -3035,54 +3035,83 @@ class CLESlicerEngine {
   // Extracts active CAD geometry from JumpStart scene or generates realistic sample block
   getActiveBodyGeometry() {
     const app = window.app || window.xe;
-    const bodies = app?.doc?.bodies || [];
-    
-    // 1. Try window.__JS3D_CHISEL__.bodyTris() (built-in JumpStart matrix-transformed world triangles)
+    const doc = app?.scene?.doc || app?.doc;
+    const bodies = (doc?.bodies || []);
+    const views = app?.scene?.views;
+
+    const allTriangles = [];
+    const extractedNames = [];
+
+    // 1. Extract from JumpStart scene views with exact matrixWorld transformation
+    if (views && views.size > 0) {
+      for (const [id, view] of views) {
+        const body = (bodies.find(b => b.id === id)) || view.body;
+        if (body && (body.hidden || body.hole)) continue;
+
+        if (view.mesh) {
+          view.mesh.updateMatrixWorld(true);
+          const M = view.mesh.matrixWorld;
+
+          if (view.data && view.data.vertices && view.data.triangles) {
+            const Q = view.data.vertices;
+            const idxs = view.data.triangles;
+            const THREE = window.THREE;
+            const v = new THREE.Vector3();
+            for (let i = 0; i < idxs.length; i++) {
+              const vi = idxs[i] * 3;
+              v.set(Q[vi], Q[vi + 1], Q[vi + 2]).applyMatrix4(M);
+              allTriangles.push(v.x, v.y, v.z);
+            }
+            extractedNames.push(body?.name || `Body_${id}`);
+            continue;
+          }
+
+          if (view.mesh.geometry && view.mesh.geometry.attributes && view.mesh.geometry.attributes.position) {
+            const pos = view.mesh.geometry.attributes.position;
+            const index = view.mesh.geometry.index;
+            const THREE = window.THREE;
+            const v = new THREE.Vector3();
+            if (index) {
+              for (let i = 0; i < index.count; i++) {
+                const vi = index.getX(i);
+                v.set(pos.getX(vi), pos.getY(vi), pos.getZ(vi)).applyMatrix4(M);
+                allTriangles.push(v.x, v.y, v.z);
+              }
+            } else {
+              for (let i = 0; i < pos.count; i++) {
+                v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(M);
+                allTriangles.push(v.x, v.y, v.z);
+              }
+            }
+            extractedNames.push(body?.name || `Body_${id}`);
+            continue;
+          }
+        }
+      }
+    }
+
+    if (allTriangles.length >= 9) {
+      console.log(`[CLE Slicer] Extracted ${allTriangles.length / 3} world triangles from workspace bodies: ${extractedNames.join(', ')}.`);
+      return { name: extractedNames.join('_'), triangles: new Float32Array(allTriangles), isSample: false };
+    }
+
+    // 2. Try window.__JS3D_CHISEL__.bodyTris() (built-in JumpStart matrix-transformed world triangles)
     if (window.__JS3D_CHISEL__ && typeof window.__JS3D_CHISEL__.bodyTris === 'function') {
       for (const b of bodies) {
-        if (!b.hidden) {
+        if (!b.hidden && !b.hole) {
           const tris = window.__JS3D_CHISEL__.bodyTris(b.id);
           if (tris && tris.length >= 9) {
             console.log(`[CLE Slicer] Extracted ${tris.length / 3} world triangles from Body "${b.name}" via bodyTris.`);
-            return { name: b.name || 'CAD_Body', triangles: tris };
+            return { name: b.name || 'CAD_Body', triangles: tris, isSample: false };
           }
         }
       }
     }
 
-    // 2. Try extracting from JumpStart scene views with matrixWorld transformation
-    if (app?.scene?.views) {
-      for (const b of bodies) {
-        if (!b.hidden) {
-          const view = app.scene.views.get(b.id);
-          if (view && view.mesh && view.data) {
-            view.mesh.updateMatrixWorld(true);
-            const T = view.mesh.matrixWorld;
-            const Q = view.data.vertices;
-            const idxs = view.data.triangles;
-            if (Q && idxs && idxs.length > 0) {
-              const THREE = window.THREE;
-              const v = new THREE.Vector3();
-              const L = new Float32Array(idxs.length * 3);
-              for (let i = 0; i < idxs.length; i++) {
-                const vi = idxs[i] * 3;
-                v.set(Q[vi], Q[vi + 1], Q[vi + 2]).applyMatrix4(T);
-                L[i * 3] = v.x;
-                L[i * 3 + 1] = v.y;
-                L[i * 3 + 2] = v.z;
-              }
-              console.log(`[CLE Slicer] Transformed ${L.length / 3} vertices from view.data for "${b.name}".`);
-              return { name: b.name || 'CAD_Body', triangles: L };
-            }
-          }
-        }
-      }
-    }
-
-    // 3. Fallback Sample 3D Test Object (50x40x15 mm rectangular billet with chamfer)
-    console.log('[CLE Slicer] No active meshed CAD bodies found. Generating 50x40x15 mm test billet.');
+    // 3. Fallback Sample 3D Test Object (50x40x15 mm rectangular billet positioned centrally on Spoilboard)
+    console.log('[CLE Slicer] No active meshed CAD bodies found. Generating 50x40x15 mm sample workpiece at bed center.');
     const sampleTris = this.generateSampleBoxTriangles(50, 40, 15);
-    return { name: 'Sample_Billet_50x40', triangles: sampleTris };
+    return { name: 'Sample_Billet_50x40', triangles: sampleTris, isSample: true };
   }
 
   generateSampleBoxTriangles(w, d, h) {
@@ -3090,7 +3119,13 @@ class CLESlicerEngine {
     const spoilboardThickness = bedConfig ? (bedConfig.spoilboardThickness !== undefined ? bedConfig.spoilboardThickness : 20.0) : 20.0;
     const z0 = 0.10 + spoilboardThickness; // Workpiece sits directly on top of spoilboard surface
     const z1 = z0 + h;
-    const x0 = -w/2, x1 = w/2, y0 = -d/2, y1 = d/2;
+
+    // Position centrally on active Spoilboard (e.g. 300, 250)
+    const cx = bedConfig ? ((bedConfig.spoilboardOffsetX || 0) + (bedConfig.spoilboardX || 600) / 2) : 300;
+    const cy = bedConfig ? ((bedConfig.spoilboardOffsetY || 0) + (bedConfig.spoilboardY || 500) / 2) : 250;
+
+    const x0 = cx - w/2, x1 = cx + w/2;
+    const y0 = cy - d/2, y1 = cy + d/2;
     const vertices = [
       // Bottom
       x0,y0,z0, x1,y0,z0, x1,y1,z0,  x0,y0,z0, x1,y1,z0, x0,y1,z0,
@@ -3143,7 +3178,9 @@ class CLESlicerEngine {
     this.infillPercent = parseInt(options.infill, 10) || this.infillPercent;
     this.feedRate = parseInt(options.feedRate, 10) || this.feedRate;
 
-    const { name, triangles } = this.getActiveBodyGeometry();
+    const geom = this.getActiveBodyGeometry();
+    this.lastGeometry = geom;
+    const { name, triangles } = geom;
     const stlString = this.trianglesToSTL(triangles, name);
 
     let gcode = null;
@@ -3530,27 +3567,31 @@ class CLESlicerEngine {
       const stockCy = (minY + maxY) / 2;
       const stockCz = (minZ + maxZ) / 2;
 
-      // 1. Semi-transparent Stock Billet (Workpiece on Bed)
-      const stockGeo = new THREE.BoxGeometry(stockW, stockD, stockH);
-      const stockMat = new THREE.MeshStandardMaterial({
-        color: 0x38bdf8,
-        transparent: true,
-        opacity: 0.18,
-        roughness: 0.7,
-        depthWrite: false
-      });
-      const stockMesh = new THREE.Mesh(stockGeo, stockMat);
-      stockMesh.position.set(stockCx, stockCy, stockCz);
-      stockMesh.renderOrder = 9990;
-      this.visualizerGroup.add(stockMesh);
+      // 1. Semi-transparent ghost workpiece (Only rendered if using fallback sample billet)
+      // When real workspace CAD bodies exist, they overlay transparently without any blocking artificial box!
+      if (this.lastGeometry?.isSample) {
+        const stockGeo = new THREE.BoxGeometry(stockW, stockD, stockH);
+        const stockMat = new THREE.MeshStandardMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.28,
+          roughness: 0.4,
+          depthWrite: false
+        });
+        const stockMesh = new THREE.Mesh(stockGeo, stockMat);
+        stockMesh.position.set(stockCx, stockCy, stockCz);
+        stockMesh.name = 'CLE_Sample_Workpiece_Ghost';
+        stockMesh.renderOrder = 9990;
+        this.visualizerGroup.add(stockMesh);
 
-      // 2. Stock Wireframe Outline
-      const stockEdgeGeo = new THREE.EdgesGeometry(stockGeo);
-      const stockEdgeMat = new THREE.LineBasicMaterial({ color: 0x0284c7, transparent: true, opacity: 0.65 });
-      const stockEdges = new THREE.LineSegments(stockEdgeGeo, stockEdgeMat);
-      stockMesh.add(stockEdges);
+        // Fine wireframe edges around sample workpiece
+        const stockEdgeGeo = new THREE.EdgesGeometry(stockGeo);
+        const stockEdgeMat = new THREE.LineBasicMaterial({ color: 0x0284c7, transparent: true, opacity: 0.55 });
+        const stockEdges = new THREE.LineSegments(stockEdgeGeo, stockEdgeMat);
+        stockMesh.add(stockEdges);
+      }
 
-      // 3. Safe Clearance / Retract Plane wireframe (Z = maxZ + 5.0mm)
+      // 2. Safe Clearance / Retract Plane wireframe (Z = maxZ + 5.0mm)
       const retractZ = maxZ + 5.0;
       const retVectors = [
         new THREE.Vector3(minX - 5, minY - 5, retractZ),
@@ -3565,7 +3606,7 @@ class CLESlicerEngine {
       retLine.computeLineDistances();
       this.visualizerGroup.add(retLine);
 
-      // 4. Translucent Orange Mode Indicator Layer:
+      // 3. Translucent Orange Mode Indicator Layer:
       // CNC / Laser (Top-Down): Translucent Orange Cap on TOP layer where milling begins
       // 3D Printing (Bottom-Up): Translucent Orange Base on BOTTOM layer where depositing begins on the bed
       const modePlaneGeo = new THREE.PlaneGeometry(stockW, stockD);
@@ -3593,7 +3634,20 @@ class CLESlicerEngine {
       const modeBorder = new THREE.LineSegments(modeBorderGeo, modeBorderMat);
       modeBorder.position.set(stockCx, stockCy, modePlaneZ);
       this.visualizerGroup.add(modeBorder);
+
+      // 4. Center & Frame Visualizer Sphere around the Workpiece Slices
+      const sphereRadius = Math.max(stockW, stockD, stockH) * 0.85;
+      if (app?.vp?.view) {
+        app.vp.view.target.set(stockCx, stockCy, stockCz);
+        app.vp.view.dist = Math.max(160, sphereRadius * 3.0);
+        app.vp.view.az = 0.55;
+        app.vp.view.el = 0.50;
+        if (app.vp.updateCamera) app.vp.updateCamera();
+      }
     }
+
+    // Set all workspace CAD bodies to transparent (opacity: 0.32) so slices overlay directly inside them!
+    this.setWorkspaceBodiesTransparent(true);
 
     container.add(this.visualizerGroup);
 
@@ -3610,7 +3664,196 @@ class CLESlicerEngine {
     console.log(`[CLE Slicer] Slices rendered: ${numLayers} toolpath passes visible in 3D viewport.`);
   }
 
+  // Set all workspace CAD bodies to transparent so slices overlay cleanly through them
+  setWorkspaceBodiesTransparent(transparent = true) {
+    const app = window.app || window.xe;
+    if (!app || !app.scene) return;
+
+    if (app.scene.views) {
+      for (const [id, view] of app.scene.views) {
+        if (view.mesh && view.mesh.material) {
+          const mats = Array.isArray(view.mesh.material) ? view.mesh.material : [view.mesh.material];
+          mats.forEach(m => {
+            if (transparent) {
+              if (m._cleOrigOpacity === undefined) {
+                m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
+                m._cleOrigTransparent = m.transparent !== undefined ? m.transparent : false;
+                m._cleOrigDepthWrite = m.depthWrite !== undefined ? m.depthWrite : true;
+              }
+              m.transparent = true;
+              m.opacity = 0.32;
+              m.depthWrite = false;
+              m.needsUpdate = true;
+            } else if (m._cleOrigOpacity !== undefined) {
+              m.opacity = m._cleOrigOpacity;
+              m.transparent = m._cleOrigTransparent;
+              m.depthWrite = m._cleOrigDepthWrite;
+              delete m._cleOrigOpacity;
+              delete m._cleOrigTransparent;
+              delete m._cleOrigDepthWrite;
+              m.needsUpdate = true;
+            }
+          });
+        }
+      }
+    }
+
+    if (app.scene.root) {
+      app.scene.root.traverse((obj) => {
+        if (obj.isMesh && obj.material && obj.name !== 'CLE_Sample_Workpiece_Ghost') {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach(m => {
+            if (transparent) {
+              if (m._cleOrigOpacity === undefined) {
+                m._cleOrigOpacity = m.opacity !== undefined ? m.opacity : 1.0;
+                m._cleOrigTransparent = m.transparent !== undefined ? m.transparent : false;
+                m._cleOrigDepthWrite = m.depthWrite !== undefined ? m.depthWrite : true;
+              }
+              m.transparent = true;
+              m.opacity = 0.32;
+              m.depthWrite = false;
+              m.needsUpdate = true;
+            } else if (m._cleOrigOpacity !== undefined) {
+              m.opacity = m._cleOrigOpacity;
+              m.transparent = m._cleOrigTransparent;
+              m.depthWrite = m._cleOrigDepthWrite;
+              delete m._cleOrigOpacity;
+              delete m._cleOrigTransparent;
+              delete m._cleOrigDepthWrite;
+              m.needsUpdate = true;
+            }
+          });
+        }
+      });
+    }
+
+    if (app.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
+  }
+
+  // Auto-Roll: Continuous 360-degree Orbit around the visualizer sphere
+  startSphereRoll() {
+    this.stopSphereRoll();
+    this.isRollingSphere = true;
+    const app = window.app || window.xe;
+    if (!app || !app.vp || !app.vp.view) return;
+
+    const rollStep = () => {
+      if (!this.isRollingSphere) return;
+      app.vp.view.az += 0.007; // Smooth spherical orbit roll
+      if (app.vp.updateCamera) app.vp.updateCamera();
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+      this._sphereRollAnimId = requestAnimationFrame(rollStep);
+    };
+    this._sphereRollAnimId = requestAnimationFrame(rollStep);
+
+    const btn = document.getElementById('cle-hud-roll-sphere');
+    if (btn) {
+      btn.textContent = '⏸ Pause Orbit';
+      btn.style.background = '#f59e0b';
+    }
+  }
+
+  stopSphereRoll() {
+    this.isRollingSphere = false;
+    if (this._sphereRollAnimId) {
+      cancelAnimationFrame(this._sphereRollAnimId);
+      this._sphereRollAnimId = null;
+    }
+    const btn = document.getElementById('cle-hud-roll-sphere');
+    if (btn) {
+      btn.textContent = '🔄 Roll Sphere';
+      btn.style.background = '#4338ca';
+    }
+  }
+
+  // Roll Through Slices sequentially
+  startLayerRoll(fps = 6) {
+    this.stopLayerRoll();
+    if (!this.slicedLayers || this.slicedLayers.length === 0) return;
+    this.isRollingLayers = true;
+
+    let cur = 0;
+    const num = this.slicedLayers.length;
+    const intervalMs = Math.round(1000 / fps);
+
+    this._layerRollTimer = setInterval(() => {
+      if (!this.isRollingLayers) return;
+      this.setPreviewLayer(cur);
+      const slider = document.getElementById('cle-hud-slider');
+      const label = document.getElementById('cle-hud-label');
+      if (slider) slider.value = cur;
+      if (label && this.slicedLayers[cur]) {
+        label.textContent = `Pass ${cur + 1}/${num} (Z=${this.slicedLayers[cur].z.toFixed(2)}mm)`;
+      }
+
+      cur++;
+      if (cur >= num) {
+        // Pause briefly at end then reset
+        setTimeout(() => {
+          if (this.isRollingLayers) {
+            this.setPreviewLayer(-1);
+            if (slider) slider.value = -1;
+            if (label) label.textContent = `All (${num} passes)`;
+            cur = 0;
+          }
+        }, 1200);
+      }
+    }, intervalMs);
+
+    const btn = document.getElementById('cle-hud-roll-layers');
+    if (btn) {
+      btn.textContent = '⏸ Pause Slices';
+      btn.style.background = '#f59e0b';
+    }
+  }
+
+  stopLayerRoll() {
+    this.isRollingLayers = false;
+    if (this._layerRollTimer) {
+      clearInterval(this._layerRollTimer);
+      this._layerRollTimer = null;
+    }
+    const btn = document.getElementById('cle-hud-roll-layers');
+    if (btn) {
+      btn.textContent = '▶ Roll Slices';
+      btn.style.background = '#0284c7';
+    }
+  }
+
+  // Preset View Angles for spherical inspection
+  setViewAngle(mode) {
+    const app = window.app || window.xe;
+    if (!app || !app.vp || !app.vp.view) return;
+    this.stopSphereRoll();
+
+    if (mode === 'top') {
+      app.vp.view.az = 0;
+      app.vp.view.el = Math.PI / 2 - 0.001;
+    } else if (mode === 'front') {
+      app.vp.view.az = 0;
+      app.vp.view.el = 0.02;
+    } else if (mode === 'side') {
+      app.vp.view.az = Math.PI / 2;
+      app.vp.view.el = 0.02;
+    } else { // 'iso'
+      app.vp.view.az = 0.55;
+      app.vp.view.el = 0.50;
+    }
+
+    if (app.vp.updateCamera) app.vp.updateCamera();
+    app.vp.dirty = true;
+    if (app.vp.request) app.vp.request();
+  }
+
   clearVisualizer() {
+    this.stopSphereRoll();
+    this.stopLayerRoll();
+    this.stopTraceSimulation();
+
     const app = window.app || window.xe;
     if (this.visualizerGroup) {
       this.visualizerGroup.traverse((obj) => {
@@ -3632,24 +3875,7 @@ class CLESlicerEngine {
     }
 
     // Restore CAD body opacity and depthWrite
-    if (app?.scene?.views) {
-      for (const [id, view] of app.scene.views) {
-        if (view.mesh && view.mesh.material) {
-          const mats = Array.isArray(view.mesh.material) ? view.mesh.material : [view.mesh.material];
-          mats.forEach(m => {
-            if (m._cleOrigOpacity !== undefined) {
-              m.opacity = m._cleOrigOpacity;
-              m.transparent = m._cleOrigTransparent;
-              m.depthWrite = m._cleOrigDepthWrite !== undefined ? m._cleOrigDepthWrite : true;
-              delete m._cleOrigOpacity;
-              delete m._cleOrigTransparent;
-              delete m._cleOrigDepthWrite;
-              m.needsUpdate = true;
-            }
-          });
-        }
-      }
-    }
+    this.setWorkspaceBodiesTransparent(false);
 
     const hud = document.getElementById('cle-slicer-hud');
     if (hud) hud.style.display = 'none';
@@ -3665,10 +3891,9 @@ class CLESlicerEngine {
     this.currentPreviewLayer = targetIndex;
     if (!this.visualizerGroup) return;
 
-    const isTopDown = (this.mode === 'cnc' || this.mode === 'laser');
-
     this.visualizerGroup.children.forEach(mesh => {
       const lIdx = mesh.userData.layerIndex;
+      if (lIdx === undefined) return;
       if (targetIndex === -1) {
         mesh.visible = true; // Show all
       } else {
@@ -3684,7 +3909,7 @@ class CLESlicerEngine {
     }
   }
 
-  // Floating Layer & Export HUD
+  // Floating Layer & Export HUD with Roll Controls
   mountLayerHUD() {
     let hud = document.getElementById('cle-slicer-hud');
     if (!hud) {
@@ -3703,7 +3928,8 @@ class CLESlicerEngine {
         box-shadow: 0 8px 24px var(--shadow);
         display: flex;
         align-items: center;
-        gap: 12px;
+        flex-wrap: wrap;
+        gap: 10px;
         z-index: 1000;
         font-family: var(--f);
         font-size: 12px;
@@ -3717,20 +3943,35 @@ class CLESlicerEngine {
 
     hud.innerHTML = `
       <div style="font-weight:700; color:var(--accent);">${modeLabel}</div>
+      
+      <!-- Roll Slices Scrubber Strip -->
       <div style="display:flex; align-items:center; gap:6px;">
-        <button class="cle-btn" id="cle-hud-prev" style="padding:2px 8px;">&larr;</button>
-        <span id="cle-hud-label" style="font-family:var(--f-mono); min-width:120px; text-align:center;">
+        <button class="cle-btn" id="cle-hud-prev" style="padding:2px 8px;" title="Previous Pass">&larr;</button>
+        <span id="cle-hud-label" style="font-family:var(--f-mono); min-width:125px; text-align:center; font-weight:600;">
           All (${numLayers} passes)
         </span>
-        <button class="cle-btn" id="cle-hud-next" style="padding:2px 8px;">&rarr;</button>
+        <button class="cle-btn" id="cle-hud-next" style="padding:2px 8px;" title="Next Pass">&rarr;</button>
       </div>
-      <input type="range" id="cle-hud-slider" min="-1" max="${numLayers - 1}" value="-1" style="width:140px;">
-      <button class="cle-btn" id="cle-hud-all">Show All</button>
-      <button class="cle-btn" id="cle-hud-trace" style="background:#0284c7; color:#fff; font-weight:600;">Trace 3D</button>
+      <input type="range" id="cle-hud-slider" min="-1" max="${numLayers - 1}" value="-1" style="width:130px;" title="Scrub through toolpath passes">
+      <button class="cle-btn" id="cle-hud-all" style="padding:2px 8px;">Show All</button>
+
+      <!-- Roll Slices and Sphere Controls -->
+      <button class="cle-btn" id="cle-hud-roll-layers" style="background:#0284c7; color:#fff; font-weight:600; padding:3px 10px;" title="Roll through all slice passes sequentially">▶ Roll Slices</button>
+      <button class="cle-btn" id="cle-hud-roll-sphere" style="background:#4338ca; color:#fff; font-weight:600; padding:3px 10px;" title="Roll 3D Sphere (Continuous 360° Visualizer Orbit)">🔄 Roll Sphere</button>
+
+      <!-- Spherical Angle Preset -->
+      <select class="cle-select" id="cle-hud-view-preset" style="font-size:11px; padding:2px 6px;">
+        <option value="iso">Iso 3D</option>
+        <option value="top">Top (Z)</option>
+        <option value="front">Front (Y)</option>
+        <option value="side">Side (X)</option>
+      </select>
+
+      <button class="cle-btn" id="cle-hud-trace" style="background:#059669; color:#fff; font-weight:600; padding:3px 8px;" title="Simulate 3D toolhead movement over slices">Trace 3D</button>
       <div style="border-left:1px solid var(--line); height:18px;"></div>
-      <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600;">Export .NC</button>
-      <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600;">To SD Card</button>
-      <button class="cle-btn" id="cle-hud-close" style="padding:2px 6px;">&times;</button>
+      <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600; padding:3px 8px;">Export .NC</button>
+      <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600; padding:3px 8px;">To SD</button>
+      <button class="cle-btn" id="cle-hud-close" style="padding:2px 6px;" title="Close Visualizer">&times;</button>
     `;
 
     hud.style.display = 'flex';
@@ -3760,6 +4001,35 @@ class CLESlicerEngine {
       if (cur < numLayers - 1) updateHUD(cur + 1);
     };
     document.getElementById('cle-hud-all').onclick = () => updateHUD(-1);
+
+    // Roll Slices sequentially
+    document.getElementById('cle-hud-roll-layers').onclick = () => {
+      if (this.isRollingLayers) this.stopLayerRoll();
+      else this.startLayerRoll(6);
+    };
+
+    // Roll Sphere Orbit 360 degrees
+    document.getElementById('cle-hud-roll-sphere').onclick = () => {
+      if (this.isRollingSphere) this.stopSphereRoll();
+      else this.startSphereRoll();
+    };
+
+    // View Preset Angles
+    document.getElementById('cle-hud-view-preset').onchange = (e) => {
+      this.setViewAngle(e.target.value);
+    };
+
+    // Mousewheel roll on HUD to roll through slices
+    hud.onwheel = (e) => {
+      e.preventDefault();
+      let cur = parseInt(slider.value, 10);
+      if (e.deltaY > 0) {
+        if (cur < numLayers - 1) updateHUD(cur + 1);
+      } else {
+        if (cur > 0) updateHUD(cur - 1);
+      }
+    };
+
     document.getElementById('cle-hud-export').onclick = () => this.exportGCodeFile();
     document.getElementById('cle-hud-upload').onclick = () => this.uploadGCodeToSD();
     const traceBtn = document.getElementById('cle-hud-trace');

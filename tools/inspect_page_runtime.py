@@ -31,7 +31,7 @@ async def run():
             checks = [
                 ("(() => { app.setMode('advanced'); return true; })()", False),
                 ("(() => { document.getElementById('ws-cle').click(); return true; })()", False),
-                ("(() => { return { rootZ: app.scene.root.position.z, bedVisible: window.CLE.bed.visible, spoilboardThickness: window.CLE.bed.config.spoilboardThickness }; })()", False),
+                ("(() => { return { views: app.scene.views.size, bodies: app.doc ? app.doc.bodies.length : 0 }; })()", False),
                 ("(() => { return window.CLE.bed.config; })()", False)
             ]
             for idx, (c, await_promise) in enumerate(checks, start=10):
