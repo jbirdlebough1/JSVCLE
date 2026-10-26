@@ -1087,7 +1087,8 @@ export class CLESlicerEngine {
 
       const lineMesh = new THREE.LineSegments(geom, mat);
       lineMesh.renderOrder = 99999;
-      lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx };
+      lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isRawToolpath: true };
+      lineMesh.visible = false; // Hidden in contour mode; dynamically drawn slice-by-slice during Trace 3D!
       this.visualizerGroup.add(lineMesh);
 
       // Visible waypoint marks (toolpath nodes / plunge points)
@@ -1115,11 +1116,12 @@ export class CLESlicerEngine {
         });
         const ptMesh = new THREE.Points(ptGeo, ptMat);
         ptMesh.renderOrder = 100000;
-        ptMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx };
+        ptMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isRawToolpath: true };
+        ptMesh.visible = false; // Hidden in contour mode
         this.visualizerGroup.add(ptMesh);
       }
 
-      // Solid Material Slice Slab & Glowing Boundary Contour (following 3D object in X, Y, Z and A)
+      // Slice Contour Disc & Glowing Orange Perimeter Loop (following 3D object in X, Y, Z and A)
       const exactCross = this.computeObjectCrossSectionAtZ(layer.z);
       const contourPts = (exactCross && exactCross.length >= 3) ? exactCross : this.computeLayerContour(layer.points);
 
@@ -1127,7 +1129,7 @@ export class CLESlicerEngine {
         const sliceH = Math.max(0.5, this.layerHeight || 1.0);
         const zBot = layer.z - sliceH;
 
-        // 3D Solid Material Slice Slab (warm hardwood timber / MDF solid volume)
+        // Orange Slice Contour (translucent orange matching start plane contour)
         const shape = new THREE.Shape();
         shape.moveTo(contourPts[0].x, contourPts[0].y);
         for (let k = 1; k < contourPts.length; k++) {
@@ -1138,12 +1140,10 @@ export class CLESlicerEngine {
         const extrudeGeo = new THREE.ExtrudeGeometry(shape, { depth: sliceH, bevelEnabled: false });
         extrudeGeo.translate(0, 0, zBot);
 
-        const solidMat = new THREE.MeshStandardMaterial({
-          color: 0xcd853f, // Solid Timber / Hardwood MDF
-          roughness: 0.55,
-          metalness: 0.10,
+        const solidMat = new THREE.MeshBasicMaterial({
+          color: 0xf97316, // User-approved Vivid Orange Contour
           transparent: true,
-          opacity: 0.88,
+          opacity: 0.42,
           side: THREE.DoubleSide,
           depthWrite: false
         });
@@ -1154,11 +1154,11 @@ export class CLESlicerEngine {
         solidSliceMesh.visible = false;
         this.visualizerGroup.add(solidSliceMesh);
 
-        // Glowing Surface Perimeter Contour Loop (following compound 3D curve)
+        // Deep Glowing Orange Perimeter Contour Loop (following 3D compound curve)
         const loopPts = contourPts.map(p => new THREE.Vector3(p.x, p.y, layer.z));
         const loopGeo = new THREE.BufferGeometry().setFromPoints(loopPts);
         const loopMat = new THREE.LineBasicMaterial({
-          color: 0xfacc15, // Glowing Gold
+          color: 0xea580c, // Rich Glowing Orange Border
           linewidth: 3.5,
           transparent: true,
           opacity: 0.95,
@@ -1339,6 +1339,10 @@ export class CLESlicerEngine {
     this.setWorkspaceBodiesTransparent(true);
 
     container.add(this.visualizerGroup);
+
+    // Default to Single Slice Orange Contour view on slice 0 (clean orange contour, zero green/yellow cube)
+    this.sliceViewMode = this.sliceViewMode || 'single';
+    this.setPreviewLayer(0);
 
     // Set Gamepad mode to Design so left joystick immediately orbits the 3D scene around the slices!
     if (this.bridge.gamepad) {
@@ -1576,7 +1580,7 @@ export class CLESlicerEngine {
   }
 
   // Filter layer visibility according to scrubbed layer index (Single Slice Contour vs Range Window vs Full Stack)
-  setPreviewLayer(targetIndex) {
+  setPreviewLayer(targetIndex = 0) {
     this.currentPreviewLayer = targetIndex;
     if (!this.visualizerGroup) return;
 
@@ -1599,6 +1603,7 @@ export class CLESlicerEngine {
 
       const isSolidSlice = !!mesh.userData.isSolidSlice;
       const isContourBorder = !!mesh.userData.isContourBorder;
+      const isRawToolpath = !!mesh.userData.isRawToolpath;
 
       // Active Part filter (if user isolated a specific laminated part)
       if (this.activePartIndex >= 0 && mesh.userData.partIndex !== undefined && mesh.userData.partIndex !== this.activePartIndex) {
@@ -1607,75 +1612,71 @@ export class CLESlicerEngine {
       }
 
       if (mode === 'single') {
-        // --- SINGLE SLICE SOLID MATERIAL CONTOUR MODE ---
-        // Exactly one slice at a time showing solid material volume and glowing boundary contour following the object
+        // --- SINGLE SLICE ORANGE CONTOUR MODE ---
+        // Exactly one slice at a time showing clean orange contour following the 3D object in X, Y, Z (and A)
         const effectiveTarget = (targetIndex === -1) ? 0 : targetIndex;
         const isTarget = (lIdx === effectiveTarget);
 
         if (isSolidSlice) {
           mesh.visible = isTarget;
-          if (mesh.material) mesh.material.opacity = 0.88;
+          if (mesh.material) mesh.material.opacity = 0.42;
         } else if (isContourBorder) {
           mesh.visible = isTarget;
           if (mesh.material) {
-            mesh.material.opacity = 1.0;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0xfacc15); // Vivid Glowing Gold
+            mesh.material.opacity = 0.95;
+            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0xea580c);
           }
+        } else if (isRawToolpath) {
+          // Raw toolpath lines: NEVER displayed statically! Only visible for active slice currently being traced
+          mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);
         } else {
-          // Toolpath lines: dimmed in single slice mode so user sees the solid slice contour cleanly!
           mesh.visible = isTarget;
-          if (mesh.material) mesh.material.opacity = 0.35;
         }
 
       } else if (mode === 'range') {
         // --- RANGE OF SLICES SCROLL MODE ---
-        // Shows window of slices (e.g. 10 passes) scrolling through the stack
+        // Shows window of slices (e.g. 10 passes) scrolling through the stack in clean orange contours
         const inRange = (lIdx >= rangeStart && lIdx <= rangeEnd);
         const center = (targetIndex === -1) ? Math.floor(numLayers / 2) : targetIndex;
         const isCenter = (lIdx === center);
 
         if (isSolidSlice) {
           mesh.visible = inRange;
-          if (mesh.material) mesh.material.opacity = isCenter ? 0.88 : 0.40;
+          if (mesh.material) mesh.material.opacity = isCenter ? 0.48 : 0.22;
         } else if (isContourBorder) {
-          // Show contour border on range boundaries and center
-          mesh.visible = inRange && (lIdx === rangeStart || lIdx === rangeEnd || isCenter);
-          if (mesh.material) {
-            mesh.material.opacity = isCenter ? 1.0 : 0.70;
-            if (mesh.material.color && mesh.material.color.setHex) {
-              mesh.material.color.setHex(isCenter ? 0xfacc15 : 0x38bdf8);
-            }
-          }
-        } else {
-          // Toolpath passes within range
           mesh.visible = inRange;
           if (mesh.material) {
-            mesh.material.opacity = isCenter ? 0.80 : 0.30;
+            mesh.material.opacity = isCenter ? 0.95 : 0.55;
+            if (mesh.material.color && mesh.material.color.setHex) {
+              mesh.material.color.setHex(isCenter ? 0xea580c : 0xf97316);
+            }
           }
+        } else if (isRawToolpath) {
+          // Raw toolpath lines hidden during range inspection
+          mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);
+        } else {
+          mesh.visible = inRange;
         }
 
       } else {
         // --- FULL STACK MODE ---
-        // Cumulative toolpath stack
+        // Clean orange contours stacked across the workpiece; zero green/yellow cube clutter!
         if (isSolidSlice) {
-          mesh.visible = false; // Hide solid slab boxes in full stack view
+          mesh.visible = true;
+          if (mesh.material) mesh.material.opacity = 0.18;
         } else if (isContourBorder) {
-          // Highlight contour border at active pass
-          mesh.visible = (targetIndex !== -1 && lIdx === targetIndex);
-          if (mesh.material) mesh.material.opacity = 0.90;
-        } else {
-          if (targetIndex === -1) {
-            mesh.visible = true;
-            if (mesh.material) mesh.material.opacity = 0.95;
-          } else if (lIdx === targetIndex) {
-            mesh.visible = true;
-            if (mesh.material) mesh.material.opacity = 1.0;
-          } else if (lIdx < targetIndex) {
-            mesh.visible = true;
-            if (mesh.material) mesh.material.opacity = 0.40;
-          } else {
-            mesh.visible = false;
+          mesh.visible = true;
+          if (mesh.material) {
+            const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
+            mesh.material.opacity = isTarget ? 0.95 : 0.35;
+            if (mesh.material.color && mesh.material.color.setHex) {
+              mesh.material.color.setHex(isTarget ? 0xea580c : 0xf97316);
+            }
           }
+        } else if (isRawToolpath) {
+          mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);
+        } else {
+          mesh.visible = (targetIndex === -1 || lIdx <= targetIndex);
         }
       }
     });
@@ -1715,7 +1716,7 @@ export class CLESlicerEngine {
       document.body.appendChild(hud);
     }
 
-    if (!this.sliceViewMode) this.sliceViewMode = 'stack'; // 'stack' | 'single'
+    if (!this.sliceViewMode) this.sliceViewMode = 'single'; // Default to Single Slice Orange Contour mode
 
     const numLayers = this.slicedLayers.length;
     const isTopDown = (this.mode === 'cnc' || this.mode === 'laser');
@@ -1727,19 +1728,19 @@ export class CLESlicerEngine {
       <!-- Roll Slices Scrubber Strip -->
       <div style="display:flex; align-items:center; gap:6px;">
         <button class="cle-btn" id="cle-hud-prev" style="padding:2px 8px;" title="Previous Pass">&larr;</button>
-        <span id="cle-hud-label" style="font-family:var(--f-mono); min-width:125px; text-align:center; font-weight:600;">
-          All (${numLayers} passes)
+        <span id="cle-hud-label" style="font-family:var(--f-mono); min-width:145px; text-align:center; font-weight:600; color:#f97316;">
+          Slice 1/${numLayers}
         </span>
         <button class="cle-btn" id="cle-hud-next" style="padding:2px 8px;" title="Next Pass">&rarr;</button>
       </div>
-      <input type="range" id="cle-hud-slider" min="-1" max="${numLayers - 1}" value="-1" style="width:130px;" title="Scrub through toolpath passes">
-      <button class="cle-btn" id="cle-hud-all" style="padding:2px 8px;">Show All</button>
+      <input type="range" id="cle-hud-slider" min="0" max="${Math.max(0, numLayers - 1)}" value="0" style="width:130px;" title="Scrub through toolpath passes">
+      <button class="cle-btn" id="cle-hud-all" style="padding:2px 8px;">Reset (Top)</button>
 
       <!-- 3-Way Mode Switcher: Single Slice Contour / Range Window / Full Stack -->
       <div style="display:flex; gap:2px; background:rgba(0,0,0,0.15); padding:2px; border-radius:6px; border:1px solid var(--line);">
-        <button class="cle-btn cle-hud-mode-pill ${this.sliceViewMode === 'single' ? 'active' : ''}" data-mode="single" style="padding:2px 8px; font-weight:700; font-size:11px; background:${this.sliceViewMode === 'single' ? 'var(--accent)' : 'transparent'}; color:${this.sliceViewMode === 'single' ? 'var(--on-accent)' : 'var(--ink)'};" title="Single Slice Mode: View exactly one slice contour at a time">Single Slice</button>
-        <button class="cle-btn cle-hud-mode-pill ${this.sliceViewMode === 'range' ? 'active' : ''}" data-mode="range" style="padding:2px 8px; font-weight:700; font-size:11px; background:${this.sliceViewMode === 'range' ? 'var(--accent)' : 'transparent'}; color:${this.sliceViewMode === 'range' ? 'var(--on-accent)' : 'var(--ink)'};" title="Range Mode: Scroll a window of slices through the stack">Range (10)</button>
-        <button class="cle-btn cle-hud-mode-pill ${this.sliceViewMode === 'stack' ? 'active' : ''}" data-mode="stack" style="padding:2px 8px; font-weight:700; font-size:11px; background:${this.sliceViewMode === 'stack' ? 'var(--accent)' : 'transparent'}; color:${this.sliceViewMode === 'stack' ? 'var(--on-accent)' : 'var(--ink)'};" title="Full Stack Mode: View entire continuous toolpath stack">Full Stack</button>
+        <button class="cle-btn cle-hud-mode-pill ${this.sliceViewMode === 'single' ? 'active' : ''}" data-mode="single" style="padding:2px 8px; font-weight:700; font-size:11px; background:${this.sliceViewMode === 'single' ? 'var(--accent)' : 'transparent'}; color:${this.sliceViewMode === 'single' ? 'var(--on-accent)' : 'var(--ink)'};" title="Single Slice Mode: View exactly one slice orange contour at a time">Single Slice</button>
+        <button class="cle-btn cle-hud-mode-pill ${this.sliceViewMode === 'range' ? 'active' : ''}" data-mode="range" style="padding:2px 8px; font-weight:700; font-size:11px; background:${this.sliceViewMode === 'range' ? 'var(--accent)' : 'transparent'}; color:${this.sliceViewMode === 'range' ? 'var(--on-accent)' : 'var(--ink)'};" title="Range Mode: Scroll a window of orange slice contours through the stack">Range (10)</button>
+        <button class="cle-btn cle-hud-mode-pill ${this.sliceViewMode === 'stack' ? 'active' : ''}" data-mode="stack" style="padding:2px 8px; font-weight:700; font-size:11px; background:${this.sliceViewMode === 'stack' ? 'var(--accent)' : 'transparent'}; color:${this.sliceViewMode === 'stack' ? 'var(--on-accent)' : 'var(--ink)'};" title="Full Stack Mode: View entire continuous orange contour stack">Full Stack</button>
       </div>
 
       <!-- Roll Slices and Sphere Controls -->
@@ -1814,7 +1815,7 @@ export class CLESlicerEngine {
         const hasRotary = (this.mode === 'rotary' || (this.bridge?.vault?.getActiveMachine()?.type === 'rotary'));
         const aStr = (hasRotary && isFinite(minA)) ? `, A:${minA.toFixed(0)}°..${maxA.toFixed(0)}°` : '';
         const coordStr = isFinite(minX) ? ` | X:${minX.toFixed(0)}..${maxX.toFixed(0)} Y:${minY.toFixed(0)}..${maxY.toFixed(0)}${aStr}` : '';
-        label.textContent = `Slice ${idx + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm${coordStr}) [Solid Slice]`;
+        label.textContent = `Slice ${idx + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm${coordStr}) [Orange Contour]`;
       } else if (this.sliceViewMode === 'range') {
         const half = 5;
         const center = (intVal === -1) ? Math.floor(numLayers / 2) : intVal;
@@ -1822,13 +1823,13 @@ export class CLESlicerEngine {
         const rEnd = Math.min(numLayers - 1, center + half);
         const zS = this.slicedLayers[rStart] ? this.slicedLayers[rStart].z.toFixed(1) : '--';
         const zE = this.slicedLayers[rEnd] ? this.slicedLayers[rEnd].z.toFixed(1) : '--';
-        label.textContent = `Range ${rStart + 1}-${rEnd + 1}/${numLayers} (Z ${zS}..${zE}mm)`;
+        label.textContent = `Range ${rStart + 1}-${rEnd + 1}/${numLayers} (Z ${zS}..${zE}mm) [Orange Contours]`;
       } else {
         if (intVal === -1) {
-          label.textContent = `All (${numLayers} passes)`;
+          label.textContent = `All Contours (${numLayers} passes)`;
         } else {
           const curL = this.slicedLayers[intVal];
-          label.textContent = `Stack to Pass ${intVal + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm)`;
+          label.textContent = `Contour Stack 1..${intVal + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm)`;
         }
       }
     };
@@ -1837,22 +1838,23 @@ export class CLESlicerEngine {
     document.getElementById('cle-hud-prev').onclick = () => {
       let cur = parseInt(slider.value, 10);
       if (cur > 0) updateHUD(cur - 1);
-      else if (cur === -1) updateHUD(numLayers - 1);
+      else if (cur === -1 || cur === 0) updateHUD(numLayers - 1);
     };
     document.getElementById('cle-hud-next').onclick = () => {
       let cur = parseInt(slider.value, 10);
       if (cur < numLayers - 1) updateHUD(cur + 1);
+      else updateHUD(0);
     };
-    document.getElementById('cle-hud-all').onclick = () => updateHUD(-1);
+    document.getElementById('cle-hud-all').onclick = () => updateHUD(0);
 
     // 3-Way Mode Switcher Click Handlers
     hud.querySelectorAll('.cle-hud-mode-pill').forEach(btn => {
       btn.onclick = () => {
         const targetMode = btn.getAttribute('data-mode');
         this.sliceViewMode = targetMode;
-        if (targetMode === 'single' && slider.value === '-1') {
+        if (targetMode === 'single' && (slider.value === '-1' || !slider.value)) {
           slider.value = 0;
-        } else if (targetMode === 'range' && slider.value === '-1') {
+        } else if (targetMode === 'range' && (slider.value === '-1' || !slider.value)) {
           slider.value = Math.floor(numLayers / 2);
         }
         updateModePills();
@@ -1933,6 +1935,9 @@ export class CLESlicerEngine {
         };
       }
     }
+
+    // Initialize HUD and Visualizer to Slice 1 in Orange Contour mode
+    updateHUD(0);
 
     document.getElementById('cle-hud-close').onclick = () => { this.clearVisualizer(); };
   }
@@ -2094,7 +2099,7 @@ export class CLESlicerEngine {
     this.mountLayerHUD();
   }
 
-  // --- 3D Toolpath Trace Simulator ---
+  // --- 3D Toolpath Trace Simulator (Shows tool path dynamically as it cuts each slice) ---
   startTraceSimulation(speedMultiplier = 2) {
     if (!this.slicedLayers || this.slicedLayers.length === 0) {
       this.bridge.notify('Slice a model first to run trace simulator.', 'error');
@@ -2105,43 +2110,153 @@ export class CLESlicerEngine {
     this.isSimulating = true;
     this.simSpeed = speedMultiplier;
 
-    const allPts = [];
-    this.slicedLayers.forEach(l => {
-      l.points.forEach(p => allPts.push({ ...p, layerIndex: l.index }));
-    });
-
-    if (allPts.length === 0) return;
-
+    const numLayers = this.slicedLayers.length;
+    // Start trace from current preview slice if valid, else start at slice 0
+    let curLayerIdx = (this.currentPreviewLayer >= 0 && this.currentPreviewLayer < numLayers)
+      ? this.currentPreviewLayer
+      : 0;
     let ptIdx = 0;
+
+    const hudLabel = document.getElementById('cle-hud-label');
+    const hudSlider = document.getElementById('cle-hud-slider');
+    const traceBtn = document.getElementById('cle-hud-trace');
+    if (traceBtn) traceBtn.textContent = 'Stop Trace';
+
+    const setupSliceForTrace = (lIdx) => {
+      this._activeSimLayer = lIdx;
+      this.currentPreviewLayer = lIdx;
+      if (hudSlider) hudSlider.value = lIdx;
+
+      // Update preview so active slice orange contour is focused
+      this.setPreviewLayer(lIdx);
+
+      // Find toolpath line mesh for this slice and reset draw range to 0
+      if (this.visualizerGroup) {
+        this.visualizerGroup.children.forEach(mesh => {
+          if (mesh.userData && mesh.userData.layerIndex === lIdx && mesh.userData.isRawToolpath) {
+            mesh.visible = true;
+            if (mesh.geometry && mesh.geometry.setDrawRange) {
+              mesh.geometry.setDrawRange(0, 0);
+            }
+          }
+        });
+      }
+    };
+
+    setupSliceForTrace(curLayerIdx);
+
     const step = () => {
       if (!this.isSimulating) return;
 
-      const pt = allPts[ptIdx];
+      const layer = this.slicedLayers[curLayerIdx];
+      if (!layer || !layer.points || layer.points.length === 0) {
+        curLayerIdx++;
+        ptIdx = 0;
+        if (curLayerIdx >= numLayers) {
+          finishTrace();
+          return;
+        }
+        setupSliceForTrace(curLayerIdx);
+        this._simAnimId = requestAnimationFrame(step);
+        return;
+      }
+
+      const pt = layer.points[ptIdx];
       if (pt && this.bridge.bed) {
-        this.bridge.bed.updateToolCursor({ X: pt.x, Y: pt.y, Z: pt.z });
+        this.bridge.bed.updateToolCursor({ X: pt.x, Y: pt.y, Z: pt.z, A: pt.a || 0 });
+      }
+
+      // Show toolpath as it cuts each slice: expand draw range up to current toolhead position!
+      if (this.visualizerGroup) {
+        const drawnCount = Math.min((ptIdx + 1) * 2, (layer.points.length - 1) * 2);
+        this.visualizerGroup.children.forEach(mesh => {
+          if (mesh.userData && mesh.userData.layerIndex === curLayerIdx && mesh.userData.isRawToolpath) {
+            mesh.visible = true;
+            if (mesh.geometry && mesh.geometry.setDrawRange) {
+              mesh.geometry.setDrawRange(0, Math.max(2, drawnCount));
+            }
+          }
+        });
+      }
+
+      // Update HUD status label with live coordinates
+      if (hudLabel && pt) {
+        const hasRotary = (this.mode === 'rotary' || (this.bridge?.vault?.getActiveMachine()?.type === 'rotary'));
+        const aStr = hasRotary ? ` A:${(pt.a || 0).toFixed(0)}°` : '';
+        hudLabel.textContent = `Tracing Slice ${curLayerIdx + 1}/${numLayers} (Z=${layer.z.toFixed(2)}mm | X:${pt.x.toFixed(1)} Y:${pt.y.toFixed(1)}${aStr})`;
+      }
+
+      const app = window.app || window.xe;
+      if (app?.vp) {
+        app.vp.dirty = true;
+        if (app.vp.request) app.vp.request();
       }
 
       ptIdx += Math.max(1, Math.floor(this.simSpeed));
-      if (ptIdx >= allPts.length) {
-        this.isSimulating = false;
-        this.bridge.notify('Trace simulation complete.', 'ok');
-        const traceBtn = document.getElementById('cle-hud-trace');
-        if (traceBtn) traceBtn.textContent = 'Trace 3D';
-        return;
+
+      if (ptIdx >= layer.points.length) {
+        // Active slice completed! Ensure all lines drawn for this completed slice
+        if (this.visualizerGroup) {
+          this.visualizerGroup.children.forEach(mesh => {
+            if (mesh.userData && mesh.userData.layerIndex === curLayerIdx && mesh.userData.isRawToolpath) {
+              if (mesh.geometry && mesh.geometry.setDrawRange) {
+                mesh.geometry.setDrawRange(0, Infinity);
+              }
+            }
+          });
+        }
+
+        // Advance to next slice
+        curLayerIdx++;
+        ptIdx = 0;
+        if (curLayerIdx >= numLayers) {
+          finishTrace();
+          return;
+        }
+        setupSliceForTrace(curLayerIdx);
       }
 
       this._simAnimId = requestAnimationFrame(step);
     };
 
+    const finishTrace = () => {
+      this.isSimulating = false;
+      this._activeSimLayer = -1;
+      this.bridge.notify(`Trace simulation complete: ${numLayers} slices traced.`, 'ok');
+      if (traceBtn) traceBtn.textContent = 'Trace 3D';
+      // Return to clean orange contour view
+      this.setPreviewLayer(this.currentPreviewLayer >= 0 ? this.currentPreviewLayer : 0);
+    };
+
     this._simAnimId = requestAnimationFrame(step);
-    this.bridge.notify(`Trace simulation running (${this.simSpeed}x speed)...`, 'info');
+    this.bridge.notify(`Tracing toolpath slice-by-slice (${this.simSpeed}x)...`, 'info');
   }
 
   stopTraceSimulation() {
     this.isSimulating = false;
+    this._activeSimLayer = -1;
     if (this._simAnimId) {
       cancelAnimationFrame(this._simAnimId);
       this._simAnimId = null;
+    }
+    const traceBtn = document.getElementById('cle-hud-trace');
+    if (traceBtn) traceBtn.textContent = 'Trace 3D';
+
+    // Hide raw toolpath lines so workspace visualizer remains clean orange contours
+    if (this.visualizerGroup) {
+      this.visualizerGroup.children.forEach(mesh => {
+        if (mesh.userData && mesh.userData.isRawToolpath) {
+          mesh.visible = false;
+        }
+      });
+    }
+
+    this.setPreviewLayer(this.currentPreviewLayer >= 0 ? this.currentPreviewLayer : 0);
+
+    const app = window.app || window.xe;
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
     }
   }
 

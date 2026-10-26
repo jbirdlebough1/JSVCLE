@@ -765,6 +765,51 @@ export class CLEBedVisualizer {
     this.guideLines.computeLineDistances();
   }
 
+  // Live Toolhead Cursor Position & DRO Update
+  updateToolCursor(pos) {
+    if (!pos) return;
+    const x = pos.X !== undefined ? pos.X : (pos.x !== undefined ? pos.x : this.lastPos.X);
+    const y = pos.Y !== undefined ? pos.Y : (pos.y !== undefined ? pos.y : this.lastPos.Y);
+    const z = pos.Z !== undefined ? pos.Z : (pos.z !== undefined ? pos.z : this.lastPos.Z);
+    const a = pos.A !== undefined ? pos.A : (pos.a !== undefined ? pos.a : this.lastPos.A);
+    this.lastPos = { X: x, Y: y, Z: z, A: a };
+
+    if (this.cursorGroup) {
+      this.cursorGroup.position.set(x, y, z);
+      this.cursorGroup.visible = true;
+    }
+    this.updateCrosshairShadow(x, y);
+
+    if (this.coordTag) {
+      const aText = (a !== undefined && a !== 0) ? ` A${a.toFixed(1)}°` : '';
+      const THREE = window.THREE;
+      if (THREE) {
+        // Re-render coordinate label sprite text
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 3;
+        ctx.fillRect(0, 0, 256, 64);
+        ctx.strokeRect(0, 0, 256, 64);
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 22px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`X${x.toFixed(1)} Y${y.toFixed(1)} Z${z.toFixed(1)}${aText}`, 128, 32);
+
+        if (this.coordTag.material && this.coordTag.material.map) {
+          const tex = this.coordTag.material.map;
+          tex.image = canvas;
+          tex.needsUpdate = true;
+        }
+      }
+    }
+    this.requestRender();
+  }
+
   // Sit 3D CAD Workpiece Flush on Top of Spoilboard Surface
   // Physics Stack: Aluminum Table @ Z = 0.1mm, Spoilboard Thickness = T mm, Surface = 0.1 + T mm
   sitWorkpieceOnSpoilboard() {

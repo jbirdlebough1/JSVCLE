@@ -77,14 +77,27 @@ async def run_test():
                 });
             }
             
-            // Test 1: Single Slice Solid Material Mode with Contour
+            // Test 1: Single Slice Orange Contour Mode (0 raw toolpaths visible!)
             slicer.sliceViewMode = 'single';
             slicer.setPreviewLayer(15);
             let singleVisibleSolids = 0;
             let singleVisibleBorders = 0;
-            slicer.visualizerGroup.traverse(obj => {
-                if (obj.name === 'CLE_Solid_Slice_15' && obj.visible) singleVisibleSolids++;
-                if (obj.name === 'CLE_Contour_Border_15' && obj.visible) singleVisibleBorders++;
+            let singleVisibleRawToolpaths = 0;
+            let orangeContourHex = null;
+            let orangeBorderHex = null;
+
+            slicer.visualizerGroup.children.forEach(obj => {
+                if (obj.name === 'CLE_Solid_Slice_15') {
+                    if (obj.visible) singleVisibleSolids++;
+                    if (obj.material) orangeContourHex = '0x' + obj.material.color.getHexString();
+                }
+                if (obj.name === 'CLE_Contour_Border_15') {
+                    if (obj.visible) singleVisibleBorders++;
+                    if (obj.material) orangeBorderHex = '0x' + obj.material.color.getHexString();
+                }
+                if (obj.userData && obj.userData.isRawToolpath && obj.visible) {
+                    singleVisibleRawToolpaths++;
+                }
             });
 
             // Test 2: Range Mode
@@ -92,16 +105,38 @@ async def run_test():
             slicer.rangeWindow = 10;
             slicer.setPreviewLayer(20);
             let rangeVisibleCount = 0;
+            let rangeVisibleRawToolpaths = 0;
             slicer.visualizerGroup.children.forEach(c => {
                 const l = c.userData.layerIndex;
                 if (l !== undefined && c.userData.isSolidSlice && c.visible) {
                     rangeVisibleCount++;
                 }
+                if (c.userData && c.userData.isRawToolpath && c.visible) {
+                    rangeVisibleRawToolpaths++;
+                }
             });
 
-            // Test 3: Camera duplicate lock
-            const cam = window.CLE.camera;
-            const isLockActive = (cam._isStarting !== undefined);
+            // Test 3: Trace 3D Slice-by-Slice Toolpath Visualization
+            slicer.currentPreviewLayer = 5;
+            slicer.startTraceSimulation(100);
+            const isSimulating = slicer.isSimulating;
+            let activeTraceToolpathVisible = 0;
+            slicer.visualizerGroup.children.forEach(c => {
+                if (c.userData && c.userData.layerIndex === 5 && c.userData.isRawToolpath && c.visible) {
+                    activeTraceToolpathVisible++;
+                }
+            });
+            slicer.stopTraceSimulation();
+            let stoppedRawToolpathsVisible = 0;
+            slicer.visualizerGroup.children.forEach(c => {
+                if (c.userData && c.userData.isRawToolpath && c.visible) {
+                    stoppedRawToolpathsVisible++;
+                }
+            });
+
+            // Test 4: Camera duplicate lock
+            const cam = (window.CLE && window.CLE.camera) ? window.CLE.camera : (window.CLEBridge ? window.CLEBridge.camera : null);
+            const isLockActive = !!(cam && cam._isStarting !== undefined);
             
             return {
                 numLayers: slicer.slicedLayers.length,
@@ -111,12 +146,23 @@ async def run_test():
                 jointPlaneCount,
                 solidSliceCount,
                 contourBorderCount,
+                orangeColors: {
+                    sliceContour: orangeContourHex,
+                    border: orangeBorderHex
+                },
                 singleSliceTest: {
                     activeSolidVisible: singleVisibleSolids === 1,
-                    activeBorderVisible: singleVisibleBorders === 1
+                    activeBorderVisible: singleVisibleBorders === 1,
+                    zeroRawToolpathsVisible: singleVisibleRawToolpaths === 0 // Green/yellow cube completely gone!
                 },
                 rangeModeTest: {
-                    rangeVisibleCount: rangeVisibleCount
+                    rangeVisibleCount: rangeVisibleCount,
+                    zeroRawToolpathsVisible: rangeVisibleRawToolpaths === 0 // Zero green/yellow cube!
+                },
+                traceSimulationTest: {
+                    startedSimulating: isSimulating,
+                    activeTraceToolpathDrawn: activeTraceToolpathVisible > 0,
+                    stoppedHidesToolpath: stoppedRawToolpathsVisible === 0
                 },
                 camLockPresent: isLockActive
             };
