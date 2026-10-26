@@ -838,6 +838,46 @@ export class CLEBedVisualizer {
     const THREE = window.THREE;
     if (!THREE) return;
 
+    // --- A-Axis 4th Axis Mode (Replaces Spoilboard) ---
+    if (this.bridge?.rotary && this.bridge.rotary.enabled) {
+      const rot = this.bridge.rotary;
+      // In A-Axis operations, spoilboard is NOT used and sits unmounted
+      const slab = this.bedGroup ? this.bedGroup.getObjectByName('CLE_Spoilboard_Slab') : null;
+      const topPlane = this.bedGroup ? this.bedGroup.getObjectByName('CLE_Bed_Top_Plane') : null;
+      if (slab) slab.visible = false;
+      if (topPlane) topPlane.visible = false;
+
+      // Center workpiece along the A-axis rotation centerline (Y=centerY, Z=zCenter)
+      let cy = 0, cz = 0;
+      let hasBox = false;
+      if (typeof app.scene.allBox === 'function') {
+        const box = app.scene.allBox();
+        if (box && isFinite(box.min.y)) {
+          cy = (box.min.y + box.max.y) / 2;
+          cz = (box.min.z + box.max.z) / 2;
+          hasBox = true;
+        }
+      }
+
+      const zCenter = rot.getZCenter(); // 45.10mm (45mm above bed table)
+      const yCenter = rot.centerY;       // 250mm
+      const deltaY = hasBox ? (yCenter - cy) : 0;
+      const deltaZ = hasBox ? (zCenter - cz) : zCenter;
+
+      app.scene.root.position.set(0, deltaY, deltaZ);
+      app.scene.root.updateMatrixWorld(true);
+      this.workpieceZ = zCenter;
+      this.requestRender();
+      console.log(`[CLE Bed] Workpiece centered on A-Axis rotation line: Y=${yCenter}mm, Z=${zCenter.toFixed(2)}mm (45mm above bed, spoilboard unmounted).`);
+      return;
+    }
+
+    // Restore spoilboard visibility if rotary is disabled
+    const slab = this.bedGroup ? this.bedGroup.getObjectByName('CLE_Spoilboard_Slab') : null;
+    const topPlane = this.bedGroup ? this.bedGroup.getObjectByName('CLE_Bed_Top_Plane') : null;
+    if (slab) slab.visible = true;
+    if (topPlane) topPlane.visible = true;
+
     const surfaceZ = 0.10 + (this.config.spoilboardThickness !== undefined ? this.config.spoilboardThickness : 20.0);
 
     // 1. Compute lowest Z coordinate of active CAD bodies

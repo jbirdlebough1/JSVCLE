@@ -53,6 +53,20 @@ export class CLEVault {
           spoilboardX: 600,
           spoilboardY: 500,
           spoilboardThickness: 20.0,
+          rotaryConfig: {
+            gearRatio: 5.0,
+            motorPulleyMm: 15.0,
+            chuckPulleyMm: 55.0,
+            stepsPerRev: 200,
+            microsteps: 16,
+            centerHeightMm: 45.0,
+            centerY: 250.0,
+            startX: 20.0,
+            stockDiameter: 50.0,
+            stockLength: 150.0,
+            zSafetyLimit: -5.0,
+            zClearance: 10.0
+          },
           cameraConfig: {
             permissionGranted: true,
             activeType: 'usb',

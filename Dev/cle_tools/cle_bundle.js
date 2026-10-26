@@ -1524,6 +1524,9 @@ class CLEFluidNCClient {
       if (this.bridge.bed) {
         this.bridge.bed.updateToolCursor(this.wpos);
       }
+      if (this.bridge.rotary && this.bridge.rotary.enabled && isFinite(this.wpos.A)) {
+        this.bridge.rotary.setAngle(this.wpos.A);
+      }
 
       if (this.isStreaming && this.bridge.recovery) {
         this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
@@ -1595,11 +1598,14 @@ class CLEFluidNCClient {
         // Enforce Bed and Limit-Switch Clearance
         if (axis === 'Z') {
           const targetZ = this.wpos.Z + delta;
-          if (targetZ < sl.minZ) {
-            // Hard clamp: Never plunge below +0.1mm above bed
-            const allowed = Math.max(0, sl.minZ - this.wpos.Z);
+          const minZBound = (this.bridge.rotary && this.bridge.rotary.enabled)
+            ? Math.max(sl.minZ, this.bridge.rotary.getZBot())
+            : sl.minZ;
+          if (targetZ < minZBound) {
+            // Hard clamp: Never plunge below bed or A-axis -5mm safety boundary
+            const allowed = Math.max(0, minZBound - this.wpos.Z);
             if (allowed <= 0.001) {
-              this.bridge.notify(`Soft-Limit: Z clamped at +${sl.minZ}mm (bed safety)`, 'error');
+              this.bridge.notify(`Soft-Limit: Z clamped at +${minZBound.toFixed(2)}mm (rotary safety boundary)`, 'error');
               continue;
             }
             clampedDeltas.Z = allowed.toFixed(3);
@@ -1900,108 +1906,518 @@ class CLEFluidNCClient {
 /* --- Module: cle_rotary.js --- */
 /**
  * CLEJS - 4th Axis Rotary (A-Axis) Engine & Three.js Visualizer
- * Real-time continuous cylindrical coordinate transforms and Three.js scene augmentation
+ * TwoTrees TTC6050 / TTC450 4th Axis Kit Integration
+ * Turning Mode (RPM & deg/s), Settable Gear Ratio (5:1 default), Center Y & Z=45mm Mounting,
+ * -5mm Safety Floor Boundary, Radial 3D Rotation, and Top-Down Index Mode (CNC & Laser)
  */
 
 class CLERotaryEngine {
   constructor(bridge) {
     this.bridge = bridge;
     this.enabled = false;
-    this.stockDiameter = 50.0; // mm
-    this.stockLength = 150.0;   // mm
-    this.axisAlignment = 'X';   // Rotary axis parallel to X (typical for TTC6050 4th axis)
-    this.currentAngle = 0.0;    // degrees
-    this.cylinderMesh = null;
-    this.chuckMesh = null;
+
+    // --- Hardware & Pulley Specifications ---
+    // TwoTrees A-Axis Kit: NEMA17 (200 steps/rev, 1.8°), 15mm motor pulley, 55mm chuck pulley, 5:1 ratio default
+    this.gearRatio = 5.0;            // Settable reduction ratio (default 5:1; supports 4:1, 5:1, or custom)
+    this.motorPulleyMm = 15.0;       // Motor timing pulley diameter / pitch (15mm)
+    this.chuckPulleyMm = 55.0;       // Chuck spindle timing pulley diameter / pitch (55mm)
+    this.stepsPerRev = 200;          // NEMA17 standard full steps (1.8°/step)
+    this.microsteps = 16;            // FluidNC standard microstepping subdivision (16x)
+
+    // --- Mounting Dimensions & Centers ---
+    // A-Axis replaces the spoilboard and sits directly on the aluminum machine bed table (Z = +0.10mm)
+    this.centerHeightMm = 45.0;      // Center of A-axis rotation is 45.0mm from bed surface
+    this.centerY = 250.0;            // Center of chuck in Y (center of 500mm machine travel, settable)
+    this.startX = 20.0;              // Chuck face position along X-axis
+
+    // --- Stock Workpiece Dimensions ---
+    this.stockDiameter = 50.0;       // mm
+    this.stockLength = 150.0;        // mm
+
+    // --- Safety Boundaries ---
+    this.zSafetyLimit = -5.0;        // -5mm safety boundary below rotation axis (never plunge below this!)
+    this.zClearance = 10.0;          // mm safe retract clearance height above top of stock
+
+    // --- Live Motion State ---
+    this.currentAngle = 0.0;         // Current A-axis angle in degrees [0..360)
+    this.mode = 'index';             // 'index' | 'turning' | 'continuous'
+
+    // Turning Mode (Lathe Spindle Rotation)
+    this.isTurning = false;
+    this.turningRPM = 60.0;          // Rotations per minute
+    this.turningDegPerSec = 360.0;   // Degrees per second (RPM * 6)
+    this.turningDir = 1;             // +1 (CW) or -1 (CCW)
+    this._turningAnimId = null;
+
+    // Index Mode (Top-Down Multi-Sided Milling)
+    this.indexMode = '4-sided';      // '2-sided' | '4-sided' | '6-sided' | '8-sided' | 'custom'
+    this.customIndexStep = 15.0;     // degrees step for custom indexing
+    this.currentIndexIdx = 0;        // Active indexed facet index
+
+    // Three.js Subsystems
     this.rotaryGroup = null;
+    this.chuckJawsGroup = null;
+    this.cylinderMesh = null;
+    this.headstockMesh = null;
+    this.tailstockMesh = null;
+    this.axisLine = null;
+    this.safetyBoundaryMesh = null;
+    this.retractPlaneMesh = null;
   }
 
+  // --- Calculations ---
+
+  // Steps per degree formula: (stepsPerRev * microsteps * gearRatio) / 360
+  getStepsPerDegree() {
+    return (this.stepsPerRev * this.microsteps * this.gearRatio) / 360.0;
+  }
+
+  // Center of rotation in World Z (Aluminum bed is at Z = +0.10mm)
+  getZCenter() {
+    return 0.10 + this.centerHeightMm; // 45.10mm from world origin Z=0
+  }
+
+  // Safe retract clearance plane (Top of stock + clearance)
+  getZTop() {
+    const radius = this.stockDiameter / 2;
+    return this.getZCenter() + radius + this.zClearance;
+  }
+
+  // Lowest allowable cutting depth (-5mm safety boundary from centerline)
+  getZBot() {
+    return this.getZCenter() + this.zSafetyLimit; // 45.10 - 5.0 = 40.10mm
+  }
+
+  getWorldContainer() {
+    const app = window.app || window.xe;
+    if (!app) return null;
+    return (app.vp && (app.vp.scene || app.vp.world)) || (app.scene && app.scene.root ? app.scene.root.parent : null);
+  }
+
+  // --- Visualizer Initialization (Three.js Mechanical Assembly) ---
   initVisualizer() {
     const app = window.app || window.xe;
-    if (!app || !app.scene) {
-      console.warn('[CLE Rotary] Three.js scene not ready yet.');
+    const container = this.getWorldContainer();
+    if (!container) {
+      console.warn('[CLE Rotary] Three.js container not ready yet.');
+      return;
+    }
+
+    const THREE = window.THREE || (app.vp && app.vp.THREE) || null;
+    if (!THREE) {
+      console.warn('[CLE Rotary] THREE instance not found.');
       return;
     }
 
     if (this.rotaryGroup) {
-      app.scene.remove(this.rotaryGroup);
-    }
-
-    // Dynamic import Three if needed or use existing instance from app
-    const THREE = window.THREE || (app.vp && app.vp.THREE) || null;
-    if (!THREE) {
-      console.warn('[CLE Rotary] THREE instance not found on window or app.');
-      return;
+      if (this.rotaryGroup.parent) this.rotaryGroup.parent.remove(this.rotaryGroup);
+      this.disposeRotaryGroup();
     }
 
     this.rotaryGroup = new THREE.Group();
     this.rotaryGroup.name = 'CLE_Rotary_Subsystem';
 
-    // 1. Cylindrical Stock Material & Mesh
+    const zCenter = this.getZCenter();
+    const yCenter = this.centerY;
+    const startX = this.startX;
     const radius = this.stockDiameter / 2;
-    const geom = new THREE.CylinderGeometry(radius, radius, this.stockLength, 36, 1);
-    geom.rotateZ(Math.PI / 2); // Align with X axis
 
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0xd8af79, // Wood/wax amber tone
-      roughness: 0.6,
-      metalness: 0.1,
-      transparent: true,
-      opacity: 0.75,
-      wireframe: false
+    // 1. TwoTrees Aluminum Headstock Mounting Bracket (Clamped to aluminum bed table @ Z=0.10mm)
+    const baseW = 60.0;  // along X
+    const baseD = 110.0; // along Y
+    const baseH = this.centerHeightMm; // 45mm tall
+    const headstockBaseGeo = new THREE.BoxGeometry(baseW, baseD, baseH);
+    const headstockMat = new THREE.MeshStandardMaterial({
+      color: 0x1e293b, // Dark anodized industrial slate aluminum
+      metalness: 0.85,
+      roughness: 0.35
     });
-    this.cylinderMesh = new THREE.Mesh(geom, mat);
+    const headstockBase = new THREE.Mesh(headstockBaseGeo, headstockMat);
+    headstockBase.position.set(startX - 30, yCenter, 0.10 + baseH / 2);
+    this.rotaryGroup.add(headstockBase);
+
+    // 2. Stepper Motor Housing (NEMA 17: 42x42x40mm) with 15mm Pulley
+    const motorGeo = new THREE.BoxGeometry(40, 42, 42);
+    const motorMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.7, roughness: 0.4 });
+    const motorMesh = new THREE.Mesh(motorGeo, motorMat);
+    motorMesh.position.set(startX - 35, yCenter - 32, 0.10 + 22);
+    this.rotaryGroup.add(motorMesh);
+
+    // Motor 15mm timing pulley
+    const motorPulleyGeo = new THREE.CylinderGeometry(this.motorPulleyMm / 2, this.motorPulleyMm / 2, 12, 24);
+    motorPulleyGeo.rotateZ(Math.PI / 2);
+    const pulleyMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.9, roughness: 0.2 });
+    const motorPulley = new THREE.Mesh(motorPulleyGeo, pulleyMat);
+    motorPulley.position.set(startX - 10, yCenter - 32, 0.10 + 22);
+    this.rotaryGroup.add(motorPulley);
+
+    // 3. Spindle 55mm Timing Pulley & Enclosed Timing Belt
+    const chuckPulleyGeo = new THREE.CylinderGeometry(this.chuckPulleyMm / 2, this.chuckPulleyMm / 2, 10, 36);
+    chuckPulleyGeo.rotateZ(Math.PI / 2);
+    const chuckPulley = new THREE.Mesh(chuckPulleyGeo, pulleyMat);
+    chuckPulley.position.set(startX - 10, yCenter, zCenter);
+    this.rotaryGroup.add(chuckPulley);
+
+    // 4. Rotating 3-Jaw Self-Centering Chuck Assembly (Rotates with A-axis)
+    this.chuckJawsGroup = new THREE.Group();
+    this.chuckJawsGroup.position.set(startX, yCenter, zCenter);
+
+    // Chuck Main Body (Ø65mm steel cylinder, 25mm thick)
+    const chuckBodyGeo = new THREE.CylinderGeometry(32.5, 32.5, 25, 36);
+    chuckBodyGeo.rotateZ(Math.PI / 2);
+    chuckBodyGeo.translate(12.5, 0, 0);
+    const chuckSteelMat = new THREE.MeshStandardMaterial({
+      color: 0x475569, // Polished high-carbon lathe steel
+      metalness: 0.92,
+      roughness: 0.25
+    });
+    const chuckBody = new THREE.Mesh(chuckBodyGeo, chuckSteelMat);
+    this.chuckJawsGroup.add(chuckBody);
+
+    // Chuck Front Face Ring & Bore Hole (16mm through-bore)
+    const boreGeo = new THREE.CylinderGeometry(8, 8, 26, 24);
+    boreGeo.rotateZ(Math.PI / 2);
+    boreGeo.translate(13, 0, 0);
+    const boreMat = new THREE.MeshBasicMaterial({ color: 0x050505 });
+    const boreMesh = new THREE.Mesh(boreGeo, boreMat);
+    this.chuckJawsGroup.add(boreMesh);
+
+    // 3 Stepped Hardened Steel Jaws (120° apart)
+    const jawGeo = new THREE.BoxGeometry(16, 10, 14);
+    const jawMat = new THREE.MeshStandardMaterial({ color: 0xcfd8dc, metalness: 0.95, roughness: 0.2 });
+    for (let j = 0; j < 3; j++) {
+      const angle = (j * 120 * Math.PI) / 180;
+      const jaw = new THREE.Mesh(jawGeo, jawMat);
+      const rJaw = radius * 0.75;
+      jaw.position.set(28, Math.sin(angle) * rJaw, Math.cos(angle) * rJaw);
+      jaw.rotation.x = angle;
+      this.chuckJawsGroup.add(jaw);
+    }
+    this.rotaryGroup.add(this.chuckJawsGroup);
+
+    // 5. Cylindrical Stock Workpiece (Rotates with A-axis)
+    const stockGeo = new THREE.CylinderGeometry(radius, radius, this.stockLength, 36, 1);
+    stockGeo.rotateZ(Math.PI / 2);
+    stockGeo.translate(startX + 25 + this.stockLength / 2, yCenter, zCenter);
+    const stockMat = new THREE.MeshStandardMaterial({
+      color: 0xd97706, // Amber hardwood / brass stock appearance
+      roughness: 0.55,
+      metalness: 0.15,
+      transparent: true,
+      opacity: 0.45
+    });
+    this.cylinderMesh = new THREE.Mesh(stockGeo, stockMat);
+    this.cylinderMesh.name = 'CLE_Rotary_Stock';
     this.rotaryGroup.add(this.cylinderMesh);
 
-    // 2. Rotary 3-Jaw Chuck / Headstock Model Representation
-    const chuckGeom = new THREE.CylinderGeometry(radius * 1.3, radius * 1.3, 20, 24);
-    chuckGeom.rotateZ(Math.PI / 2);
-    chuckGeom.translate(-this.stockLength / 2 - 10, 0, 0);
-    const chuckMat = new THREE.MeshStandardMaterial({
-      color: 0x444f5a,
-      metalness: 0.8,
-      roughness: 0.3
+    // 6. Tailstock Assembly with 60° Rotating Live Center Point
+    const tailstockX = startX + 25 + this.stockLength;
+    const tailBaseGeo = new THREE.BoxGeometry(45, 90, baseH);
+    const tailBase = new THREE.Mesh(tailBaseGeo, headstockMat);
+    tailBase.position.set(tailstockX + 30, yCenter, 0.10 + baseH / 2);
+    this.rotaryGroup.add(tailBase);
+
+    // Live Center Quill & Conical Point
+    const centerConeGeo = new THREE.ConeGeometry(radius * 0.6, 20, 24);
+    centerConeGeo.rotateZ(Math.PI / 2);
+    centerConeGeo.translate(tailstockX + 5, yCenter, zCenter);
+    const centerCone = new THREE.Mesh(centerConeGeo, jawMat);
+    this.rotaryGroup.add(centerCone);
+
+    // 7. Center of Rotation Cyan Line (X-Axis through Y=centerY, Z=zCenter)
+    const lineVectors = [
+      new THREE.Vector3(startX - 20, yCenter, zCenter),
+      new THREE.Vector3(tailstockX + 45, yCenter, zCenter)
+    ];
+    const axisGeo = new THREE.BufferGeometry().setFromPoints(lineVectors);
+    const axisMat = new THREE.LineDashedMaterial({
+      color: 0x06b6d4, // Cyan rotation centerline
+      dashSize: 6,
+      gapSize: 4,
+      depthTest: false
     });
-    this.chuckMesh = new THREE.Mesh(chuckGeom, chuckMat);
-    this.rotaryGroup.add(this.chuckMesh);
+    this.axisLine = new THREE.Line(axisGeo, axisMat);
+    this.axisLine.computeLineDistances();
+    this.rotaryGroup.add(this.axisLine);
 
-    this.rotaryGroup.position.set(0, 0, 0);
+    // 8. Safety Floor Boundary Mesh at Zbot = zCenter - 5mm (-5mm Core Safety Limit)
+    const zBot = this.getZBot();
+    const safetyLimitGeo = new THREE.PlaneGeometry(this.stockLength + 40, this.stockDiameter + 20);
+    const safetyLimitMat = new THREE.MeshBasicMaterial({
+      color: 0xef4444, // Bright red/amber safety boundary
+      transparent: true,
+      opacity: 0.28,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    this.safetyBoundaryMesh = new THREE.Mesh(safetyLimitGeo, safetyLimitMat);
+    this.safetyBoundaryMesh.position.set(startX + 25 + this.stockLength / 2, yCenter, zBot);
+    this.safetyBoundaryMesh.name = 'CLE_Rotary_Safety_Floor';
+    this.rotaryGroup.add(this.safetyBoundaryMesh);
+
+    // Safety boundary border wireframe
+    const boundEdges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(safetyLimitGeo),
+      new THREE.LineBasicMaterial({ color: 0xdc2626, depthTest: false })
+    );
+    this.safetyBoundaryMesh.add(boundEdges);
+
+    // 9. Safe Retract Clearance Plane Wireframe at Ztop
+    const zTop = this.getZTop();
+    const retractGeo = new THREE.PlaneGeometry(this.stockLength + 40, this.stockDiameter + 30);
+    const retractMat = new THREE.MeshBasicMaterial({
+      color: 0x10b981, // Emerald green clearance plane
+      transparent: true,
+      opacity: 0.18,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    this.retractPlaneMesh = new THREE.Mesh(retractGeo, retractMat);
+    this.retractPlaneMesh.position.set(startX + 25 + this.stockLength / 2, yCenter, zTop);
+    this.rotaryGroup.add(this.retractPlaneMesh);
+
     this.rotaryGroup.visible = this.enabled;
-    app.scene.add(this.rotaryGroup);
+    if (container && container.add) {
+      container.add(this.rotaryGroup);
+    }
 
-    console.log('[CLE Rotary] 4th-axis visualizer initialized in Three.js scene.');
+    console.log(`[CLE Rotary] TwoTrees 4th-Axis visualizer mounted: Center Y=${yCenter}mm, Z=${zCenter.toFixed(2)}mm (45mm above bed), Zbot=${zBot.toFixed(2)}mm, Ztop=${zTop.toFixed(2)}mm.`);
   }
 
+  // --- Toggle 4th Axis On / Off ---
   toggle(enabled) {
-    this.enabled = enabled !== undefined ? enabled : !this.enabled;
-    if (this.rotaryGroup) {
-      this.rotaryGroup.visible = this.enabled;
-    } else if (this.enabled) {
+    this.enabled = (enabled !== undefined) ? enabled : !this.enabled;
+
+    if (!this.rotaryGroup && this.enabled) {
       this.initVisualizer();
     }
-    const btn = document.getElementById('cle-rotary-toggle');
-    if (btn) btn.classList.toggle('active', this.enabled);
-    this.bridge.notify(`4th Axis (Rotary): ${this.enabled ? 'ENABLED' : 'DISABLED'}`);
+    if (this.rotaryGroup) {
+      this.rotaryGroup.visible = this.enabled;
+    }
+
+    // In A-Axis Mode: Spoilboard is NOT used and is unmounted/hidden!
+    if (this.bridge?.bed) {
+      if (this.enabled) {
+        if (this.bridge.bed.spoilboardMesh) this.bridge.bed.spoilboardMesh.visible = false;
+        if (this.bridge.bed.bedTopPlane) this.bridge.bed.bedTopPlane.visible = false;
+      } else {
+        if (this.bridge.bed.spoilboardMesh) this.bridge.bed.spoilboardMesh.visible = true;
+        if (this.bridge.bed.bedTopPlane) this.bridge.bed.bedTopPlane.visible = true;
+      }
+      this.bridge.bed.sitWorkpieceOnSpoilboard();
+    }
+
+    const btn = document.getElementById('cle-r-rotary');
+    if (btn) btn.classList.toggle('pressed', this.enabled);
+
+    this.bridge.notify(
+      `4th Axis Rotary (A): ${this.enabled ? 'ACTIVE (Spoilboard replaced; center Y=' + this.centerY + 'mm, Z=' + this.centerHeightMm + 'mm)' : 'DISABLED (Spoilboard restored)'}`,
+      this.enabled ? 'ok' : 'info'
+    );
+
+    const app = window.app || window.xe;
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
   }
 
+  // --- Configure Mounting Position & Center of Chuck ---
+  setMountingPosition(centerY, centerHeight = 45.0, startX = 20.0) {
+    if (isFinite(centerY)) this.centerY = parseFloat(centerY);
+    if (isFinite(centerHeight)) this.centerHeightMm = parseFloat(centerHeight);
+    if (isFinite(startX)) this.startX = parseFloat(startX);
+
+    if (this.enabled) {
+      this.initVisualizer();
+      if (this.bridge?.bed) this.bridge.bed.sitWorkpieceOnSpoilboard();
+    }
+    this.bridge.notify(`Rotary Mounted at Y=${this.centerY}mm, Center Height=${this.centerHeightMm}mm, X=${this.startX}mm.`, 'ok');
+  }
+
+  // --- Configure Gear / Pulley Ratio ---
+  setGearRatio(ratio, motorPulley = 15.0, chuckPulley = 55.0) {
+    this.gearRatio = parseFloat(ratio) || 5.0;
+    this.motorPulleyMm = parseFloat(motorPulley) || 15.0;
+    this.chuckPulleyMm = parseFloat(chuckPulley) || 55.0;
+
+    const spd = this.getStepsPerDegree();
+    this.bridge.notify(`Rotary Ratio: ${this.gearRatio}:1 (${this.motorPulleyMm}mm/${this.chuckPulleyMm}mm pulleys) &rarr; ${spd.toFixed(3)} steps/degree.`, 'ok');
+  }
+
+  // --- Stock Dimensions ---
   setStockDimensions(diameter, length) {
     this.stockDiameter = parseFloat(diameter) || 50.0;
     this.stockLength = parseFloat(length) || 150.0;
-    this.initVisualizer();
-    this.bridge.notify(`Rotary Stock: Ø${this.stockDiameter}mm × ${this.stockLength}mm`);
+    if (this.enabled) {
+      this.initVisualizer();
+    }
+    this.bridge.notify(`Rotary Stock: Ø${this.stockDiameter}mm × ${this.stockLength}mm (Ztop=${this.getZTop().toFixed(1)}mm, Zbot=${this.getZBot().toFixed(1)}mm).`);
   }
 
-  updateAngle(angleDegrees) {
-    this.currentAngle = angleDegrees;
-    if (this.cylinderMesh) {
-      // Rotate around X axis
-      const rad = (angleDegrees * Math.PI) / 180;
-      this.cylinderMesh.rotation.x = rad;
+  // --- Radial Object Rotation in 3D Scene ---
+  // Rotates the workpiece CAD bodies radially around the A-axis centerline (Y=centerY, Z=zCenter)
+  rotateWorkpieceRadially(rad) {
+    const app = window.app || window.xe;
+    if (!app || !app.scene) return;
+
+    if (app.scene.views && app.scene.views.size > 0) {
+      for (const [id, view] of app.scene.views) {
+        if (view.group) {
+          view.group.rotation.x = rad;
+          view.group.updateMatrixWorld(true);
+        } else if (view.mesh) {
+          view.mesh.rotation.x = rad;
+          view.mesh.updateMatrixWorld(true);
+        }
+      }
+    } else if (app.scene.root) {
+      app.scene.root.rotation.x = rad;
+      app.scene.root.updateMatrixWorld(true);
     }
   }
 
-  // --- Coordinate Transformation Logic ---
-  // Converts flat Y mm into A rotational degrees based on diameter
+  // Set absolute angle of A axis [0..360)
+  setAngle(angleDeg) {
+    this.currentAngle = ((angleDeg % 360) + 360) % 360;
+    const rad = (this.currentAngle * Math.PI) / 180;
+
+    // 1. Rotate chuck and stock mesh in rotary visualizer
+    if (this.chuckJawsGroup) {
+      this.chuckJawsGroup.rotation.x = rad;
+    }
+    if (this.cylinderMesh) {
+      this.cylinderMesh.rotation.x = rad;
+    }
+
+    // 2. Rotate workpiece CAD bodies radially around A-axis centerline
+    this.rotateWorkpieceRadially(rad);
+
+    // 3. Update DRO in UI
+    const droA = document.getElementById('cle-dro-a');
+    if (droA) droA.textContent = this.currentAngle.toFixed(1);
+    const manDroA = document.getElementById('cle-man-dro-a');
+    if (manDroA) manDroA.textContent = this.currentAngle.toFixed(1);
+
+    const app = window.app || window.xe;
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
+  }
+
+  // --- Turning Mode (Lathe Continuous Spindle Rotation) ---
+  toggleTurning(rpm) {
+    if (this.isTurning) this.stopTurning();
+    else this.startTurning(rpm || this.turningRPM);
+  }
+
+  startTurning(rpm = 60.0, dir = 1) {
+    if (!this.enabled) this.toggle(true);
+
+    this.isTurning = true;
+    this.mode = 'turning';
+    this.turningRPM = parseFloat(rpm) || 60.0;
+    this.turningDegPerSec = this.turningRPM * 6.0; // 360 deg in (60/RPM) sec -> RPM * 6 deg/s
+    this.turningDir = dir >= 0 ? 1 : -1;
+    let lastTime = performance.now();
+
+    const loop = (now) => {
+      if (!this.isTurning) return;
+      const dt = (now - lastTime) / 1000.0;
+      lastTime = now;
+      const deltaDeg = this.turningDegPerSec * dt * this.turningDir;
+      this.setAngle(this.currentAngle + deltaDeg);
+      this._turningAnimId = requestAnimationFrame(loop);
+    };
+
+    if (this._turningAnimId) cancelAnimationFrame(this._turningAnimId);
+    this._turningAnimId = requestAnimationFrame(loop);
+
+    // If connected to FluidNC, start continuous rotary rotation
+    if (this.bridge?.fluidnc?.isConnected) {
+      const feed = Math.round(this.turningRPM * 360); // deg/min
+      const targetA = this.turningDir > 0 ? 999999 : -999999;
+      this.bridge.fluidnc.sendImmediate(`$J=G91 G21 A${targetA} F${feed}`);
+    }
+
+    const tBtn = document.getElementById('cle-r-turning');
+    if (tBtn) tBtn.classList.add('pressed');
+
+    this.bridge.notify(`Turning Mode: RUNNING (${this.turningRPM} RPM | ${this.turningDegPerSec.toFixed(0)}°/s)`, 'ok');
+  }
+
+  stopTurning() {
+    this.isTurning = false;
+    if (this._turningAnimId) {
+      cancelAnimationFrame(this._turningAnimId);
+      this._turningAnimId = null;
+    }
+
+    if (this.bridge?.fluidnc?.isConnected) {
+      this.bridge.fluidnc.sendImmediate('\x85'); // FluidNC Jog Cancel
+    }
+
+    const tBtn = document.getElementById('cle-r-turning');
+    if (tBtn) tBtn.classList.remove('pressed');
+
+    this.bridge.notify('Turning Mode: STOPPED', 'info');
+  }
+
+  // --- Index Mode (Top-Down Multi-Sided Milling) ---
+  getIndexAngles() {
+    switch (this.indexMode) {
+      case '2-sided': return [0, 180];
+      case '4-sided': return [0, 90, 180, 270];
+      case '6-sided': return [0, 60, 120, 180, 240, 300];
+      case '8-sided': return [0, 45, 90, 135, 180, 225, 270, 315];
+      case 'custom': {
+        const step = Math.max(1, this.customIndexStep || 15);
+        const angles = [];
+        for (let a = 0; a < 360; a += step) angles.push(a);
+        return angles;
+      }
+      default: return [0, 90, 180, 270];
+    }
+  }
+
+  setIndexMode(mode, customStep = 15.0) {
+    if (!this.enabled) this.toggle(true);
+    this.mode = 'index';
+    this.indexMode = mode;
+    if (customStep) this.customIndexStep = parseFloat(customStep);
+    this.currentIndexIdx = 0;
+    const angles = this.getIndexAngles();
+    this.setIndexAngle(angles[0]);
+    this.bridge.notify(`A-Axis Index Mode: ${mode.toUpperCase()} (${angles.length} facets: ${angles.join('°, ')}°)`, 'info');
+  }
+
+  setIndexAngle(angleDeg) {
+    this.setAngle(angleDeg);
+    if (this.bridge?.fluidnc?.isConnected) {
+      this.bridge.fluidnc.sendGCode(`G90 G0 A${angleDeg.toFixed(3)}`);
+    }
+  }
+
+  nextIndex() {
+    if (!this.enabled) this.toggle(true);
+    const angles = this.getIndexAngles();
+    this.currentIndexIdx = (this.currentIndexIdx + 1) % angles.length;
+    this.setIndexAngle(angles[this.currentIndexIdx]);
+    this.bridge.notify(`Indexed to Facet ${this.currentIndexIdx + 1}/${angles.length} (A=${angles[this.currentIndexIdx]}°) [Top-Down Cut]`, 'ok');
+  }
+
+  prevIndex() {
+    if (!this.enabled) this.toggle(true);
+    const angles = this.getIndexAngles();
+    this.currentIndexIdx = (this.currentIndexIdx - 1 + angles.length) % angles.length;
+    this.setIndexAngle(angles[this.currentIndexIdx]);
+    this.bridge.notify(`Indexed to Facet ${this.currentIndexIdx + 1}/${angles.length} (A=${angles[this.currentIndexIdx]}°) [Top-Down Cut]`, 'ok');
+  }
+
+  // --- Coordinate Transformation & G-Code Helpers ---
+
+  // Converts flat Y mm into A rotational degrees based on stock diameter
   yToRotaryDegrees(yMm) {
     const circumference = Math.PI * this.stockDiameter;
     return (yMm / circumference) * 360.0;
@@ -2012,13 +2428,16 @@ class CLERotaryEngine {
     return (aDeg / 360.0) * circumference;
   }
 
-  // Wraps standard planar G-Code into 4th Axis Rotary G-Code
+  // Wraps planar G-Code into 4th Axis Rotary G-Code (Y &rarr; A)
   wrapPlanarGCodeToRotary(gcodeText) {
     const lines = gcodeText.split('\n');
     const out = [];
-    out.push(`; --- CLEJS 4th Axis Wrapped (Stock Diameter: ${this.stockDiameter}mm) ---`);
-    out.push('G90 G21 ; Absolute programming, mm');
-    out.push('G92 A0 ; Set A0 at start');
+    out.push(`; --- CLEJS TwoTrees 4th Axis Rotary (A) Wrapped Toolpath ---`);
+    out.push(`; Ratio: ${this.gearRatio}:1, Steps/deg: ${this.getStepsPerDegree().toFixed(3)}`);
+    out.push(`; Mount: Y=${this.centerY}mm, Center Height=${this.centerHeightMm}mm from bed`);
+    out.push(`; Safety: Ztop=${this.getZTop().toFixed(2)}mm, Zbot=${this.getZBot().toFixed(2)}mm (-5mm limit)`);
+    out.push('G90 G21 ; Absolute programming, millimeters');
+    out.push('G92 A0 ; Set A0 at chuck reference');
 
     const yPattern = /([Yy])(-?\d+\.?\d*)/;
 
@@ -2035,8 +2454,81 @@ class CLERotaryEngine {
     }
     return out.join('\n');
   }
-}
 
+  // Generates complete Multi-Sided Index Mode G-Code from sliced layers
+  generateIndexedGCode(slicedLayers, options = {}) {
+    const angles = this.getIndexAngles();
+    const zTop = this.getZTop();
+    const zBot = this.getZBot();
+    const feed = options.feedRate || 1800;
+    const plunge = options.plungeRate || 350;
+    const rpm = options.rpm || 12000;
+
+    const out = [];
+    out.push('; === CLEJS A-AXIS MULTI-SIDED INDEXED TOOLPATH ===');
+    out.push(`; Index Mode: ${this.indexMode} (${angles.length} Facets: ${angles.join('°, ')}°)`);
+    out.push(`; Center of Chuck: Y=${this.centerY.toFixed(2)}mm, Z_center=${this.getZCenter().toFixed(2)}mm (45mm above bed)`);
+    out.push(`; Safety Clearance: Ztop=${zTop.toFixed(2)}mm, Safety Floor Limit: Zbot=${zBot.toFixed(2)}mm (-5mm core limit)`);
+    out.push(`; Stepper: 200 steps/rev, 16x microstep, ${this.gearRatio}:1 ratio &rarr; ${this.getStepsPerDegree().toFixed(3)} steps/deg`);
+    out.push('G21 ; mm mode');
+    out.push('G90 ; Absolute coordinates');
+    out.push(`M3 S${rpm} ; Spindle ON`);
+    out.push(`G0 Z${zTop.toFixed(2)} F2000 ; Rapid to safe clearance plane`);
+
+    for (let fIdx = 0; fIdx < angles.length; fIdx++) {
+      const angle = angles[fIdx];
+      out.push(`\n; ======================================================`);
+      out.push(`; --- FACET ${fIdx + 1}/${angles.length}: A = ${angle.toFixed(1)}° (Top-Down CNC Milling) ---`);
+      out.push(`; ======================================================`);
+      out.push(`G0 Z${zTop.toFixed(2)} ; Ensure tool is at safe clearance before rotating A`);
+      out.push(`G0 A${angle.toFixed(3)} F3000 ; Rotate 4th axis to face ${fIdx + 1}`);
+
+      // Generate top-down carving passes for this face
+      const faceLayers = slicedLayers || [];
+      for (let l = 0; l < faceLayers.length; l++) {
+        const layer = faceLayers[l];
+        const passZ = Math.max(zBot, layer.z !== undefined ? layer.z : zBot);
+        out.push(`; Pass ${l + 1}/${faceLayers.length} (Z=${passZ.toFixed(2)}mm)`);
+        out.push(`G0 X${(layer.points && layer.points[0] ? layer.points[0].x : this.startX).toFixed(2)} Y${this.centerY.toFixed(2)}`);
+        out.push(`G1 Z${passZ.toFixed(2)} F${plunge} ; Plunge to pass depth`);
+
+        if (layer.points && layer.points.length > 0) {
+          for (const pt of layer.points) {
+            out.push(`G1 X${pt.x.toFixed(2)} Y${pt.y.toFixed(2)} F${feed}`);
+          }
+        }
+      }
+      out.push(`G0 Z${zTop.toFixed(2)} ; Retract to safe clearance`);
+    }
+
+    out.push('\n; === FINISH JOB ===');
+    out.push(`G0 Z${zTop.toFixed(2)}`);
+    out.push('G0 A0.000 F3000 ; Return A to 0');
+    out.push('M5 ; Spindle OFF');
+    out.push('M2 ; Program End');
+
+    return out.join('\n');
+  }
+
+  // Safely dispose Three.js geometries & materials
+  disposeRotaryGroup() {
+    if (!this.rotaryGroup) return;
+    this.rotaryGroup.traverse(obj => {
+      if (obj.geometry) {
+        try { obj.geometry.dispose(); } catch (e) {}
+      }
+      if (obj.material) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach(m => {
+          try { m.dispose(); } catch (e) {}
+        });
+      }
+    });
+    this.rotaryGroup = null;
+    this.chuckJawsGroup = null;
+    this.cylinderMesh = null;
+  }
+}
 
 /* --- Module: cle_calibration.js --- */
 /**
@@ -2192,6 +2684,20 @@ class CLEVault {
           spoilboardX: 600,
           spoilboardY: 500,
           spoilboardThickness: 20.0,
+          rotaryConfig: {
+            gearRatio: 5.0,
+            motorPulleyMm: 15.0,
+            chuckPulleyMm: 55.0,
+            stepsPerRev: 200,
+            microsteps: 16,
+            centerHeightMm: 45.0,
+            centerY: 250.0,
+            startX: 20.0,
+            stockDiameter: 50.0,
+            stockLength: 150.0,
+            zSafetyLimit: -5.0,
+            zClearance: 10.0
+          },
           cameraConfig: {
             permissionGranted: true,
             activeType: 'usb',
@@ -3381,7 +3887,52 @@ class CLESlicerEngine {
     const numLayers = Math.max(1, Math.ceil(totalHeight / layerH));
     const lines = [];
 
-    const isTopDown = (mode === 'cnc' || mode === 'laser');
+    const isTopDown = (mode === 'cnc' || mode === 'laser' || mode === 'rotary');
+
+    // --- TwoTrees 4th Axis Rotary (A) & Turning Mode ---
+    if (mode === 'rotary') {
+      const rot = this.bridge?.rotary;
+      const zTop = rot ? rot.getZTop() : (maxZ + 15);
+      const zBot = rot ? rot.getZBot() : minZ;
+      const angles = rot ? rot.getIndexAngles() : [0, 90, 180, 270];
+
+      lines.push('; === TwoTrees 4th Axis Rotary (A) Index / Turning Toolpath ===');
+      lines.push(`; Ratio: ${rot ? rot.gearRatio : 5}:1 (${rot ? rot.motorPulleyMm : 15}mm/${rot ? rot.chuckPulleyMm : 55}mm pulleys)`);
+      lines.push(`; Center of Chuck: Y=${rot ? rot.centerY : 250}mm, Z_center=${rot ? rot.getZCenter().toFixed(2) : 45.1}mm`);
+      lines.push(`; Safety Floor: Zbot=${zBot.toFixed(2)}mm (-5mm limit), Retract: Ztop=${zTop.toFixed(2)}mm`);
+      lines.push('G21 ; mm mode');
+      lines.push('G90 ; Absolute coordinates');
+      lines.push(`M3 S${this.spindleRPM} ; Spindle ON`);
+      lines.push(`G0 Z${zTop.toFixed(2)} F2000 ; Safe clearance retract`);
+
+      // Top-Down Milling for each indexed face (CNC & Laser only cut top-down)
+      const passesPerFace = Math.max(1, Math.ceil((zTop - zBot) / (layerH * 2)));
+      let layerCounter = 0;
+
+      for (let fIdx = 0; fIdx < angles.length; fIdx++) {
+        const angle = angles[fIdx];
+        lines.push(`\n; --- A-AXIS INDEXED FACE ${fIdx + 1}/${angles.length}: A=${angle.toFixed(1)}° ---`);
+        lines.push(`G0 Z${zTop.toFixed(2)} ; Clearance retract before rotating A`);
+        lines.push(`G0 A${angle.toFixed(3)} F3000 ; Rotate 4th axis to face ${fIdx + 1}`);
+        lines.push(`G0 X${minX.toFixed(2)} Y${(rot ? rot.centerY : minY).toFixed(2)}`);
+
+        for (let k = 0; k < passesPerFace; k++) {
+          const passZ = Math.max(zBot, (zTop - (k + 1) * layerH * 2));
+          lines.push(`; --- LAYER: ${layerCounter++} (Z=${passZ.toFixed(2)}, A=${angle.toFixed(1)}) ---`);
+          lines.push(`G1 Z${passZ.toFixed(2)} F300 ; Plunge to pass depth`);
+          lines.push(`G1 X${maxX.toFixed(2)} Y${maxY.toFixed(2)} A${angle.toFixed(3)} F${this.feedRate}`);
+          lines.push(`G1 X${maxX.toFixed(2)} Y${minY.toFixed(2)} A${angle.toFixed(3)}`);
+          lines.push(`G1 X${minX.toFixed(2)} Y${minY.toFixed(2)} A${angle.toFixed(3)}`);
+          lines.push(`G1 X${minX.toFixed(2)} Y${maxY.toFixed(2)} A${angle.toFixed(3)}`);
+          lines.push(`G0 Z${(passZ + 1.5).toFixed(2)} F1000 ; Step retract`);
+        }
+      }
+      lines.push(`G0 Z${zTop.toFixed(2)}`);
+      lines.push('G0 A0.000 F3000');
+      lines.push('M5 ; Spindle OFF');
+      lines.push('G0 X0 Y0 F3000');
+      return lines.join('\n');
+    }
 
     lines.push(`; === CLEJS Native Slicer Toolpath ===`);
     lines.push(`; Device Mode: ${mode.toUpperCase()} (${isTopDown ? 'Top-Down Cutting Order' : 'Bottom-Up Additive Order'})`);
@@ -3495,7 +4046,7 @@ class CLESlicerEngine {
     this.slicedLayers = [];
     const lines = gcodeText.split('\n');
     let currentLayer = null; // Do not create phantom layer before first LAYER header!
-    let curX = 0, curY = 0, curZ = 0;
+    let curX = 0, curY = 0, curZ = 0, curA = 0;
 
     for (const raw of lines) {
       const line = raw.trim();
@@ -3518,18 +4069,22 @@ class CLESlicerEngine {
           this.slicedLayers.push(currentLayer);
         }
         const matchZ = line.match(/Z=([-\d.]+)/i);
+        const matchA = line.match(/A=([-\d.]+)/i);
         const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
-        currentLayer = { index: this.slicedLayers.length, z: lZ, points: [], isCutoutPass: false };
+        if (matchA) curA = parseFloat(matchA[1]);
+        currentLayer = { index: this.slicedLayers.length, z: lZ, a: curA, points: [], isCutoutPass: false };
         continue;
       }
 
       const matchX = line.match(/[Xx](-?\d+\.?\d*)/);
       const matchY = line.match(/[Yy](-?\d+\.?\d*)/);
       const matchZ = line.match(/[Zz](-?\d+\.?\d*)/);
+      const matchA = line.match(/[Aa](-?\d+\.?\d*)/);
 
       if (matchX) curX = parseFloat(matchX[1]);
       if (matchY) curY = parseFloat(matchY[1]);
       if (matchZ) curZ = parseFloat(matchZ[1]);
+      if (matchA) curA = parseFloat(matchA[1]);
 
       // Move commands (G0 = Rapid, G1/G2/G3 = Cutting Feed)
       if (line.startsWith('G0') || line.startsWith('G1') || line.startsWith('G2') || line.startsWith('G3')) {
@@ -3538,7 +4093,7 @@ class CLESlicerEngine {
           // Preamble moves before any layer (safe clearance plane, etc.)
           continue;
         }
-        currentLayer.points.push({ x: curX, y: curY, z: curZ, isRapid });
+        currentLayer.points.push({ x: curX, y: curY, z: curZ, a: curA, isRapid });
       }
     }
 
@@ -5209,6 +5764,9 @@ class CLESlicerEngine {
       if (pt && this.bridge.bed) {
         this.bridge.bed.updateToolCursor({ X: pt.x, Y: pt.y, Z: layer.z, A: pt.a || 0 });
       }
+      if (pt && this.bridge.rotary && pt.a !== undefined) {
+        this.bridge.rotary.setAngle(pt.a);
+      }
 
       // Update HUD status label with live coordinates
       if (hudLabel && pt) {
@@ -6444,6 +7002,46 @@ class CLEBedVisualizer {
     const THREE = window.THREE;
     if (!THREE) return;
 
+    // --- A-Axis 4th Axis Mode (Replaces Spoilboard) ---
+    if (this.bridge?.rotary && this.bridge.rotary.enabled) {
+      const rot = this.bridge.rotary;
+      // In A-Axis operations, spoilboard is NOT used and sits unmounted
+      const slab = this.bedGroup ? this.bedGroup.getObjectByName('CLE_Spoilboard_Slab') : null;
+      const topPlane = this.bedGroup ? this.bedGroup.getObjectByName('CLE_Bed_Top_Plane') : null;
+      if (slab) slab.visible = false;
+      if (topPlane) topPlane.visible = false;
+
+      // Center workpiece along the A-axis rotation centerline (Y=centerY, Z=zCenter)
+      let cy = 0, cz = 0;
+      let hasBox = false;
+      if (typeof app.scene.allBox === 'function') {
+        const box = app.scene.allBox();
+        if (box && isFinite(box.min.y)) {
+          cy = (box.min.y + box.max.y) / 2;
+          cz = (box.min.z + box.max.z) / 2;
+          hasBox = true;
+        }
+      }
+
+      const zCenter = rot.getZCenter(); // 45.10mm (45mm above bed table)
+      const yCenter = rot.centerY;       // 250mm
+      const deltaY = hasBox ? (yCenter - cy) : 0;
+      const deltaZ = hasBox ? (zCenter - cz) : zCenter;
+
+      app.scene.root.position.set(0, deltaY, deltaZ);
+      app.scene.root.updateMatrixWorld(true);
+      this.workpieceZ = zCenter;
+      this.requestRender();
+      console.log(`[CLE Bed] Workpiece centered on A-Axis rotation line: Y=${yCenter}mm, Z=${zCenter.toFixed(2)}mm (45mm above bed, spoilboard unmounted).`);
+      return;
+    }
+
+    // Restore spoilboard visibility if rotary is disabled
+    const slab = this.bedGroup ? this.bedGroup.getObjectByName('CLE_Spoilboard_Slab') : null;
+    const topPlane = this.bedGroup ? this.bedGroup.getObjectByName('CLE_Bed_Top_Plane') : null;
+    if (slab) slab.visible = true;
+    if (topPlane) topPlane.visible = true;
+
     const surfaceZ = 0.10 + (this.config.spoilboardThickness !== undefined ? this.config.spoilboardThickness : 20.0);
 
     // 1. Compute lowest Z coordinate of active CAD bodies
@@ -6732,6 +7330,20 @@ class CLEBridge {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
       if (this.bed) this.bed.init();
       if (this.slicer) this.slicer.init();
+      const mach = this.vault?.getActiveMachine();
+      if (mach?.rotaryConfig && this.rotary) {
+        const rc = mach.rotaryConfig;
+        if (rc.gearRatio) this.rotary.gearRatio = rc.gearRatio;
+        if (rc.motorPulleyMm) this.rotary.motorPulleyMm = rc.motorPulleyMm;
+        if (rc.chuckPulleyMm) this.rotary.chuckPulleyMm = rc.chuckPulleyMm;
+        if (rc.centerHeightMm) this.rotary.centerHeightMm = rc.centerHeightMm;
+        if (rc.centerY) this.rotary.centerY = rc.centerY;
+        if (rc.startX) this.rotary.startX = rc.startX;
+        if (rc.stockDiameter) this.rotary.stockDiameter = rc.stockDiameter;
+        if (rc.stockLength) this.rotary.stockLength = rc.stockLength;
+        if (rc.zSafetyLimit !== undefined) this.rotary.zSafetyLimit = rc.zSafetyLimit;
+        if (rc.zClearance !== undefined) this.rotary.zClearance = rc.zClearance;
+      }
       if (this.camera && !this.camera.isActive) {
         this.camera.autoStartIfAvailable(true);
       }
@@ -6878,7 +7490,9 @@ class CLEBridge {
     // 3. 4th Axis & Slicer
     m("Rotary & Slicer", "", [
       { id: "cle-r-rotary", label: "4th Axis (A)", title: "Toggle 4th Axis Rotary Chuck & Cylindrical Stock in 3D View", icon: "lathe", pressed: this.rotary.enabled, fn: () => this.rotary.toggle() },
-      { id: "cle-r-rot-a", label: "Rotate A 90°", title: "Rotate Object 90° around A-Axis (X) for 4th Axis Rotary Mill", icon: "revolve", fn: () => { if (this.bed) this.bed.rotateWorkpiece('X', 90); } },
+      { id: "cle-r-rot-setup", label: "A-Axis Setup", title: "TwoTrees Rotary Setup: Gear Ratio (5:1), Pulley, Center Y, Z=45mm & Safety", icon: "features", fn: () => this.openModal("rotary") },
+      { id: "cle-r-turning", label: "Turning", title: "Lathe Continuous Spindle Turning (RPM & Deg/s)", icon: "motion", pressed: this.rotary.isTurning, fn: () => this.rotary.toggleTurning() },
+      { id: "cle-r-index", label: "Index Next", title: "Index A-Axis to Next Facet (Top-Down Milling)", icon: "revolve", fn: () => this.rotary.nextIndex() },
       { id: "cle-r-slicer", label: "Slice & 3D Stack", title: "Slice Model (Top-Down for CNC/Laser, Bottom-Up for 3D) & Display in Visualizer", icon: "printer3d", fn: () => this.openModal("slicer") }
     ]);
 
@@ -7580,6 +8194,7 @@ class CLEBridge {
           <label>Target Machine & Slicing Order:</label>
           <select class="cle-select" id="slice-mode">
             <option value="cnc" ${this.slicer.mode==='cnc'?'selected':''}>CNC Milling / Carving (${this.machineName}) &mdash; TOP-DOWN passes</option>
+            <option value="rotary" ${this.slicer.mode==='rotary'?'selected':''}>TwoTrees 4th Axis Rotary (A) & Turning &mdash; TOP-DOWN Multi-Sided Index / Lathe</option>
             <option value="laser" ${this.slicer.mode==='laser'?'selected':''}>Diode Laser Vector & Engraving &mdash; TOP-DOWN passes</option>
             <option value="3d" ${this.slicer.mode==='3d'?'selected':''}>3D Additive Print Sim &mdash; BOTTOM-UP layers</option>
           </select>
@@ -7696,6 +8311,140 @@ class CLEBridge {
         <div style="margin-top:14px; display:flex; gap:10px;">
           <button class="cle-btn" id="slice-run-btn" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Slice & Display in 3D Viewport</button>
           <button class="cle-btn" id="slice-return-btn" style="background:#2563eb; color:#fff; padding:8px 18px; font-weight:700;" title="Return to JumpStart CAD Design Workspace">Return to Design</button>
+        </div>
+      `;
+    } else if (type === 'rotary') {
+      title = 'TwoTrees 4th Axis Rotary (A) & Turning Setup';
+      const rot = this.rotary;
+      const spd = rot.getStepsPerDegree();
+
+      bodyHtml = `
+        <div style="background:rgba(217, 119, 6, 0.12); border-left:4px solid #d97706; padding:8px 12px; border-radius:4px; margin-bottom:12px; font-size:12px;">
+          <strong>TwoTrees TTC6050 / TTC450 4th Axis Kit:</strong> Center of rotation is <strong>${rot.centerHeightMm.toFixed(1)}mm from aluminum bed</strong>.
+          The A-axis replaces the spoilboard (spoilboard unmounted during rotary operations).
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <!-- 1. Pulley & Drive Ratio -->
+          <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px;">
+            <div style="font-weight:700; color:var(--accent); font-size:12px; margin-bottom:8px; text-transform:uppercase;">Drive & Pulleys</div>
+            <div class="cle-form-row">
+              <label>Kit Preset:</label>
+              <select class="cle-select" id="rot-preset-select">
+                <option value="twotrees" selected>TwoTrees TTC6050/450 Kit (5:1, 15/55mm)</option>
+                <option value="twotrees4">TwoTrees Standard (4:1 Ratio)</option>
+                <option value="custom">Custom Chuck / Pulleys</option>
+              </select>
+            </div>
+            <div class="cle-form-row">
+              <label>Gear Ratio (X:1):</label>
+              <input class="cle-input" id="rot-gear-ratio" type="number" step="0.1" value="${rot.gearRatio}">
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Motor Pulley (mm):</label>
+                <input class="cle-input" id="rot-motor-pulley" type="number" step="1" value="${rot.motorPulleyMm}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Chuck Pulley (mm):</label>
+                <input class="cle-input" id="rot-chuck-pulley" type="number" step="1" value="${rot.chuckPulleyMm}">
+              </div>
+            </div>
+            <div style="font-size:11px; color:var(--ink-2); margin-top:6px; padding:6px; background:rgba(0,0,0,0.1); border-radius:4px;">
+              Stepper: NEMA17 (200 st/rev, 16x) &rarr; <span id="rot-steps-deg-lbl" style="color:var(--accent); font-weight:700;">${spd.toFixed(3)}</span> steps/degree
+            </div>
+          </div>
+
+          <!-- 2. Mounting Position & Rotation Center -->
+          <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px;">
+            <div style="font-weight:700; color:var(--accent); font-size:12px; margin-bottom:8px; text-transform:uppercase;">Mounting Center & Boundaries</div>
+            <div class="cle-form-row">
+              <label>Center of Chuck in Y (mm):</label>
+              <input class="cle-input" id="rot-center-y" type="number" value="${rot.centerY}">
+            </div>
+            <div class="cle-form-row">
+              <label>Center Height from Bed (mm):</label>
+              <input class="cle-input" id="rot-center-z" type="number" value="${rot.centerHeightMm}">
+            </div>
+            <div class="cle-form-row">
+              <label>Chuck X Face (mm):</label>
+              <input class="cle-input" id="rot-start-x" type="number" value="${rot.startX}">
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Safety Floor (Zbot mm):</label>
+                <input class="cle-input" id="rot-safe-limit" type="number" step="1" value="${rot.zSafetyLimit}" title="-5mm boundary below centerline">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Safe Retract (Ztop mm):</label>
+                <input class="cle-input" id="rot-clearance" type="number" step="1" value="${rot.zClearance}">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Stock Dimensions -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
+          <div class="cle-form-row">
+            <label>Stock Diameter (mm):</label>
+            <input class="cle-input" id="rot-stock-dia" type="number" step="1" value="${rot.stockDiameter}">
+          </div>
+          <div class="cle-form-row">
+            <label>Stock Length (mm):</label>
+            <input class="cle-input" id="rot-stock-len" type="number" step="5" value="${rot.stockLength}">
+          </div>
+        </div>
+
+        <!-- 4. Turning & Index Modes Panels -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
+          <!-- Turning Mode Panel -->
+          <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px;">
+            <div style="font-weight:700; color:#0284c7; font-size:12px; margin-bottom:6px;">🔄 Turning Mode (Lathe Spindle)</div>
+            <p style="font-size:11px; color:var(--ink-2); margin-bottom:8px;">Continuous A-axis rotation at constant RPM or deg/s.</p>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <div class="cle-form-row" style="flex:1;">
+                <label style="font-size:11px;">Speed (RPM):</label>
+                <input class="cle-input" id="rot-turn-rpm" type="number" min="1" max="600" value="${rot.turningRPM}">
+              </div>
+              <div style="font-size:11px; font-weight:700; color:var(--ok); min-width:80px;" id="rot-turn-degs">
+                ${(rot.turningRPM * 6).toFixed(0)}°/s
+              </div>
+            </div>
+            <div style="display:flex; gap:6px; margin-top:8px;">
+              <button class="cle-btn" id="rot-btn-turn-start" style="background:#0284c7; color:#fff; font-weight:700; flex:1; padding:4px 8px;">▶ Start Turning</button>
+              <button class="cle-btn" id="rot-btn-turn-stop" style="background:#ef4444; color:#fff; font-weight:700; padding:4px 10px;">Stop</button>
+            </div>
+          </div>
+
+          <!-- Index Mode Panel -->
+          <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px;">
+            <div style="font-weight:700; color:#10b981; font-size:12px; margin-bottom:6px;">📐 Index Mode (Top-Down Multi-Sided)</div>
+            <p style="font-size:11px; color:var(--ink-2); margin-bottom:8px;">Rotates A to orient each face straight UP for top-down CNC/Laser cutting.</p>
+            <div class="cle-form-row">
+              <label style="font-size:11px;">Index Preset:</label>
+              <select class="cle-select" id="rot-index-mode-sel" style="font-size:11px;">
+                <option value="2-sided" ${rot.indexMode === '2-sided' ? 'selected' : ''}>2-Sided (0°, 180°)</option>
+                <option value="4-sided" ${rot.indexMode === '4-sided' ? 'selected' : ''}>4-Sided (0°, 90°, 180°, 270°)</option>
+                <option value="6-sided" ${rot.indexMode === '6-sided' ? 'selected' : ''}>6-Sided (0°, 60°, 120°, 180°, 240°, 300°)</option>
+                <option value="8-sided" ${rot.indexMode === '8-sided' ? 'selected' : ''}>8-Sided (45° steps)</option>
+                <option value="custom" ${rot.indexMode === 'custom' ? 'selected' : ''}>Custom Step Angle</option>
+              </select>
+            </div>
+            <div style="display:flex; gap:6px; margin-top:8px; align-items:center;">
+              <button class="cle-btn" id="rot-btn-idx-prev" style="padding:3px 10px;">&larr; Prev</button>
+              <span id="rot-idx-status" style="font-family:var(--f-mono); font-size:11px; font-weight:700; color:var(--accent); text-align:center; flex:1;">
+                A = ${rot.currentAngle.toFixed(1)}°
+              </span>
+              <button class="cle-btn" id="rot-btn-idx-next" style="padding:3px 10px;">Next &rarr;</button>
+              <button class="cle-btn" id="rot-btn-zero-a" style="padding:3px 8px; font-size:10px;">Zero A</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
+          <button class="cle-btn" id="rot-btn-apply" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Apply & Mount 4th Axis</button>
+          <button class="cle-btn" id="rot-btn-send-step" style="background:var(--paper); padding:8px 14px; font-size:11px;" title="Send $103 steps/degree to FluidNC controller">Send $103 to FluidNC</button>
+          <button class="cle-btn" id="rot-btn-return" style="background:#2563eb; color:#fff; padding:8px 18px; font-weight:700; margin-left:auto;" title="Return to JumpStart CAD Design Workspace">Return</button>
         </div>
       `;
     } else if (type === 'spoilboard') {
@@ -8235,6 +8984,173 @@ class CLEBridge {
         });
         this.closeModal();
       };
+    } else if (type === 'rotary') {
+      const rot = this.rotary;
+
+      // Preset change handler
+      const presetSel = document.getElementById('rot-preset-select');
+      const ratioIn = document.getElementById('rot-gear-ratio');
+      const mPulleyIn = document.getElementById('rot-motor-pulley');
+      const cPulleyIn = document.getElementById('rot-chuck-pulley');
+      const stepsLbl = document.getElementById('rot-steps-deg-lbl');
+
+      const updateStepsCalc = () => {
+        const r = parseFloat(ratioIn.value) || 5.0;
+        const spd = (rot.stepsPerRev * rot.microsteps * r) / 360;
+        if (stepsLbl) stepsLbl.textContent = spd.toFixed(3);
+      };
+
+      if (presetSel) {
+        presetSel.onchange = () => {
+          if (presetSel.value === 'twotrees') {
+            ratioIn.value = '5.0';
+            mPulleyIn.value = '15';
+            cPulleyIn.value = '55';
+          } else if (presetSel.value === 'twotrees4') {
+            ratioIn.value = '4.0';
+            mPulleyIn.value = '15';
+            cPulleyIn.value = '60';
+          }
+          updateStepsCalc();
+        };
+      }
+
+      if (ratioIn) ratioIn.oninput = updateStepsCalc;
+      if (mPulleyIn && cPulleyIn) {
+        mPulleyIn.oninput = () => {
+          const mp = parseFloat(mPulleyIn.value) || 15;
+          const cp = parseFloat(cPulleyIn.value) || 55;
+          ratioIn.value = (cp / mp).toFixed(2);
+          updateStepsCalc();
+        };
+        cPulleyIn.oninput = () => {
+          const mp = parseFloat(mPulleyIn.value) || 15;
+          const cp = parseFloat(cPulleyIn.value) || 55;
+          ratioIn.value = (cp / mp).toFixed(2);
+          updateStepsCalc();
+        };
+      }
+
+      // Turning controls
+      const turnRpmIn = document.getElementById('rot-turn-rpm');
+      const turnDegsLbl = document.getElementById('rot-turn-degs');
+      if (turnRpmIn) {
+        turnRpmIn.oninput = () => {
+          const rpm = parseFloat(turnRpmIn.value) || 60;
+          if (turnDegsLbl) turnDegsLbl.textContent = `${(rpm * 6).toFixed(0)}°/s`;
+        };
+      }
+      const btnTurnStart = document.getElementById('rot-btn-turn-start');
+      if (btnTurnStart) {
+        btnTurnStart.onclick = () => {
+          const rpm = parseFloat(turnRpmIn.value) || 60;
+          rot.startTurning(rpm);
+        };
+      }
+      const btnTurnStop = document.getElementById('rot-btn-turn-stop');
+      if (btnTurnStop) {
+        btnTurnStop.onclick = () => rot.stopTurning();
+      }
+
+      // Index controls
+      const idxModeSel = document.getElementById('rot-index-mode-sel');
+      if (idxModeSel) {
+        idxModeSel.onchange = () => {
+          rot.setIndexMode(idxModeSel.value);
+          const st = document.getElementById('rot-idx-status');
+          if (st) st.textContent = `A = ${rot.currentAngle.toFixed(1)}°`;
+        };
+      }
+      const btnIdxPrev = document.getElementById('rot-btn-idx-prev');
+      if (btnIdxPrev) {
+        btnIdxPrev.onclick = () => {
+          rot.prevIndex();
+          const st = document.getElementById('rot-idx-status');
+          if (st) st.textContent = `A = ${rot.currentAngle.toFixed(1)}°`;
+        };
+      }
+      const btnIdxNext = document.getElementById('rot-btn-idx-next');
+      if (btnIdxNext) {
+        btnIdxNext.onclick = () => {
+          rot.nextIndex();
+          const st = document.getElementById('rot-idx-status');
+          if (st) st.textContent = `A = ${rot.currentAngle.toFixed(1)}°`;
+        };
+      }
+      const btnZeroA = document.getElementById('rot-btn-zero-a');
+      if (btnZeroA) {
+        btnZeroA.onclick = () => {
+          rot.setAngle(0);
+          if (this.fluidnc?.isConnected) this.fluidnc.sendImmediate('G92 A0');
+          const st = document.getElementById('rot-idx-status');
+          if (st) st.textContent = 'A = 0.0°';
+          this.notify('A-Axis WCS Zeroed (G92 A0)', 'ok');
+        };
+      }
+
+      // Send $103 steps/degree to FluidNC
+      const btnSendStep = document.getElementById('rot-btn-send-step');
+      if (btnSendStep) {
+        btnSendStep.onclick = () => {
+          const spd = rot.getStepsPerDegree();
+          if (this.fluidnc?.isConnected) {
+            this.fluidnc.sendImmediate(`$103=${spd.toFixed(3)}`);
+            this.notify(`Sent $103=${spd.toFixed(3)} to FluidNC controller.`, 'ok');
+          } else {
+            this.notify(`Calculated $103=${spd.toFixed(3)} (Connect FluidNC to write to controller).`, 'info');
+          }
+        };
+      }
+
+      // Apply & Mount 4th Axis
+      const btnApply = document.getElementById('rot-btn-apply');
+      if (btnApply) {
+        btnApply.onclick = async () => {
+          rot.setGearRatio(ratioIn.value, mPulleyIn.value, cPulleyIn.value);
+          rot.setMountingPosition(
+            document.getElementById('rot-center-y').value,
+            document.getElementById('rot-center-z').value,
+            document.getElementById('rot-start-x').value
+          );
+          rot.zSafetyLimit = parseFloat(document.getElementById('rot-safe-limit').value) || -5.0;
+          rot.zClearance = parseFloat(document.getElementById('rot-clearance').value) || 10.0;
+          rot.setStockDimensions(
+            document.getElementById('rot-stock-dia').value,
+            document.getElementById('rot-stock-len').value
+          );
+          if (!rot.enabled) rot.toggle(true);
+
+          // Persist to machine in vault
+          const mach = this.vault.getActiveMachine();
+          if (mach) {
+            mach.rotaryConfig = {
+              gearRatio: rot.gearRatio,
+              motorPulleyMm: rot.motorPulleyMm,
+              chuckPulleyMm: rot.chuckPulleyMm,
+              centerHeightMm: rot.centerHeightMm,
+              centerY: rot.centerY,
+              startX: rot.startX,
+              stockDiameter: rot.stockDiameter,
+              stockLength: rot.stockLength,
+              zSafetyLimit: rot.zSafetyLimit,
+              zClearance: rot.zClearance
+            };
+            await this.vault.saveMachine(mach);
+          }
+          this.closeModal();
+        };
+      }
+
+      // Return to Design
+      const btnReturn = document.getElementById('rot-btn-return');
+      if (btnReturn) {
+        btnReturn.onclick = () => {
+          this.closeModal();
+          const wsBtn = document.getElementById('ws-design');
+          if (wsBtn) wsBtn.click();
+          this.notify('Returned to JumpStart Design CAD workspace.', 'info');
+        };
+      }
     } else if (type === 'spoilboard') {
       const wInput = document.getElementById('cle-sp-width');
       const dInput = document.getElementById('cle-sp-depth');

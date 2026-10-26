@@ -619,6 +619,9 @@ export class CLEFluidNCClient {
       if (this.bridge.bed) {
         this.bridge.bed.updateToolCursor(this.wpos);
       }
+      if (this.bridge.rotary && this.bridge.rotary.enabled && isFinite(this.wpos.A)) {
+        this.bridge.rotary.setAngle(this.wpos.A);
+      }
 
       if (this.isStreaming && this.bridge.recovery) {
         this.bridge.recovery.recordPosition(this.wpos, this.feedRate, this.spindleRPM);
@@ -690,11 +693,14 @@ export class CLEFluidNCClient {
         // Enforce Bed and Limit-Switch Clearance
         if (axis === 'Z') {
           const targetZ = this.wpos.Z + delta;
-          if (targetZ < sl.minZ) {
-            // Hard clamp: Never plunge below +0.1mm above bed
-            const allowed = Math.max(0, sl.minZ - this.wpos.Z);
+          const minZBound = (this.bridge.rotary && this.bridge.rotary.enabled)
+            ? Math.max(sl.minZ, this.bridge.rotary.getZBot())
+            : sl.minZ;
+          if (targetZ < minZBound) {
+            // Hard clamp: Never plunge below bed or A-axis -5mm safety boundary
+            const allowed = Math.max(0, minZBound - this.wpos.Z);
             if (allowed <= 0.001) {
-              this.bridge.notify(`Soft-Limit: Z clamped at +${sl.minZ}mm (bed safety)`, 'error');
+              this.bridge.notify(`Soft-Limit: Z clamped at +${minZBound.toFixed(2)}mm (rotary safety boundary)`, 'error');
               continue;
             }
             clampedDeltas.Z = allowed.toFixed(3);

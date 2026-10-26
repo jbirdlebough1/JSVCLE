@@ -115,6 +115,20 @@ class CLEBridge {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
       if (this.bed) this.bed.init();
       if (this.slicer) this.slicer.init();
+      const mach = this.vault?.getActiveMachine();
+      if (mach?.rotaryConfig && this.rotary) {
+        const rc = mach.rotaryConfig;
+        if (rc.gearRatio) this.rotary.gearRatio = rc.gearRatio;
+        if (rc.motorPulleyMm) this.rotary.motorPulleyMm = rc.motorPulleyMm;
+        if (rc.chuckPulleyMm) this.rotary.chuckPulleyMm = rc.chuckPulleyMm;
+        if (rc.centerHeightMm) this.rotary.centerHeightMm = rc.centerHeightMm;
+        if (rc.centerY) this.rotary.centerY = rc.centerY;
+        if (rc.startX) this.rotary.startX = rc.startX;
+        if (rc.stockDiameter) this.rotary.stockDiameter = rc.stockDiameter;
+        if (rc.stockLength) this.rotary.stockLength = rc.stockLength;
+        if (rc.zSafetyLimit !== undefined) this.rotary.zSafetyLimit = rc.zSafetyLimit;
+        if (rc.zClearance !== undefined) this.rotary.zClearance = rc.zClearance;
+      }
       if (this.camera && !this.camera.isActive) {
         this.camera.autoStartIfAvailable(true);
       }
@@ -261,7 +275,9 @@ class CLEBridge {
     // 3. 4th Axis & Slicer
     m("Rotary & Slicer", "", [
       { id: "cle-r-rotary", label: "4th Axis (A)", title: "Toggle 4th Axis Rotary Chuck & Cylindrical Stock in 3D View", icon: "lathe", pressed: this.rotary.enabled, fn: () => this.rotary.toggle() },
-      { id: "cle-r-rot-a", label: "Rotate A 90°", title: "Rotate Object 90° around A-Axis (X) for 4th Axis Rotary Mill", icon: "revolve", fn: () => { if (this.bed) this.bed.rotateWorkpiece('X', 90); } },
+      { id: "cle-r-rot-setup", label: "A-Axis Setup", title: "TwoTrees Rotary Setup: Gear Ratio (5:1), Pulley, Center Y, Z=45mm & Safety", icon: "features", fn: () => this.openModal("rotary") },
+      { id: "cle-r-turning", label: "Turning", title: "Lathe Continuous Spindle Turning (RPM & Deg/s)", icon: "motion", pressed: this.rotary.isTurning, fn: () => this.rotary.toggleTurning() },
+      { id: "cle-r-index", label: "Index Next", title: "Index A-Axis to Next Facet (Top-Down Milling)", icon: "revolve", fn: () => this.rotary.nextIndex() },
       { id: "cle-r-slicer", label: "Slice & 3D Stack", title: "Slice Model (Top-Down for CNC/Laser, Bottom-Up for 3D) & Display in Visualizer", icon: "printer3d", fn: () => this.openModal("slicer") }
     ]);
 
@@ -963,6 +979,7 @@ class CLEBridge {
           <label>Target Machine & Slicing Order:</label>
           <select class="cle-select" id="slice-mode">
             <option value="cnc" ${this.slicer.mode==='cnc'?'selected':''}>CNC Milling / Carving (${this.machineName}) &mdash; TOP-DOWN passes</option>
+            <option value="rotary" ${this.slicer.mode==='rotary'?'selected':''}>TwoTrees 4th Axis Rotary (A) & Turning &mdash; TOP-DOWN Multi-Sided Index / Lathe</option>
             <option value="laser" ${this.slicer.mode==='laser'?'selected':''}>Diode Laser Vector & Engraving &mdash; TOP-DOWN passes</option>
             <option value="3d" ${this.slicer.mode==='3d'?'selected':''}>3D Additive Print Sim &mdash; BOTTOM-UP layers</option>
           </select>
@@ -1079,6 +1096,140 @@ class CLEBridge {
         <div style="margin-top:14px; display:flex; gap:10px;">
           <button class="cle-btn" id="slice-run-btn" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Slice & Display in 3D Viewport</button>
           <button class="cle-btn" id="slice-return-btn" style="background:#2563eb; color:#fff; padding:8px 18px; font-weight:700;" title="Return to JumpStart CAD Design Workspace">Return to Design</button>
+        </div>
+      `;
+    } else if (type === 'rotary') {
+      title = 'TwoTrees 4th Axis Rotary (A) & Turning Setup';
+      const rot = this.rotary;
+      const spd = rot.getStepsPerDegree();
+
+      bodyHtml = `
+        <div style="background:rgba(217, 119, 6, 0.12); border-left:4px solid #d97706; padding:8px 12px; border-radius:4px; margin-bottom:12px; font-size:12px;">
+          <strong>TwoTrees TTC6050 / TTC450 4th Axis Kit:</strong> Center of rotation is <strong>${rot.centerHeightMm.toFixed(1)}mm from aluminum bed</strong>.
+          The A-axis replaces the spoilboard (spoilboard unmounted during rotary operations).
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+          <!-- 1. Pulley & Drive Ratio -->
+          <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px;">
+            <div style="font-weight:700; color:var(--accent); font-size:12px; margin-bottom:8px; text-transform:uppercase;">Drive & Pulleys</div>
+            <div class="cle-form-row">
+              <label>Kit Preset:</label>
+              <select class="cle-select" id="rot-preset-select">
+                <option value="twotrees" selected>TwoTrees TTC6050/450 Kit (5:1, 15/55mm)</option>
+                <option value="twotrees4">TwoTrees Standard (4:1 Ratio)</option>
+                <option value="custom">Custom Chuck / Pulleys</option>
+              </select>
+            </div>
+            <div class="cle-form-row">
+              <label>Gear Ratio (X:1):</label>
+              <input class="cle-input" id="rot-gear-ratio" type="number" step="0.1" value="${rot.gearRatio}">
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Motor Pulley (mm):</label>
+                <input class="cle-input" id="rot-motor-pulley" type="number" step="1" value="${rot.motorPulleyMm}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Chuck Pulley (mm):</label>
+                <input class="cle-input" id="rot-chuck-pulley" type="number" step="1" value="${rot.chuckPulleyMm}">
+              </div>
+            </div>
+            <div style="font-size:11px; color:var(--ink-2); margin-top:6px; padding:6px; background:rgba(0,0,0,0.1); border-radius:4px;">
+              Stepper: NEMA17 (200 st/rev, 16x) &rarr; <span id="rot-steps-deg-lbl" style="color:var(--accent); font-weight:700;">${spd.toFixed(3)}</span> steps/degree
+            </div>
+          </div>
+
+          <!-- 2. Mounting Position & Rotation Center -->
+          <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px;">
+            <div style="font-weight:700; color:var(--accent); font-size:12px; margin-bottom:8px; text-transform:uppercase;">Mounting Center & Boundaries</div>
+            <div class="cle-form-row">
+              <label>Center of Chuck in Y (mm):</label>
+              <input class="cle-input" id="rot-center-y" type="number" value="${rot.centerY}">
+            </div>
+            <div class="cle-form-row">
+              <label>Center Height from Bed (mm):</label>
+              <input class="cle-input" id="rot-center-z" type="number" value="${rot.centerHeightMm}">
+            </div>
+            <div class="cle-form-row">
+              <label>Chuck X Face (mm):</label>
+              <input class="cle-input" id="rot-start-x" type="number" value="${rot.startX}">
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Safety Floor (Zbot mm):</label>
+                <input class="cle-input" id="rot-safe-limit" type="number" step="1" value="${rot.zSafetyLimit}" title="-5mm boundary below centerline">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Safe Retract (Ztop mm):</label>
+                <input class="cle-input" id="rot-clearance" type="number" step="1" value="${rot.zClearance}">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Stock Dimensions -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
+          <div class="cle-form-row">
+            <label>Stock Diameter (mm):</label>
+            <input class="cle-input" id="rot-stock-dia" type="number" step="1" value="${rot.stockDiameter}">
+          </div>
+          <div class="cle-form-row">
+            <label>Stock Length (mm):</label>
+            <input class="cle-input" id="rot-stock-len" type="number" step="5" value="${rot.stockLength}">
+          </div>
+        </div>
+
+        <!-- 4. Turning & Index Modes Panels -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:10px;">
+          <!-- Turning Mode Panel -->
+          <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px;">
+            <div style="font-weight:700; color:#0284c7; font-size:12px; margin-bottom:6px;">🔄 Turning Mode (Lathe Spindle)</div>
+            <p style="font-size:11px; color:var(--ink-2); margin-bottom:8px;">Continuous A-axis rotation at constant RPM or deg/s.</p>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <div class="cle-form-row" style="flex:1;">
+                <label style="font-size:11px;">Speed (RPM):</label>
+                <input class="cle-input" id="rot-turn-rpm" type="number" min="1" max="600" value="${rot.turningRPM}">
+              </div>
+              <div style="font-size:11px; font-weight:700; color:var(--ok); min-width:80px;" id="rot-turn-degs">
+                ${(rot.turningRPM * 6).toFixed(0)}°/s
+              </div>
+            </div>
+            <div style="display:flex; gap:6px; margin-top:8px;">
+              <button class="cle-btn" id="rot-btn-turn-start" style="background:#0284c7; color:#fff; font-weight:700; flex:1; padding:4px 8px;">▶ Start Turning</button>
+              <button class="cle-btn" id="rot-btn-turn-stop" style="background:#ef4444; color:#fff; font-weight:700; padding:4px 10px;">Stop</button>
+            </div>
+          </div>
+
+          <!-- Index Mode Panel -->
+          <div style="background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:12px;">
+            <div style="font-weight:700; color:#10b981; font-size:12px; margin-bottom:6px;">📐 Index Mode (Top-Down Multi-Sided)</div>
+            <p style="font-size:11px; color:var(--ink-2); margin-bottom:8px;">Rotates A to orient each face straight UP for top-down CNC/Laser cutting.</p>
+            <div class="cle-form-row">
+              <label style="font-size:11px;">Index Preset:</label>
+              <select class="cle-select" id="rot-index-mode-sel" style="font-size:11px;">
+                <option value="2-sided" ${rot.indexMode === '2-sided' ? 'selected' : ''}>2-Sided (0°, 180°)</option>
+                <option value="4-sided" ${rot.indexMode === '4-sided' ? 'selected' : ''}>4-Sided (0°, 90°, 180°, 270°)</option>
+                <option value="6-sided" ${rot.indexMode === '6-sided' ? 'selected' : ''}>6-Sided (0°, 60°, 120°, 180°, 240°, 300°)</option>
+                <option value="8-sided" ${rot.indexMode === '8-sided' ? 'selected' : ''}>8-Sided (45° steps)</option>
+                <option value="custom" ${rot.indexMode === 'custom' ? 'selected' : ''}>Custom Step Angle</option>
+              </select>
+            </div>
+            <div style="display:flex; gap:6px; margin-top:8px; align-items:center;">
+              <button class="cle-btn" id="rot-btn-idx-prev" style="padding:3px 10px;">&larr; Prev</button>
+              <span id="rot-idx-status" style="font-family:var(--f-mono); font-size:11px; font-weight:700; color:var(--accent); text-align:center; flex:1;">
+                A = ${rot.currentAngle.toFixed(1)}°
+              </span>
+              <button class="cle-btn" id="rot-btn-idx-next" style="padding:3px 10px;">Next &rarr;</button>
+              <button class="cle-btn" id="rot-btn-zero-a" style="padding:3px 8px; font-size:10px;">Zero A</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:14px; display:flex; gap:10px; align-items:center;">
+          <button class="cle-btn" id="rot-btn-apply" style="background:var(--accent); color:var(--on-accent); padding:8px 18px; font-weight:700;">Apply & Mount 4th Axis</button>
+          <button class="cle-btn" id="rot-btn-send-step" style="background:var(--paper); padding:8px 14px; font-size:11px;" title="Send $103 steps/degree to FluidNC controller">Send $103 to FluidNC</button>
+          <button class="cle-btn" id="rot-btn-return" style="background:#2563eb; color:#fff; padding:8px 18px; font-weight:700; margin-left:auto;" title="Return to JumpStart CAD Design Workspace">Return</button>
         </div>
       `;
     } else if (type === 'spoilboard') {
@@ -1618,6 +1769,173 @@ class CLEBridge {
         });
         this.closeModal();
       };
+    } else if (type === 'rotary') {
+      const rot = this.rotary;
+
+      // Preset change handler
+      const presetSel = document.getElementById('rot-preset-select');
+      const ratioIn = document.getElementById('rot-gear-ratio');
+      const mPulleyIn = document.getElementById('rot-motor-pulley');
+      const cPulleyIn = document.getElementById('rot-chuck-pulley');
+      const stepsLbl = document.getElementById('rot-steps-deg-lbl');
+
+      const updateStepsCalc = () => {
+        const r = parseFloat(ratioIn.value) || 5.0;
+        const spd = (rot.stepsPerRev * rot.microsteps * r) / 360;
+        if (stepsLbl) stepsLbl.textContent = spd.toFixed(3);
+      };
+
+      if (presetSel) {
+        presetSel.onchange = () => {
+          if (presetSel.value === 'twotrees') {
+            ratioIn.value = '5.0';
+            mPulleyIn.value = '15';
+            cPulleyIn.value = '55';
+          } else if (presetSel.value === 'twotrees4') {
+            ratioIn.value = '4.0';
+            mPulleyIn.value = '15';
+            cPulleyIn.value = '60';
+          }
+          updateStepsCalc();
+        };
+      }
+
+      if (ratioIn) ratioIn.oninput = updateStepsCalc;
+      if (mPulleyIn && cPulleyIn) {
+        mPulleyIn.oninput = () => {
+          const mp = parseFloat(mPulleyIn.value) || 15;
+          const cp = parseFloat(cPulleyIn.value) || 55;
+          ratioIn.value = (cp / mp).toFixed(2);
+          updateStepsCalc();
+        };
+        cPulleyIn.oninput = () => {
+          const mp = parseFloat(mPulleyIn.value) || 15;
+          const cp = parseFloat(cPulleyIn.value) || 55;
+          ratioIn.value = (cp / mp).toFixed(2);
+          updateStepsCalc();
+        };
+      }
+
+      // Turning controls
+      const turnRpmIn = document.getElementById('rot-turn-rpm');
+      const turnDegsLbl = document.getElementById('rot-turn-degs');
+      if (turnRpmIn) {
+        turnRpmIn.oninput = () => {
+          const rpm = parseFloat(turnRpmIn.value) || 60;
+          if (turnDegsLbl) turnDegsLbl.textContent = `${(rpm * 6).toFixed(0)}°/s`;
+        };
+      }
+      const btnTurnStart = document.getElementById('rot-btn-turn-start');
+      if (btnTurnStart) {
+        btnTurnStart.onclick = () => {
+          const rpm = parseFloat(turnRpmIn.value) || 60;
+          rot.startTurning(rpm);
+        };
+      }
+      const btnTurnStop = document.getElementById('rot-btn-turn-stop');
+      if (btnTurnStop) {
+        btnTurnStop.onclick = () => rot.stopTurning();
+      }
+
+      // Index controls
+      const idxModeSel = document.getElementById('rot-index-mode-sel');
+      if (idxModeSel) {
+        idxModeSel.onchange = () => {
+          rot.setIndexMode(idxModeSel.value);
+          const st = document.getElementById('rot-idx-status');
+          if (st) st.textContent = `A = ${rot.currentAngle.toFixed(1)}°`;
+        };
+      }
+      const btnIdxPrev = document.getElementById('rot-btn-idx-prev');
+      if (btnIdxPrev) {
+        btnIdxPrev.onclick = () => {
+          rot.prevIndex();
+          const st = document.getElementById('rot-idx-status');
+          if (st) st.textContent = `A = ${rot.currentAngle.toFixed(1)}°`;
+        };
+      }
+      const btnIdxNext = document.getElementById('rot-btn-idx-next');
+      if (btnIdxNext) {
+        btnIdxNext.onclick = () => {
+          rot.nextIndex();
+          const st = document.getElementById('rot-idx-status');
+          if (st) st.textContent = `A = ${rot.currentAngle.toFixed(1)}°`;
+        };
+      }
+      const btnZeroA = document.getElementById('rot-btn-zero-a');
+      if (btnZeroA) {
+        btnZeroA.onclick = () => {
+          rot.setAngle(0);
+          if (this.fluidnc?.isConnected) this.fluidnc.sendImmediate('G92 A0');
+          const st = document.getElementById('rot-idx-status');
+          if (st) st.textContent = 'A = 0.0°';
+          this.notify('A-Axis WCS Zeroed (G92 A0)', 'ok');
+        };
+      }
+
+      // Send $103 steps/degree to FluidNC
+      const btnSendStep = document.getElementById('rot-btn-send-step');
+      if (btnSendStep) {
+        btnSendStep.onclick = () => {
+          const spd = rot.getStepsPerDegree();
+          if (this.fluidnc?.isConnected) {
+            this.fluidnc.sendImmediate(`$103=${spd.toFixed(3)}`);
+            this.notify(`Sent $103=${spd.toFixed(3)} to FluidNC controller.`, 'ok');
+          } else {
+            this.notify(`Calculated $103=${spd.toFixed(3)} (Connect FluidNC to write to controller).`, 'info');
+          }
+        };
+      }
+
+      // Apply & Mount 4th Axis
+      const btnApply = document.getElementById('rot-btn-apply');
+      if (btnApply) {
+        btnApply.onclick = async () => {
+          rot.setGearRatio(ratioIn.value, mPulleyIn.value, cPulleyIn.value);
+          rot.setMountingPosition(
+            document.getElementById('rot-center-y').value,
+            document.getElementById('rot-center-z').value,
+            document.getElementById('rot-start-x').value
+          );
+          rot.zSafetyLimit = parseFloat(document.getElementById('rot-safe-limit').value) || -5.0;
+          rot.zClearance = parseFloat(document.getElementById('rot-clearance').value) || 10.0;
+          rot.setStockDimensions(
+            document.getElementById('rot-stock-dia').value,
+            document.getElementById('rot-stock-len').value
+          );
+          if (!rot.enabled) rot.toggle(true);
+
+          // Persist to machine in vault
+          const mach = this.vault.getActiveMachine();
+          if (mach) {
+            mach.rotaryConfig = {
+              gearRatio: rot.gearRatio,
+              motorPulleyMm: rot.motorPulleyMm,
+              chuckPulleyMm: rot.chuckPulleyMm,
+              centerHeightMm: rot.centerHeightMm,
+              centerY: rot.centerY,
+              startX: rot.startX,
+              stockDiameter: rot.stockDiameter,
+              stockLength: rot.stockLength,
+              zSafetyLimit: rot.zSafetyLimit,
+              zClearance: rot.zClearance
+            };
+            await this.vault.saveMachine(mach);
+          }
+          this.closeModal();
+        };
+      }
+
+      // Return to Design
+      const btnReturn = document.getElementById('rot-btn-return');
+      if (btnReturn) {
+        btnReturn.onclick = () => {
+          this.closeModal();
+          const wsBtn = document.getElementById('ws-design');
+          if (wsBtn) wsBtn.click();
+          this.notify('Returned to JumpStart Design CAD workspace.', 'info');
+        };
+      }
     } else if (type === 'spoilboard') {
       const wInput = document.getElementById('cle-sp-width');
       const dInput = document.getElementById('cle-sp-depth');

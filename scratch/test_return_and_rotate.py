@@ -99,3 +99,4 @@ async def test_return_and_rotation():
         await browser.close()
 
 asyncio.run(test_return_and_rotation())
+

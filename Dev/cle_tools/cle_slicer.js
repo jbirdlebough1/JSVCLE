@@ -328,7 +328,52 @@ export class CLESlicerEngine {
     const numLayers = Math.max(1, Math.ceil(totalHeight / layerH));
     const lines = [];
 
-    const isTopDown = (mode === 'cnc' || mode === 'laser');
+    const isTopDown = (mode === 'cnc' || mode === 'laser' || mode === 'rotary');
+
+    // --- TwoTrees 4th Axis Rotary (A) & Turning Mode ---
+    if (mode === 'rotary') {
+      const rot = this.bridge?.rotary;
+      const zTop = rot ? rot.getZTop() : (maxZ + 15);
+      const zBot = rot ? rot.getZBot() : minZ;
+      const angles = rot ? rot.getIndexAngles() : [0, 90, 180, 270];
+
+      lines.push('; === TwoTrees 4th Axis Rotary (A) Index / Turning Toolpath ===');
+      lines.push(`; Ratio: ${rot ? rot.gearRatio : 5}:1 (${rot ? rot.motorPulleyMm : 15}mm/${rot ? rot.chuckPulleyMm : 55}mm pulleys)`);
+      lines.push(`; Center of Chuck: Y=${rot ? rot.centerY : 250}mm, Z_center=${rot ? rot.getZCenter().toFixed(2) : 45.1}mm`);
+      lines.push(`; Safety Floor: Zbot=${zBot.toFixed(2)}mm (-5mm limit), Retract: Ztop=${zTop.toFixed(2)}mm`);
+      lines.push('G21 ; mm mode');
+      lines.push('G90 ; Absolute coordinates');
+      lines.push(`M3 S${this.spindleRPM} ; Spindle ON`);
+      lines.push(`G0 Z${zTop.toFixed(2)} F2000 ; Safe clearance retract`);
+
+      // Top-Down Milling for each indexed face (CNC & Laser only cut top-down)
+      const passesPerFace = Math.max(1, Math.ceil((zTop - zBot) / (layerH * 2)));
+      let layerCounter = 0;
+
+      for (let fIdx = 0; fIdx < angles.length; fIdx++) {
+        const angle = angles[fIdx];
+        lines.push(`\n; --- A-AXIS INDEXED FACE ${fIdx + 1}/${angles.length}: A=${angle.toFixed(1)}° ---`);
+        lines.push(`G0 Z${zTop.toFixed(2)} ; Clearance retract before rotating A`);
+        lines.push(`G0 A${angle.toFixed(3)} F3000 ; Rotate 4th axis to face ${fIdx + 1}`);
+        lines.push(`G0 X${minX.toFixed(2)} Y${(rot ? rot.centerY : minY).toFixed(2)}`);
+
+        for (let k = 0; k < passesPerFace; k++) {
+          const passZ = Math.max(zBot, (zTop - (k + 1) * layerH * 2));
+          lines.push(`; --- LAYER: ${layerCounter++} (Z=${passZ.toFixed(2)}, A=${angle.toFixed(1)}) ---`);
+          lines.push(`G1 Z${passZ.toFixed(2)} F300 ; Plunge to pass depth`);
+          lines.push(`G1 X${maxX.toFixed(2)} Y${maxY.toFixed(2)} A${angle.toFixed(3)} F${this.feedRate}`);
+          lines.push(`G1 X${maxX.toFixed(2)} Y${minY.toFixed(2)} A${angle.toFixed(3)}`);
+          lines.push(`G1 X${minX.toFixed(2)} Y${minY.toFixed(2)} A${angle.toFixed(3)}`);
+          lines.push(`G1 X${minX.toFixed(2)} Y${maxY.toFixed(2)} A${angle.toFixed(3)}`);
+          lines.push(`G0 Z${(passZ + 1.5).toFixed(2)} F1000 ; Step retract`);
+        }
+      }
+      lines.push(`G0 Z${zTop.toFixed(2)}`);
+      lines.push('G0 A0.000 F3000');
+      lines.push('M5 ; Spindle OFF');
+      lines.push('G0 X0 Y0 F3000');
+      return lines.join('\n');
+    }
 
     lines.push(`; === CLEJS Native Slicer Toolpath ===`);
     lines.push(`; Device Mode: ${mode.toUpperCase()} (${isTopDown ? 'Top-Down Cutting Order' : 'Bottom-Up Additive Order'})`);
@@ -442,7 +487,7 @@ export class CLESlicerEngine {
     this.slicedLayers = [];
     const lines = gcodeText.split('\n');
     let currentLayer = null; // Do not create phantom layer before first LAYER header!
-    let curX = 0, curY = 0, curZ = 0;
+    let curX = 0, curY = 0, curZ = 0, curA = 0;
 
     for (const raw of lines) {
       const line = raw.trim();
@@ -465,18 +510,22 @@ export class CLESlicerEngine {
           this.slicedLayers.push(currentLayer);
         }
         const matchZ = line.match(/Z=([-\d.]+)/i);
+        const matchA = line.match(/A=([-\d.]+)/i);
         const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
-        currentLayer = { index: this.slicedLayers.length, z: lZ, points: [], isCutoutPass: false };
+        if (matchA) curA = parseFloat(matchA[1]);
+        currentLayer = { index: this.slicedLayers.length, z: lZ, a: curA, points: [], isCutoutPass: false };
         continue;
       }
 
       const matchX = line.match(/[Xx](-?\d+\.?\d*)/);
       const matchY = line.match(/[Yy](-?\d+\.?\d*)/);
       const matchZ = line.match(/[Zz](-?\d+\.?\d*)/);
+      const matchA = line.match(/[Aa](-?\d+\.?\d*)/);
 
       if (matchX) curX = parseFloat(matchX[1]);
       if (matchY) curY = parseFloat(matchY[1]);
       if (matchZ) curZ = parseFloat(matchZ[1]);
+      if (matchA) curA = parseFloat(matchA[1]);
 
       // Move commands (G0 = Rapid, G1/G2/G3 = Cutting Feed)
       if (line.startsWith('G0') || line.startsWith('G1') || line.startsWith('G2') || line.startsWith('G3')) {
@@ -485,7 +534,7 @@ export class CLESlicerEngine {
           // Preamble moves before any layer (safe clearance plane, etc.)
           continue;
         }
-        currentLayer.points.push({ x: curX, y: curY, z: curZ, isRapid });
+        currentLayer.points.push({ x: curX, y: curY, z: curZ, a: curA, isRapid });
       }
     }
 
@@ -2155,6 +2204,9 @@ export class CLESlicerEngine {
       const pt = contour[ptIdx];
       if (pt && this.bridge.bed) {
         this.bridge.bed.updateToolCursor({ X: pt.x, Y: pt.y, Z: layer.z, A: pt.a || 0 });
+      }
+      if (pt && this.bridge.rotary && pt.a !== undefined) {
+        this.bridge.rotary.setAngle(pt.a);
       }
 
       // Update HUD status label with live coordinates

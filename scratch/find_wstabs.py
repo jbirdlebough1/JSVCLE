@@ -10,3 +10,4 @@ while True:
     print(text[max(0, pos-100):min(len(text), pos+300)])
     print("-" * 50)
     pos += 6
+
