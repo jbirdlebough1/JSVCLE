@@ -532,6 +532,12 @@ export class CLESlicerEngine {
     if (!this.lastGeometry || !this.lastGeometry.triangles || this.lastGeometry.triangles.length < 9) {
       return null;
     }
+    if (!this._crossSectionCache) this._crossSectionCache = new Map();
+    const zKey = Z.toFixed(3);
+    if (this._crossSectionCache.has(zKey)) {
+      return this._crossSectionCache.get(zKey);
+    }
+
     const tris = this.lastGeometry.triangles;
     const segments = [];
 
@@ -605,7 +611,9 @@ export class CLESlicerEngine {
       }
     }
 
-    return chain.length >= 3 ? chain : null;
+    const result = chain.length >= 3 ? chain : null;
+    this._crossSectionCache.set(zKey, result);
+    return result;
   }
 
   // Partition master sliced layers into laminated stock slabs (e.g. 40mm MDF / hardwood tiers for biradial horns)
@@ -1045,6 +1053,36 @@ export class CLESlicerEngine {
     this.activeTraceLine.visible = false;
     this.visualizerGroup.add(this.activeTraceLine);
 
+    // Shared materials to eliminate WebGL shader and JS memory bloat
+    this.sharedSolidMat = new THREE.MeshBasicMaterial({
+      color: 0x22c55e, // Solid Transparent Green Slice Disc (User: "fill it solid with transparent green")
+      transparent: true,
+      opacity: 0.65,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    this.sharedFadeSolidMat = new THREE.MeshBasicMaterial({
+      color: 0x22c55e,
+      transparent: true,
+      opacity: 0.25,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    this.sharedBorderMat = new THREE.LineBasicMaterial({
+      color: 0x22c55e, // Vivid Emerald Green Outline Contour
+      linewidth: 4.0,
+      transparent: true,
+      opacity: 1.0,
+      depthWrite: false
+    });
+    this.sharedFadeBorderMat = new THREE.LineBasicMaterial({
+      color: 0x10b981,
+      linewidth: 2.0,
+      transparent: true,
+      opacity: 0.50,
+      depthWrite: false
+    });
+
     // Build ultra-lightweight 2D planar slice contours (uses ShapeGeometry to save >90% memory)
     this.slicedLayers.forEach((layer, lIdx) => {
       // Find which laminated part contains this layer
@@ -1069,14 +1107,7 @@ export class CLESlicerEngine {
         const shapeGeo = new THREE.ShapeGeometry(shape);
         shapeGeo.translate(0, 0, layer.z);
 
-        const solidMat = new THREE.MeshBasicMaterial({
-          color: 0x22c55e, // Subtle Green Slice Planar Fill
-          transparent: true,
-          opacity: 0.28,
-          side: THREE.DoubleSide,
-          depthWrite: false
-        });
-        const solidSliceMesh = new THREE.Mesh(shapeGeo, solidMat);
+        const solidSliceMesh = new THREE.Mesh(shapeGeo, this.sharedSolidMat);
         solidSliceMesh.name = `CLE_Solid_Slice_${lIdx}`;
         solidSliceMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isSolidSlice: true };
         solidSliceMesh.renderOrder = 99990;
@@ -1086,14 +1117,7 @@ export class CLESlicerEngine {
         // Vivid Glowing Green Perimeter Contour Outline Loop (User: "green outline of conture so we can clearly see")
         const loopPts = contourPts.map(p => new THREE.Vector3(p.x, p.y, layer.z));
         const loopGeo = new THREE.BufferGeometry().setFromPoints(loopPts);
-        const loopMat = new THREE.LineBasicMaterial({
-          color: 0x22c55e, // Vivid Emerald Green Outline Contour
-          linewidth: 4.0,
-          transparent: true,
-          opacity: 0.98,
-          depthWrite: false
-        });
-        const contourBorder = new THREE.LineLoop(loopGeo, loopMat);
+        const contourBorder = new THREE.LineLoop(loopGeo, this.sharedBorderMat);
         contourBorder.name = `CLE_Contour_Border_${lIdx}`;
         contourBorder.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isContourBorder: true };
         contourBorder.renderOrder = 100001;
@@ -1499,6 +1523,14 @@ export class CLESlicerEngine {
       this.activeTraceLine = null;
     }
 
+    if (this._crossSectionCache) {
+      this._crossSectionCache.clear();
+    }
+    if (this.sharedSolidMat) { try { this.sharedSolidMat.dispose(); } catch (e) {} this.sharedSolidMat = null; }
+    if (this.sharedFadeSolidMat) { try { this.sharedFadeSolidMat.dispose(); } catch (e) {} this.sharedFadeSolidMat = null; }
+    if (this.sharedBorderMat) { try { this.sharedBorderMat.dispose(); } catch (e) {} this.sharedBorderMat = null; }
+    if (this.sharedFadeBorderMat) { try { this.sharedFadeBorderMat.dispose(); } catch (e) {} this.sharedFadeBorderMat = null; }
+
     // Restore CAD body opacity and depthWrite
     this.setWorkspaceBodiesTransparent(false);
 
@@ -1544,24 +1576,18 @@ export class CLESlicerEngine {
       }
 
       if (mode === 'single') {
-        // --- SINGLE SLICE ORANGE CONTOUR MODE ---
-        // Exactly one slice at a time showing clean orange contour following the 3D object in X, Y, Z (and A)
+        // --- SINGLE SLICE SOLID GREEN CONTOUR MODE ---
+        // Exactly one slice at a time showing solid transparent green contour following the 3D object in X, Y, Z (and A)
         const effectiveTarget = (targetIndex === -1) ? 0 : targetIndex;
         const isTarget = (lIdx === effectiveTarget);
 
         if (isSolidSlice) {
           mesh.visible = isTarget;
-          if (mesh.material) {
-            mesh.material.opacity = 0.30;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e); // Green Slice Disc
-          }
+          if (isTarget && this.sharedSolidMat) mesh.material = this.sharedSolidMat;
         } else if (isContourBorder) {
           // If simulating trace, keep border hidden until tool cuts it; otherwise show active slice contour
           mesh.visible = this.isSimulating ? (this._activeSimLayer === lIdx && !this.activeTraceLine?.visible) : isTarget;
-          if (mesh.material) {
-            mesh.material.opacity = 1.0;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e); // VIVID GREEN OUTLINE CONTOUR!
-          }
+          if (isTarget && this.sharedBorderMat) mesh.material = this.sharedBorderMat;
         } else if (isRawToolpath) {
           // Raw toolpath lines: NEVER displayed statically! Only visible for active slice currently being traced
           mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);
@@ -1578,17 +1604,13 @@ export class CLESlicerEngine {
 
         if (isSolidSlice) {
           mesh.visible = inRange;
-          if (mesh.material) {
-            mesh.material.opacity = isCenter ? 0.35 : 0.18;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e);
+          if (inRange && this.sharedSolidMat && this.sharedFadeSolidMat) {
+            mesh.material = isCenter ? this.sharedSolidMat : this.sharedFadeSolidMat;
           }
         } else if (isContourBorder) {
           mesh.visible = inRange;
-          if (mesh.material) {
-            mesh.material.opacity = isCenter ? 1.0 : 0.55;
-            if (mesh.material.color && mesh.material.color.setHex) {
-              mesh.material.color.setHex(isCenter ? 0x22c55e : 0x10b981);
-            }
+          if (inRange && this.sharedBorderMat && this.sharedFadeBorderMat) {
+            mesh.material = isCenter ? this.sharedBorderMat : this.sharedFadeBorderMat;
           }
         } else if (isRawToolpath) {
           mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);
@@ -1601,18 +1623,12 @@ export class CLESlicerEngine {
         // Clean contour stack across the workpiece
         if (isSolidSlice) {
           mesh.visible = true;
-          if (mesh.material) {
-            mesh.material.opacity = 0.15;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e);
-          }
+          if (this.sharedFadeSolidMat) mesh.material = this.sharedFadeSolidMat;
         } else if (isContourBorder) {
           mesh.visible = true;
-          if (mesh.material) {
-            const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
-            mesh.material.opacity = isTarget ? 1.0 : 0.35;
-            if (mesh.material.color && mesh.material.color.setHex) {
-              mesh.material.color.setHex(isTarget ? 0x22c55e : 0x10b981);
-            }
+          const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
+          if (this.sharedBorderMat && this.sharedFadeBorderMat) {
+            mesh.material = isTarget ? this.sharedBorderMat : this.sharedFadeBorderMat;
           }
         } else if (isRawToolpath) {
           mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);

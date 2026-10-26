@@ -18,21 +18,70 @@ export class CLECameraEngine {
   }
 
   get isActive() {
-    return this.activeType !== 'none' && (this.stream !== null || this.activeType === 'wifi');
+    return this.activeType !== 'none' && ((this.stream !== null && this.stream.active) || this.activeType === 'wifi');
   }
 
-  // Automatically start USB camera if permission was previously granted and device exists
-  async autoStartIfAvailable() {
-    if (this.isActive) return true;
+  // Synchronize DOM elements (video feed, dropdown, placeholder) to current camera state
+  syncUI() {
+    const videoEl = document.getElementById('cle-cam-video');
+    const imgEl = document.getElementById('cle-cam-img');
+    const placeholder = document.getElementById('cle-cam-placeholder');
+    const devSelect = document.getElementById('cle-cam-device-select');
+
+    if (this.activeType === 'usb' && this.stream && this.stream.active) {
+      if (videoEl) {
+        if (videoEl.srcObject !== this.stream) {
+          videoEl.srcObject = this.stream;
+        }
+        videoEl.style.display = 'block';
+        try { videoEl.play(); } catch (e) {}
+      }
+      if (imgEl) imgEl.style.display = 'none';
+      if (placeholder) placeholder.style.display = 'none';
+    } else if (this.activeType === 'wifi' && this.wifiUrl) {
+      if (videoEl) {
+        videoEl.style.display = 'none';
+        videoEl.srcObject = null;
+      }
+      if (imgEl) {
+        imgEl.src = this.wifiUrl;
+        imgEl.style.display = 'block';
+      }
+      if (placeholder) placeholder.style.display = 'none';
+    } else {
+      if (videoEl) {
+        videoEl.style.display = 'none';
+        videoEl.srcObject = null;
+      }
+      if (imgEl) {
+        imgEl.style.display = 'none';
+      }
+      if (placeholder) placeholder.style.display = 'flex';
+    }
+
+    if (devSelect && this.selectedDeviceId) {
+      devSelect.value = this.selectedDeviceId;
+    }
+    this.updateReticleCanvas();
+  }
+
+  // Automatically start USB camera from Vault configuration on CLE startup
+  async autoStartIfAvailable(silent = true) {
+    if (this.isActive) {
+      this.syncUI();
+      return true;
+    }
     if (this._startPromise) return this._startPromise;
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return false;
+    }
+
     const vCfg = this.bridge?.vault ? this.bridge.vault.getCameraConfig() : {};
-    const isGranted = (this.permissionGranted || vCfg.permissionGranted || localStorage.getItem('cle.cam.permissionGranted') === 'true');
-    // If user previously granted permission, auto-open directly without any dialog
-    if (!isGranted) return false;
 
     try {
       const savedDevId = this.selectedDeviceId || vCfg.deviceId || localStorage.getItem('cle.cam.deviceId');
-      return await this.startUSBCamera(savedDevId || undefined);
+      return await this.startUSBCamera(savedDevId || undefined, silent);
     } catch (e) {
       console.warn('[CLE Camera] Auto-start check error:', e);
     }
@@ -52,14 +101,21 @@ export class CLECameraEngine {
   }
 
   // Start USB Webcam with auto-selection or selected deviceId (guarded against duplicate prompts)
-  async startUSBCamera(deviceId = this.selectedDeviceId) {
+  async startUSBCamera(deviceId = this.selectedDeviceId, silent = false) {
+    if (this.isActive && this.stream && this.stream.active) {
+      this.syncUI();
+      return true;
+    }
     if (this._isStarting && this._startPromise) {
       return this._startPromise;
     }
     this._isStarting = true;
     this._startPromise = (async () => {
-      this.stopCamera();
+      this.stopCamera(false);
       try {
+        const vCfg = this.bridge?.vault ? this.bridge.vault.getCameraConfig() : {};
+        const targetId = deviceId || this.selectedDeviceId || vCfg.deviceId || localStorage.getItem('cle.cam.deviceId');
+
         const constraints = {
           video: {
             width: { ideal: 1280 },
@@ -69,8 +125,8 @@ export class CLECameraEngine {
         };
 
         // Use ideal constraint so changed deviceId hashes never throw OverconstrainedError
-        if (deviceId) {
-          constraints.video.deviceId = { ideal: deviceId };
+        if (targetId) {
+          constraints.video.deviceId = { ideal: targetId };
         }
 
         this.stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -81,9 +137,18 @@ export class CLECameraEngine {
         // Capture device details now that stream is established and labels are populated
         let activeLabel = 'Logitech HD Webcam C270';
         try {
+          const track = this.stream.getVideoTracks()[0];
+          if (track) {
+            const settings = track.getSettings ? track.getSettings() : {};
+            if (settings.deviceId) this.selectedDeviceId = settings.deviceId;
+            if (track.label) activeLabel = track.label;
+          }
           const devices = await this.getAvailableDevices();
           const logi = devices.find(d => /logi|c270|webcam/i.test(d.label));
-          const matched = logi || devices.find(d => d.deviceId === deviceId) || devices[0];
+          const matched = (this.selectedDeviceId && devices.find(d => d.deviceId === this.selectedDeviceId)) ||
+                          logi ||
+                          (targetId && devices.find(d => d.deviceId === targetId)) ||
+                          devices[0];
           if (matched) {
             this.selectedDeviceId = matched.deviceId;
             activeLabel = matched.label || activeLabel;
@@ -108,24 +173,16 @@ export class CLECameraEngine {
           });
         }
 
-        const videoEl = document.getElementById('cle-cam-video');
-        const imgEl = document.getElementById('cle-cam-img');
-        const placeholder = document.getElementById('cle-cam-placeholder');
-
-        if (videoEl) {
-          videoEl.srcObject = this.stream;
-          videoEl.style.display = 'block';
-          try { await videoEl.play(); } catch (e) {}
+        this.syncUI();
+        if (!silent) {
+          this.bridge.notify(`Camera active: ${activeLabel} (720p @ 30 FPS)`, 'ok');
         }
-        if (imgEl) imgEl.style.display = 'none';
-        if (placeholder) placeholder.style.display = 'none';
-
-        this.updateReticleCanvas();
-        this.bridge.notify(`Camera active: ${activeLabel} (720p @ 30 FPS)`, 'ok');
         return true;
       } catch (err) {
-        console.error('[CLE Camera] Start USB cam error:', err);
-        this.bridge.notify(`Could not open camera: ${err.message}`, 'error');
+        console.warn('[CLE Camera] Start USB cam error:', err);
+        if (!silent) {
+          this.bridge.notify(`Could not open camera: ${err.message}`, 'error');
+        }
         return false;
       }
     })();
@@ -140,50 +197,25 @@ export class CLECameraEngine {
 
   // Start Open Wi-Fi / IP Camera (MJPEG / HTTP stream)
   startWiFiCamera(url = this.wifiUrl) {
-    this.stopCamera();
+    this.stopCamera(false);
     this.wifiUrl = url;
     localStorage.setItem('cle.cam.wifiUrl', url);
     this.activeType = 'wifi';
-
-    const videoEl = document.getElementById('cle-cam-video');
-    const imgEl = document.getElementById('cle-cam-img');
-    const placeholder = document.getElementById('cle-cam-placeholder');
-
-    if (videoEl) {
-      videoEl.style.display = 'none';
-      videoEl.srcObject = null;
-    }
-    if (imgEl) {
-      imgEl.src = url;
-      imgEl.style.display = 'block';
-    }
-    if (placeholder) placeholder.style.display = 'none';
-
-    this.updateReticleCanvas();
+    this.syncUI();
     this.bridge.notify(`Connecting to Wi-Fi camera at ${url}...`, 'ok');
   }
 
-  stopCamera() {
+  stopCamera(resetActiveType = true) {
     if (this.stream) {
-      this.stream.getTracks().forEach(track => track.stop());
+      try {
+        this.stream.getTracks().forEach(track => track.stop());
+      } catch (e) {}
       this.stream = null;
     }
-    const videoEl = document.getElementById('cle-cam-video');
-    const imgEl = document.getElementById('cle-cam-img');
-    const placeholder = document.getElementById('cle-cam-placeholder');
-
-    if (videoEl) {
-      videoEl.style.display = 'none';
-      videoEl.srcObject = null;
+    if (resetActiveType) {
+      this.activeType = 'none';
     }
-    if (imgEl) {
-      imgEl.style.display = 'none';
-      imgEl.src = '';
-    }
-    if (placeholder) placeholder.style.display = 'flex';
-
-    this.activeType = 'none';
-    this.clearReticleCanvas();
+    this.syncUI();
   }
 
   // Draw optical crosshair / alignment reticle over video feed

@@ -29,21 +29,70 @@ class CLECameraEngine {
   }
 
   get isActive() {
-    return this.activeType !== 'none' && (this.stream !== null || this.activeType === 'wifi');
+    return this.activeType !== 'none' && ((this.stream !== null && this.stream.active) || this.activeType === 'wifi');
   }
 
-  // Automatically start USB camera if permission was previously granted and device exists
-  async autoStartIfAvailable() {
-    if (this.isActive) return true;
+  // Synchronize DOM elements (video feed, dropdown, placeholder) to current camera state
+  syncUI() {
+    const videoEl = document.getElementById('cle-cam-video');
+    const imgEl = document.getElementById('cle-cam-img');
+    const placeholder = document.getElementById('cle-cam-placeholder');
+    const devSelect = document.getElementById('cle-cam-device-select');
+
+    if (this.activeType === 'usb' && this.stream && this.stream.active) {
+      if (videoEl) {
+        if (videoEl.srcObject !== this.stream) {
+          videoEl.srcObject = this.stream;
+        }
+        videoEl.style.display = 'block';
+        try { videoEl.play(); } catch (e) {}
+      }
+      if (imgEl) imgEl.style.display = 'none';
+      if (placeholder) placeholder.style.display = 'none';
+    } else if (this.activeType === 'wifi' && this.wifiUrl) {
+      if (videoEl) {
+        videoEl.style.display = 'none';
+        videoEl.srcObject = null;
+      }
+      if (imgEl) {
+        imgEl.src = this.wifiUrl;
+        imgEl.style.display = 'block';
+      }
+      if (placeholder) placeholder.style.display = 'none';
+    } else {
+      if (videoEl) {
+        videoEl.style.display = 'none';
+        videoEl.srcObject = null;
+      }
+      if (imgEl) {
+        imgEl.style.display = 'none';
+      }
+      if (placeholder) placeholder.style.display = 'flex';
+    }
+
+    if (devSelect && this.selectedDeviceId) {
+      devSelect.value = this.selectedDeviceId;
+    }
+    this.updateReticleCanvas();
+  }
+
+  // Automatically start USB camera from Vault configuration on CLE startup
+  async autoStartIfAvailable(silent = true) {
+    if (this.isActive) {
+      this.syncUI();
+      return true;
+    }
     if (this._startPromise) return this._startPromise;
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return false;
+    }
+
     const vCfg = this.bridge?.vault ? this.bridge.vault.getCameraConfig() : {};
-    const isGranted = (this.permissionGranted || vCfg.permissionGranted || localStorage.getItem('cle.cam.permissionGranted') === 'true');
-    // If user previously granted permission, auto-open directly without any dialog
-    if (!isGranted) return false;
 
     try {
       const savedDevId = this.selectedDeviceId || vCfg.deviceId || localStorage.getItem('cle.cam.deviceId');
-      return await this.startUSBCamera(savedDevId || undefined);
+      return await this.startUSBCamera(savedDevId || undefined, silent);
     } catch (e) {
       console.warn('[CLE Camera] Auto-start check error:', e);
     }
@@ -63,14 +112,21 @@ class CLECameraEngine {
   }
 
   // Start USB Webcam with auto-selection or selected deviceId (guarded against duplicate prompts)
-  async startUSBCamera(deviceId = this.selectedDeviceId) {
+  async startUSBCamera(deviceId = this.selectedDeviceId, silent = false) {
+    if (this.isActive && this.stream && this.stream.active) {
+      this.syncUI();
+      return true;
+    }
     if (this._isStarting && this._startPromise) {
       return this._startPromise;
     }
     this._isStarting = true;
     this._startPromise = (async () => {
-      this.stopCamera();
+      this.stopCamera(false);
       try {
+        const vCfg = this.bridge?.vault ? this.bridge.vault.getCameraConfig() : {};
+        const targetId = deviceId || this.selectedDeviceId || vCfg.deviceId || localStorage.getItem('cle.cam.deviceId');
+
         const constraints = {
           video: {
             width: { ideal: 1280 },
@@ -80,8 +136,8 @@ class CLECameraEngine {
         };
 
         // Use ideal constraint so changed deviceId hashes never throw OverconstrainedError
-        if (deviceId) {
-          constraints.video.deviceId = { ideal: deviceId };
+        if (targetId) {
+          constraints.video.deviceId = { ideal: targetId };
         }
 
         this.stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -92,9 +148,18 @@ class CLECameraEngine {
         // Capture device details now that stream is established and labels are populated
         let activeLabel = 'Logitech HD Webcam C270';
         try {
+          const track = this.stream.getVideoTracks()[0];
+          if (track) {
+            const settings = track.getSettings ? track.getSettings() : {};
+            if (settings.deviceId) this.selectedDeviceId = settings.deviceId;
+            if (track.label) activeLabel = track.label;
+          }
           const devices = await this.getAvailableDevices();
           const logi = devices.find(d => /logi|c270|webcam/i.test(d.label));
-          const matched = logi || devices.find(d => d.deviceId === deviceId) || devices[0];
+          const matched = (this.selectedDeviceId && devices.find(d => d.deviceId === this.selectedDeviceId)) ||
+                          logi ||
+                          (targetId && devices.find(d => d.deviceId === targetId)) ||
+                          devices[0];
           if (matched) {
             this.selectedDeviceId = matched.deviceId;
             activeLabel = matched.label || activeLabel;
@@ -119,24 +184,16 @@ class CLECameraEngine {
           });
         }
 
-        const videoEl = document.getElementById('cle-cam-video');
-        const imgEl = document.getElementById('cle-cam-img');
-        const placeholder = document.getElementById('cle-cam-placeholder');
-
-        if (videoEl) {
-          videoEl.srcObject = this.stream;
-          videoEl.style.display = 'block';
-          try { await videoEl.play(); } catch (e) {}
+        this.syncUI();
+        if (!silent) {
+          this.bridge.notify(`Camera active: ${activeLabel} (720p @ 30 FPS)`, 'ok');
         }
-        if (imgEl) imgEl.style.display = 'none';
-        if (placeholder) placeholder.style.display = 'none';
-
-        this.updateReticleCanvas();
-        this.bridge.notify(`Camera active: ${activeLabel} (720p @ 30 FPS)`, 'ok');
         return true;
       } catch (err) {
-        console.error('[CLE Camera] Start USB cam error:', err);
-        this.bridge.notify(`Could not open camera: ${err.message}`, 'error');
+        console.warn('[CLE Camera] Start USB cam error:', err);
+        if (!silent) {
+          this.bridge.notify(`Could not open camera: ${err.message}`, 'error');
+        }
         return false;
       }
     })();
@@ -151,50 +208,25 @@ class CLECameraEngine {
 
   // Start Open Wi-Fi / IP Camera (MJPEG / HTTP stream)
   startWiFiCamera(url = this.wifiUrl) {
-    this.stopCamera();
+    this.stopCamera(false);
     this.wifiUrl = url;
     localStorage.setItem('cle.cam.wifiUrl', url);
     this.activeType = 'wifi';
-
-    const videoEl = document.getElementById('cle-cam-video');
-    const imgEl = document.getElementById('cle-cam-img');
-    const placeholder = document.getElementById('cle-cam-placeholder');
-
-    if (videoEl) {
-      videoEl.style.display = 'none';
-      videoEl.srcObject = null;
-    }
-    if (imgEl) {
-      imgEl.src = url;
-      imgEl.style.display = 'block';
-    }
-    if (placeholder) placeholder.style.display = 'none';
-
-    this.updateReticleCanvas();
+    this.syncUI();
     this.bridge.notify(`Connecting to Wi-Fi camera at ${url}...`, 'ok');
   }
 
-  stopCamera() {
+  stopCamera(resetActiveType = true) {
     if (this.stream) {
-      this.stream.getTracks().forEach(track => track.stop());
+      try {
+        this.stream.getTracks().forEach(track => track.stop());
+      } catch (e) {}
       this.stream = null;
     }
-    const videoEl = document.getElementById('cle-cam-video');
-    const imgEl = document.getElementById('cle-cam-img');
-    const placeholder = document.getElementById('cle-cam-placeholder');
-
-    if (videoEl) {
-      videoEl.style.display = 'none';
-      videoEl.srcObject = null;
+    if (resetActiveType) {
+      this.activeType = 'none';
     }
-    if (imgEl) {
-      imgEl.style.display = 'none';
-      imgEl.src = '';
-    }
-    if (placeholder) placeholder.style.display = 'flex';
-
-    this.activeType = 'none';
-    this.clearReticleCanvas();
+    this.syncUI();
   }
 
   // Draw optical crosshair / alignment reticle over video feed
@@ -2155,7 +2187,13 @@ class CLEVault {
           wifiIP: '192.168.12.158',
           spoilboardX: 600,
           spoilboardY: 500,
-          spoilboardThickness: 20.0
+          spoilboardThickness: 20.0,
+          cameraConfig: {
+            permissionGranted: true,
+            activeType: 'usb',
+            deviceLabel: 'Logitech HD Webcam C270',
+            deviceId: ''
+          }
         }
       ],
       macros: [
@@ -2739,8 +2777,9 @@ class CLEVault {
       if (raw) return JSON.parse(raw);
     } catch(e) {}
     return {
-      permissionGranted: localStorage.getItem('cle.cam.permissionGranted') === 'true',
+      permissionGranted: true,
       deviceId: localStorage.getItem('cle.cam.deviceId') || '',
+      deviceLabel: localStorage.getItem('cle.cam.deviceLabel') || 'Logitech HD Webcam C270',
       wifiUrl: localStorage.getItem('cle.cam.wifiUrl') || 'http://192.168.12.158:8080/video',
       activeType: 'usb'
     };
@@ -3542,6 +3581,12 @@ class CLESlicerEngine {
     if (!this.lastGeometry || !this.lastGeometry.triangles || this.lastGeometry.triangles.length < 9) {
       return null;
     }
+    if (!this._crossSectionCache) this._crossSectionCache = new Map();
+    const zKey = Z.toFixed(3);
+    if (this._crossSectionCache.has(zKey)) {
+      return this._crossSectionCache.get(zKey);
+    }
+
     const tris = this.lastGeometry.triangles;
     const segments = [];
 
@@ -3615,7 +3660,9 @@ class CLESlicerEngine {
       }
     }
 
-    return chain.length >= 3 ? chain : null;
+    const result = chain.length >= 3 ? chain : null;
+    this._crossSectionCache.set(zKey, result);
+    return result;
   }
 
   // Partition master sliced layers into laminated stock slabs (e.g. 40mm MDF / hardwood tiers for biradial horns)
@@ -4055,6 +4102,36 @@ class CLESlicerEngine {
     this.activeTraceLine.visible = false;
     this.visualizerGroup.add(this.activeTraceLine);
 
+    // Shared materials to eliminate WebGL shader and JS memory bloat
+    this.sharedSolidMat = new THREE.MeshBasicMaterial({
+      color: 0x22c55e, // Solid Transparent Green Slice Disc (User: "fill it solid with transparent green")
+      transparent: true,
+      opacity: 0.65,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    this.sharedFadeSolidMat = new THREE.MeshBasicMaterial({
+      color: 0x22c55e,
+      transparent: true,
+      opacity: 0.25,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    this.sharedBorderMat = new THREE.LineBasicMaterial({
+      color: 0x22c55e, // Vivid Emerald Green Outline Contour
+      linewidth: 4.0,
+      transparent: true,
+      opacity: 1.0,
+      depthWrite: false
+    });
+    this.sharedFadeBorderMat = new THREE.LineBasicMaterial({
+      color: 0x10b981,
+      linewidth: 2.0,
+      transparent: true,
+      opacity: 0.50,
+      depthWrite: false
+    });
+
     // Build ultra-lightweight 2D planar slice contours (uses ShapeGeometry to save >90% memory)
     this.slicedLayers.forEach((layer, lIdx) => {
       // Find which laminated part contains this layer
@@ -4079,14 +4156,7 @@ class CLESlicerEngine {
         const shapeGeo = new THREE.ShapeGeometry(shape);
         shapeGeo.translate(0, 0, layer.z);
 
-        const solidMat = new THREE.MeshBasicMaterial({
-          color: 0x22c55e, // Subtle Green Slice Planar Fill
-          transparent: true,
-          opacity: 0.28,
-          side: THREE.DoubleSide,
-          depthWrite: false
-        });
-        const solidSliceMesh = new THREE.Mesh(shapeGeo, solidMat);
+        const solidSliceMesh = new THREE.Mesh(shapeGeo, this.sharedSolidMat);
         solidSliceMesh.name = `CLE_Solid_Slice_${lIdx}`;
         solidSliceMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isSolidSlice: true };
         solidSliceMesh.renderOrder = 99990;
@@ -4096,14 +4166,7 @@ class CLESlicerEngine {
         // Vivid Glowing Green Perimeter Contour Outline Loop (User: "green outline of conture so we can clearly see")
         const loopPts = contourPts.map(p => new THREE.Vector3(p.x, p.y, layer.z));
         const loopGeo = new THREE.BufferGeometry().setFromPoints(loopPts);
-        const loopMat = new THREE.LineBasicMaterial({
-          color: 0x22c55e, // Vivid Emerald Green Outline Contour
-          linewidth: 4.0,
-          transparent: true,
-          opacity: 0.98,
-          depthWrite: false
-        });
-        const contourBorder = new THREE.LineLoop(loopGeo, loopMat);
+        const contourBorder = new THREE.LineLoop(loopGeo, this.sharedBorderMat);
         contourBorder.name = `CLE_Contour_Border_${lIdx}`;
         contourBorder.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isContourBorder: true };
         contourBorder.renderOrder = 100001;
@@ -4509,6 +4572,14 @@ class CLESlicerEngine {
       this.activeTraceLine = null;
     }
 
+    if (this._crossSectionCache) {
+      this._crossSectionCache.clear();
+    }
+    if (this.sharedSolidMat) { try { this.sharedSolidMat.dispose(); } catch (e) {} this.sharedSolidMat = null; }
+    if (this.sharedFadeSolidMat) { try { this.sharedFadeSolidMat.dispose(); } catch (e) {} this.sharedFadeSolidMat = null; }
+    if (this.sharedBorderMat) { try { this.sharedBorderMat.dispose(); } catch (e) {} this.sharedBorderMat = null; }
+    if (this.sharedFadeBorderMat) { try { this.sharedFadeBorderMat.dispose(); } catch (e) {} this.sharedFadeBorderMat = null; }
+
     // Restore CAD body opacity and depthWrite
     this.setWorkspaceBodiesTransparent(false);
 
@@ -4554,24 +4625,18 @@ class CLESlicerEngine {
       }
 
       if (mode === 'single') {
-        // --- SINGLE SLICE ORANGE CONTOUR MODE ---
-        // Exactly one slice at a time showing clean orange contour following the 3D object in X, Y, Z (and A)
+        // --- SINGLE SLICE SOLID GREEN CONTOUR MODE ---
+        // Exactly one slice at a time showing solid transparent green contour following the 3D object in X, Y, Z (and A)
         const effectiveTarget = (targetIndex === -1) ? 0 : targetIndex;
         const isTarget = (lIdx === effectiveTarget);
 
         if (isSolidSlice) {
           mesh.visible = isTarget;
-          if (mesh.material) {
-            mesh.material.opacity = 0.30;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e); // Green Slice Disc
-          }
+          if (isTarget && this.sharedSolidMat) mesh.material = this.sharedSolidMat;
         } else if (isContourBorder) {
           // If simulating trace, keep border hidden until tool cuts it; otherwise show active slice contour
           mesh.visible = this.isSimulating ? (this._activeSimLayer === lIdx && !this.activeTraceLine?.visible) : isTarget;
-          if (mesh.material) {
-            mesh.material.opacity = 1.0;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e); // VIVID GREEN OUTLINE CONTOUR!
-          }
+          if (isTarget && this.sharedBorderMat) mesh.material = this.sharedBorderMat;
         } else if (isRawToolpath) {
           // Raw toolpath lines: NEVER displayed statically! Only visible for active slice currently being traced
           mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);
@@ -4588,17 +4653,13 @@ class CLESlicerEngine {
 
         if (isSolidSlice) {
           mesh.visible = inRange;
-          if (mesh.material) {
-            mesh.material.opacity = isCenter ? 0.35 : 0.18;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e);
+          if (inRange && this.sharedSolidMat && this.sharedFadeSolidMat) {
+            mesh.material = isCenter ? this.sharedSolidMat : this.sharedFadeSolidMat;
           }
         } else if (isContourBorder) {
           mesh.visible = inRange;
-          if (mesh.material) {
-            mesh.material.opacity = isCenter ? 1.0 : 0.55;
-            if (mesh.material.color && mesh.material.color.setHex) {
-              mesh.material.color.setHex(isCenter ? 0x22c55e : 0x10b981);
-            }
+          if (inRange && this.sharedBorderMat && this.sharedFadeBorderMat) {
+            mesh.material = isCenter ? this.sharedBorderMat : this.sharedFadeBorderMat;
           }
         } else if (isRawToolpath) {
           mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);
@@ -4611,18 +4672,12 @@ class CLESlicerEngine {
         // Clean contour stack across the workpiece
         if (isSolidSlice) {
           mesh.visible = true;
-          if (mesh.material) {
-            mesh.material.opacity = 0.15;
-            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e);
-          }
+          if (this.sharedFadeSolidMat) mesh.material = this.sharedFadeSolidMat;
         } else if (isContourBorder) {
           mesh.visible = true;
-          if (mesh.material) {
-            const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
-            mesh.material.opacity = isTarget ? 1.0 : 0.35;
-            if (mesh.material.color && mesh.material.color.setHex) {
-              mesh.material.color.setHex(isTarget ? 0x22c55e : 0x10b981);
-            }
+          const isTarget = (targetIndex !== -1 && lIdx === targetIndex);
+          if (this.sharedBorderMat && this.sharedFadeBorderMat) {
+            mesh.material = isTarget ? this.sharedBorderMat : this.sharedFadeBorderMat;
           }
         } else if (isRawToolpath) {
           mesh.visible = (this.isSimulating && this._activeSimLayer === lIdx);
@@ -6599,6 +6654,9 @@ class CLEBridge {
     console.log(`[CLEJS] Initializing Continuous 3D Extension v${this.version}...`);
     this.injectTopBarButton();
     this.registerWithJumpStart();
+    if (this.camera) {
+      this.camera.autoStartIfAvailable(true);
+    }
   }
 
   registerWithJumpStart() {
@@ -6631,6 +6689,9 @@ class CLEBridge {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
       if (this.bed) this.bed.init();
       if (this.slicer) this.slicer.init();
+      if (this.camera && !this.camera.isActive) {
+        this.camera.autoStartIfAvailable(true);
+      }
       // Hook scene refresh so workpiece automatically stays seated on spoilboard
       if (app.scene && !this._sceneRefreshHooked) {
         this._sceneRefreshHooked = true;
@@ -6798,8 +6859,11 @@ class CLEBridge {
       if (this.fluidnc) {
         this.fluidnc.updateConnectionUI(this.fluidnc.isConnected);
       }
-      if (this.camera && !this.camera.isActive) {
-        this.camera.autoStartIfAvailable();
+      if (this.camera) {
+        this.camera.syncUI();
+        if (!this.camera.isActive) {
+          this.camera.autoStartIfAvailable(false);
+        }
       }
       return;
     }
@@ -6974,13 +7038,17 @@ class CLEBridge {
       devSelect.innerHTML = devices.map(d => `<option value="${d.deviceId}">${d.label || 'USB Camera'}</option>`).join('');
       const logi = devices.find(d => /logi|c270|webcam/i.test(d.label));
       if (logi) devSelect.value = logi.deviceId;
+      else if (this.camera.selectedDeviceId) devSelect.value = this.camera.selectedDeviceId;
     } else {
       devSelect.innerHTML = '<option value="">Default USB Video Device</option>';
     }
 
-    // Camera if exists should always be started
-    if (this.camera && !this.camera.isActive) {
-      this.camera.autoStartIfAvailable();
+    // Immediately sync camera feed to UI (stream already loaded from Vault on boot)
+    if (this.camera) {
+      this.camera.syncUI();
+      if (!this.camera.isActive) {
+        this.camera.autoStartIfAvailable(false);
+      }
     }
 
     // Sync live connection state to manual card badge

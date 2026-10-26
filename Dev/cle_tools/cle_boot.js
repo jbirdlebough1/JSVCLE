@@ -80,6 +80,9 @@ class CLEBridge {
     console.log(`[CLEJS] Initializing Continuous 3D Extension v${this.version}...`);
     this.injectTopBarButton();
     this.registerWithJumpStart();
+    if (this.camera) {
+      this.camera.autoStartIfAvailable(true);
+    }
   }
 
   registerWithJumpStart() {
@@ -112,6 +115,9 @@ class CLEBridge {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
       if (this.bed) this.bed.init();
       if (this.slicer) this.slicer.init();
+      if (this.camera && !this.camera.isActive) {
+        this.camera.autoStartIfAvailable(true);
+      }
       // Hook scene refresh so workpiece automatically stays seated on spoilboard
       if (app.scene && !this._sceneRefreshHooked) {
         this._sceneRefreshHooked = true;
@@ -279,8 +285,11 @@ class CLEBridge {
       if (this.fluidnc) {
         this.fluidnc.updateConnectionUI(this.fluidnc.isConnected);
       }
-      if (this.camera && !this.camera.isActive) {
-        this.camera.autoStartIfAvailable();
+      if (this.camera) {
+        this.camera.syncUI();
+        if (!this.camera.isActive) {
+          this.camera.autoStartIfAvailable(false);
+        }
       }
       return;
     }
@@ -455,13 +464,17 @@ class CLEBridge {
       devSelect.innerHTML = devices.map(d => `<option value="${d.deviceId}">${d.label || 'USB Camera'}</option>`).join('');
       const logi = devices.find(d => /logi|c270|webcam/i.test(d.label));
       if (logi) devSelect.value = logi.deviceId;
+      else if (this.camera.selectedDeviceId) devSelect.value = this.camera.selectedDeviceId;
     } else {
       devSelect.innerHTML = '<option value="">Default USB Video Device</option>';
     }
 
-    // Camera if exists should always be started
-    if (this.camera && !this.camera.isActive) {
-      this.camera.autoStartIfAvailable();
+    // Immediately sync camera feed to UI (stream already loaded from Vault on boot)
+    if (this.camera) {
+      this.camera.syncUI();
+      if (!this.camera.isActive) {
+        this.camera.autoStartIfAvailable(false);
+      }
     }
 
     // Sync live connection state to manual card badge

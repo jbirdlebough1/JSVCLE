@@ -52,7 +52,13 @@ export class CLEVault {
           wifiIP: '192.168.12.158',
           spoilboardX: 600,
           spoilboardY: 500,
-          spoilboardThickness: 20.0
+          spoilboardThickness: 20.0,
+          cameraConfig: {
+            permissionGranted: true,
+            activeType: 'usb',
+            deviceLabel: 'Logitech HD Webcam C270',
+            deviceId: ''
+          }
         }
       ],
       macros: [
@@ -636,8 +642,9 @@ export class CLEVault {
       if (raw) return JSON.parse(raw);
     } catch(e) {}
     return {
-      permissionGranted: localStorage.getItem('cle.cam.permissionGranted') === 'true',
+      permissionGranted: true,
       deviceId: localStorage.getItem('cle.cam.deviceId') || '',
+      deviceLabel: localStorage.getItem('cle.cam.deviceLabel') || 'Logitech HD Webcam C270',
       wifiUrl: localStorage.getItem('cle.cam.wifiUrl') || 'http://192.168.12.158:8080/video',
       activeType: 'usb'
     };
