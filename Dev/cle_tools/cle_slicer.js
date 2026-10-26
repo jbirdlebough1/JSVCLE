@@ -105,8 +105,12 @@ export class CLESlicerEngine {
     const extractedNames = [];
 
     // 1. Extract from JumpStart scene views with exact matrixWorld transformation
+    // If user has specific body selection, prioritize slicing the selected body
+    const selSet = (app?.sel && app.sel.length > 0) ? new Set(app.sel) : null;
+
     if (views && views.size > 0) {
       for (const [id, view] of views) {
+        if (selSet && !selSet.has(id)) continue;
         const body = (bodies.find(b => b.id === id)) || view.body;
         if (body && (body.hidden || body.hole)) continue;
 
@@ -487,7 +491,7 @@ export class CLESlicerEngine {
     this.slicedLayers = [];
     const lines = gcodeText.split('\n');
     let currentLayer = null; // Do not create phantom layer before first LAYER header!
-    let curX = 0, curY = 0, curZ = 0, curA = 0;
+    let curX = null, curY = null, curZ = null, curA = 0;
 
     for (const raw of lines) {
       const line = raw.trim();
@@ -499,7 +503,7 @@ export class CLESlicerEngine {
           this.slicedLayers.push(currentLayer);
         }
         const matchZ = line.match(/Z=([-\d.]+)/i);
-        const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
+        const lZ = matchZ ? parseFloat(matchZ[1]) : (curZ ?? 0);
         currentLayer = { index: this.slicedLayers.length, z: lZ, points: [], isCutoutPass: true };
         continue;
       }
@@ -511,7 +515,7 @@ export class CLESlicerEngine {
         }
         const matchZ = line.match(/Z=([-\d.]+)/i);
         const matchA = line.match(/A=([-\d.]+)/i);
-        const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
+        const lZ = matchZ ? parseFloat(matchZ[1]) : (curZ ?? 0);
         if (matchA) curA = parseFloat(matchA[1]);
         currentLayer = { index: this.slicedLayers.length, z: lZ, a: curA, points: [], isCutoutPass: false };
         continue;
@@ -534,7 +538,13 @@ export class CLESlicerEngine {
           // Preamble moves before any layer (safe clearance plane, etc.)
           continue;
         }
-        currentLayer.points.push({ x: curX, y: curY, z: curZ, a: curA, isRapid });
+        // Only record points that specify horizontal coordinates or after coordinates have been established
+        if (curX !== null && curY !== null && (matchX || matchY || !isRapid)) {
+          const lastPt = currentLayer.points[currentLayer.points.length - 1];
+          if (!lastPt || Math.hypot(lastPt.x - curX, lastPt.y - curY) > 0.01) {
+            currentLayer.points.push({ x: curX, y: curY, z: curZ ?? currentLayer.z, a: curA, isRapid });
+          }
+        }
       }
     }
 
@@ -652,7 +662,9 @@ export class CLESlicerEngine {
         if (d1 < bestDist) { bestDist = d1; bestIdx = j; flip = true; }
       }
 
-      if (bestIdx !== -1 && bestDist < 15.0) {
+      // ONLY chain contiguous segments belonging to the SAME connected boundary loop!
+      // Any gap > 2.0mm means another disconnected body - NEVER jump across space!
+      if (bestIdx !== -1 && bestDist < 2.0) {
         used[bestIdx] = 1;
         chain.push(flip ? segments[bestIdx][0] : segments[bestIdx][1]);
       } else {
@@ -1254,8 +1266,8 @@ export class CLESlicerEngine {
         if (app.vp.updateCamera) app.vp.updateCamera();
       }
 
-      // 5. 3D Dowel Registration Pins (Vivid Gold Cylinders through laminated stack)
-      if (this.laminationConfig.enabled && this.dowelPoints && this.dowelPoints.length > 0) {
+      // 5. 3D Dowel Registration Pins (Only in Lamination Mode through physical sliced sheets)
+      if (this.mode === 'lamination' && this.laminationConfig.enabled && this.dowelPoints && this.dowelPoints.length > 0) {
         const pinH = Math.max(10, maxZ - minZ + 8.0);
         const pinCenterZ = (minZ + maxZ) / 2;
 
@@ -1776,6 +1788,7 @@ export class CLESlicerEngine {
 
       <button class="cle-btn" id="cle-hud-trace" style="background:#059669; color:#fff; font-weight:600; padding:3px 8px;" title="Simulate 3D toolhead movement over slices">Trace 3D</button>
       <button class="cle-btn" id="cle-hud-rot-a" style="background:#ea580c; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Rotate Object 90° about A-Axis (X) for 4th Axis Rotary Milling">Rot 90° A</button>
+      <button class="cle-btn" id="cle-hud-rot-fit" style="background:#d97706; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Auto-clamp Chuck and Opposing Center to CAD workpiece ends">Clamp Ends</button>
       <div style="border-left:1px solid var(--line); height:18px;"></div>
       <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600; padding:3px 8px;">Export .NC</button>
       <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600; padding:3px 8px;">To SD</button>
@@ -1980,6 +1993,16 @@ export class CLESlicerEngine {
           this.bridge.bed.rotateWorkpiece('X', 90);
           this.clearVisualizer();
           await this.sliceModel();
+        }
+      };
+    }
+
+    // Auto-Fit Chuck and Opposing Center to Workpiece Ends
+    const rotFitBtn = document.getElementById('cle-hud-rot-fit');
+    if (rotFitBtn) {
+      rotFitBtn.onclick = () => {
+        if (this.bridge?.rotary) {
+          this.bridge.rotary.fitToObject();
         }
       };
     }

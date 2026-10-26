@@ -275,6 +275,7 @@ class CLEBridge {
     // 3. 4th Axis & Slicer
     m("Rotary & Slicer", "", [
       { id: "cle-r-rotary", label: "4th Axis (A)", title: "Toggle 4th Axis Rotary Chuck & Cylindrical Stock in 3D View", icon: "lathe", pressed: this.rotary.enabled, fn: () => this.rotary.toggle() },
+      { id: "cle-r-rot-fit", label: "Clamp Ends", title: "Auto-Clamp Chuck & Opposing Center to CAD Object Ends", icon: "box", fn: () => this.rotary.fitToObject() },
       { id: "cle-r-rot-setup", label: "A-Axis Setup", title: "TwoTrees Rotary Setup: Gear Ratio (5:1), Pulley, Center Y, Z=45mm & Safety", icon: "features", fn: () => this.openModal("rotary") },
       { id: "cle-r-turning", label: "Turning", title: "Lathe Continuous Spindle Turning (RPM & Deg/s)", icon: "motion", pressed: this.rotary.isTurning, fn: () => this.rotary.toggleTurning() },
       { id: "cle-r-index", label: "Index Next", title: "Index A-Axis to Next Facet (Top-Down Milling)", icon: "revolve", fn: () => this.rotary.nextIndex() },
@@ -1151,9 +1152,20 @@ class CLEBridge {
               <label>Center Height from Bed (mm):</label>
               <input class="cle-input" id="rot-center-z" type="number" value="${rot.centerHeightMm}">
             </div>
-            <div class="cle-form-row">
-              <label>Chuck X Face (mm):</label>
-              <input class="cle-input" id="rot-start-x" type="number" value="${rot.startX}">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Chuck X Face (mm):</label>
+                <input class="cle-input" id="rot-chuck-x" type="number" value="${rot.chuckX}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Opposing Center X (mm):</label>
+                <input class="cle-input" id="rot-tailstock-x" type="number" value="${rot.tailstockX}">
+              </div>
+            </div>
+            <div style="margin-top:6px; margin-bottom:6px;">
+              <button class="cle-btn" id="rot-btn-fit-object" style="background:#ea580c; color:#fff; font-size:11px; font-weight:700; width:100%; padding:5px 8px;" title="Automatically align Chuck to object start and Opposing Center to object end">
+                Clamp to Object Ends (Auto-Fit)
+              </button>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
               <div class="cle-form-row">
@@ -1892,10 +1904,14 @@ class CLEBridge {
       if (btnApply) {
         btnApply.onclick = async () => {
           rot.setGearRatio(ratioIn.value, mPulleyIn.value, cPulleyIn.value);
+          const cX = parseFloat(document.getElementById('rot-chuck-x')?.value) || rot.chuckX;
+          const tX = parseFloat(document.getElementById('rot-tailstock-x')?.value) || rot.tailstockX;
+          rot.setChuckPosition(cX);
+          rot.setTailstockPosition(tX);
           rot.setMountingPosition(
             document.getElementById('rot-center-y').value,
             document.getElementById('rot-center-z').value,
-            document.getElementById('rot-start-x').value
+            cX
           );
           rot.zSafetyLimit = parseFloat(document.getElementById('rot-safe-limit').value) || -5.0;
           rot.zClearance = parseFloat(document.getElementById('rot-clearance').value) || 10.0;
@@ -1915,6 +1931,8 @@ class CLEBridge {
               centerHeightMm: rot.centerHeightMm,
               centerY: rot.centerY,
               startX: rot.startX,
+              chuckX: rot.chuckX,
+              tailstockX: rot.tailstockX,
               stockDiameter: rot.stockDiameter,
               stockLength: rot.stockLength,
               zSafetyLimit: rot.zSafetyLimit,
@@ -1924,6 +1942,31 @@ class CLEBridge {
           }
           this.closeModal();
         };
+      }
+
+      // Auto-Fit Chuck & Opposing Center to CAD Object Ends
+      const btnFit = document.getElementById('rot-btn-fit-object');
+      if (btnFit) {
+        btnFit.onclick = () => {
+          rot.fitToObject();
+          const inChuckX = document.getElementById('rot-chuck-x');
+          const inTailX = document.getElementById('rot-tailstock-x');
+          const inLen = document.getElementById('rot-stock-len');
+          const inDia = document.getElementById('rot-stock-dia');
+          if (inChuckX) inChuckX.value = rot.chuckX;
+          if (inTailX) inTailX.value = rot.tailstockX;
+          if (inLen) inLen.value = rot.stockLength;
+          if (inDia) inDia.value = rot.stockDiameter;
+        };
+      }
+
+      const inChuckX = document.getElementById('rot-chuck-x');
+      if (inChuckX) {
+        inChuckX.onchange = () => rot.setChuckPosition(parseFloat(inChuckX.value) || 0);
+      }
+      const inTailX = document.getElementById('rot-tailstock-x');
+      if (inTailX) {
+        inTailX.onchange = () => rot.setTailstockPosition(parseFloat(inTailX.value) || 0);
       }
 
       // Return to Design

@@ -144,15 +144,35 @@ async def test_full_rotary_axis():
         }""")
         print("Test 5 (Rotary Index Slicing):", res5)
 
-        # 6. Test Rotary Setup Modal & Return to Design
+        # 6. Test Rotary Setup Modal & Return to Design & Clamp to Ends
         res6 = await page.evaluate("""() => {
             window.CLE.openModal('rotary');
             const modal = document.getElementById('cle-active-modal');
             const ratioIn = document.getElementById('rot-gear-ratio');
             const turnBtn = document.getElementById('rot-btn-turn-start');
             const returnBtn = document.getElementById('rot-btn-return');
+            const fitBtn = document.getElementById('rot-btn-fit-object');
+            const inChuckX = document.getElementById('rot-chuck-x');
+            const inTailX = document.getElementById('rot-tailstock-x');
             
-            const modalRendered = !!modal && !!ratioIn && !!turnBtn;
+            const modalRendered = !!modal && !!ratioIn && !!turnBtn && !!fitBtn && !!inChuckX && !!inTailX;
+
+            // Test auto-clamp to object ends
+            const rot = window.CLE.rotary;
+            rot.fitToObject();
+            const b = rot.getObjectBounds();
+            const clampedMatch = (rot.chuckX === Math.round(b.minX)) && (rot.tailstockX === Math.round(b.maxX));
+            const headX = rot.headstockGroup ? rot.headstockGroup.position.x : null;
+            const tailX = rot.tailstockGroup ? rot.tailstockGroup.position.x : null;
+            const assemblyAligned = (headX === rot.chuckX) && (tailX === rot.tailstockX);
+
+            // Check no dummy orange cylinder exists
+            const hasDummyCylinder = !!rot.cylinderMesh || !!(rot.rotaryGroup && rot.rotaryGroup.getObjectByName('CLE_Rotary_Stock_Cylinder'));
+
+            // Check no dowel pins exist in visualizer in rotary mode
+            const slicer = window.CLE.slicer;
+            const hasDowelPins = !!(slicer.visualizerGroup && slicer.visualizerGroup.children.some(c => c.name && c.name.startsWith('CLE_Dowel_Pin')));
+
             if (returnBtn) returnBtn.click();
             
             const modalClosed = !document.getElementById('cle-active-modal');
@@ -162,11 +182,24 @@ async def test_full_rotary_axis():
             return {
                 modalRendered: modalRendered,
                 modalClosed: modalClosed,
-                designSelected: designSelected
+                designSelected: designSelected,
+                clampedMatch: clampedMatch,
+                assemblyAligned: assemblyAligned,
+                headX: headX,
+                tailX: tailX,
+                hasDummyCylinder: hasDummyCylinder,
+                hasDowelPins: hasDowelPins
             };
         }""")
-        print("Test 6 (Modal & Return to Design):", res6)
+        print("Test 6 (Modal, Clamp & Clean Visuals):", res6)
+        assert res6["modalRendered"], "Rotary modal must render all fields"
+        assert res6["modalClosed"], "Rotary modal must close"
+        assert res6["clampedMatch"], "Chuck and Opposing Center must clamp to object minX and maxX"
+        assert res6["assemblyAligned"], "Headstock and Tailstock 3D positions must match clamped coordinates"
+        assert not res6["hasDummyCylinder"], "No dummy orange cylinder must exist"
+        assert not res6["hasDowelPins"], "No dowel registration pins must exist in rotary mode"
 
         await browser.close()
 
 asyncio.run(test_full_rotary_axis())
+

@@ -1909,6 +1909,9 @@ class CLEFluidNCClient {
  * TwoTrees TTC6050 / TTC450 4th Axis Kit Integration
  * Turning Mode (RPM & deg/s), Settable Gear Ratio (5:1 default), Center Y & Z=45mm Mounting,
  * -5mm Safety Floor Boundary, Radial 3D Rotation, and Top-Down Index Mode (CNC & Laser)
+ * 
+ * Auto-fits Chuck (headstock) and Opposing Center (tailstock live center) to clamp at each end of the object.
+ * Pure on-axis radial rotation with zero orbital wobble and zero dummy stock clutter.
  */
 
 class CLERotaryEngine {
@@ -1928,11 +1931,12 @@ class CLERotaryEngine {
     // A-Axis replaces the spoilboard and sits directly on the aluminum machine bed table (Z = +0.10mm)
     this.centerHeightMm = 45.0;      // Center of A-axis rotation is 45.0mm from bed surface
     this.centerY = 250.0;            // Center of chuck in Y (center of 500mm machine travel, settable)
-    this.startX = 20.0;              // Chuck face position along X-axis
 
-    // --- Stock Workpiece Dimensions ---
-    this.stockDiameter = 50.0;       // mm
-    this.stockLength = 150.0;        // mm
+    // Chuck & Opposing Center X clamping positions
+    this.chuckX = 20.0;              // Headstock chuck face position along X-axis
+    this.tailstockX = 170.0;         // Opposing live center tip position along X-axis
+    this.stockLength = 150.0;        // mm clamped distance (tailstockX - chuckX)
+    this.stockDiameter = 50.0;       // mm stock diameter
 
     // --- Safety Boundaries ---
     this.zSafetyLimit = -5.0;        // -5mm safety boundary below rotation axis (never plunge below this!)
@@ -1942,7 +1946,7 @@ class CLERotaryEngine {
     this.currentAngle = 0.0;         // Current A-axis angle in degrees [0..360)
     this.mode = 'index';             // 'index' | 'turning' | 'continuous'
 
-    // Turning Mode (Lathe Spindle Rotation)
+    // Turning Mode (Lathe Spindle Continuous Rotation)
     this.isTurning = false;
     this.turningRPM = 60.0;          // Rotations per minute
     this.turningDegPerSec = 360.0;   // Degrees per second (RPM * 6)
@@ -1956,13 +1960,15 @@ class CLERotaryEngine {
 
     // Three.js Subsystems
     this.rotaryGroup = null;
+    this.headstockGroup = null;
+    this.tailstockGroup = null;
     this.chuckJawsGroup = null;
-    this.cylinderMesh = null;
-    this.headstockMesh = null;
-    this.tailstockMesh = null;
+    this.liveCenterCone = null;
     this.axisLine = null;
     this.safetyBoundaryMesh = null;
     this.retractPlaneMesh = null;
+
+    this._cachedCenterYZ = null;
   }
 
   // --- Calculations ---
@@ -1994,6 +2000,101 @@ class CLERotaryEngine {
     return (app.vp && (app.vp.scene || app.vp.world)) || (app.scene && app.scene.root ? app.scene.root.parent : null);
   }
 
+  // --- CAD Object Bounds Detection ---
+  getObjectBounds() {
+    const app = window.app || window.xe;
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    let hasObject = false;
+
+    // 1. Try JumpStart allBox()
+    if (app?.scene?.allBox) {
+      try {
+        const box = app.scene.allBox();
+        if (box && isFinite(box.min.x) && Math.abs(box.min.x) < 1e7) {
+          minX = box.min.x; maxX = box.max.x;
+          minY = box.min.y; maxY = box.max.y;
+          minZ = box.min.z; maxZ = box.max.z;
+          hasObject = true;
+        }
+      } catch (e) {}
+    }
+
+    // 2. Try scene views
+    if (!hasObject && app?.scene?.views && app.scene.views.size > 0) {
+      try {
+        for (const [id, view] of app.scene.views) {
+          if (view.data?.bbox) {
+            const b = view.data.bbox;
+            if (b.min && b.max) {
+              minX = Math.min(minX, b.min[0]); maxX = Math.max(maxX, b.max[0]);
+              minY = Math.min(minY, b.min[1]); maxY = Math.max(maxY, b.max[1]);
+              minZ = Math.min(minZ, b.min[2]); maxZ = Math.max(maxZ, b.max[2]);
+              hasObject = true;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 3. Fallback to slicer's active or sample geometry
+    if (!hasObject && this.bridge?.slicer) {
+      const geom = this.bridge.slicer.lastGeometry || (typeof this.bridge.slicer.getActiveBodyGeometry === 'function' ? this.bridge.slicer.getActiveBodyGeometry() : null);
+      if (geom && geom.triangles && geom.triangles.length >= 9) {
+        const tris = geom.triangles;
+        for (let i = 0; i < tris.length; i += 3) {
+          const x = tris[i], y = tris[i+1], z = tris[i+2];
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+          if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        }
+        hasObject = !geom.isSample;
+      }
+    }
+
+    if (!isFinite(minX) || minX === maxX) { minX = 20; maxX = 170; }
+    if (!isFinite(minY) || minY === maxY) { minY = this.centerY - 25; maxY = this.centerY + 25; }
+    if (!isFinite(minZ) || minZ === maxZ) { minZ = this.centerHeightMm - 25; maxZ = this.centerHeightMm + 25; }
+
+    return {
+      hasObject,
+      minX, maxX,
+      minY, maxY,
+      minZ, maxZ,
+      length: maxX - minX,
+      width: maxY - minY,
+      height: maxZ - minZ,
+      centerY: (minY + maxY) / 2,
+      centerZ: (minZ + maxZ) / 2
+    };
+  }
+
+  // Get CAD object center in Y and Z for mathematically pure on-axis rotation
+  getObjectCenterYZ() {
+    const b = this.getObjectBounds();
+    return { cy: b.centerY, cz: b.centerZ };
+  }
+
+  // --- Auto-Fit Chuck & Opposing Center to Object Ends ---
+  fitToObject() {
+    const b = this.getObjectBounds();
+    this.chuckX = Math.round(b.minX);
+    this.tailstockX = Math.round(b.maxX);
+    this.stockLength = Math.max(10, Math.round(b.length));
+    const maxDim = Math.max(b.width, b.height);
+    this.stockDiameter = Math.max(10, Math.round(maxDim));
+
+    if (!this.enabled) this.toggle(true);
+    else this.updateAssemblyPositions();
+
+    if (this.bridge?.bed) {
+      this.bridge.bed.sitWorkpieceOnSpoilboard();
+    }
+
+    this.bridge.notify(`A-Axis clamped to object: Chuck at X=${this.chuckX}mm, Opposing Center at X=${this.tailstockX}mm (Length=${this.stockLength}mm, Ø${this.stockDiameter}mm).`, 'ok');
+  }
+
   // --- Visualizer Initialization (Three.js Mechanical Assembly) ---
   initVisualizer() {
     const app = window.app || window.xe;
@@ -2019,115 +2120,131 @@ class CLERotaryEngine {
 
     const zCenter = this.getZCenter();
     const yCenter = this.centerY;
-    const startX = this.startX;
     const radius = this.stockDiameter / 2;
-
-    // 1. TwoTrees Aluminum Headstock Mounting Bracket (Clamped to aluminum bed table @ Z=0.10mm)
-    const baseW = 60.0;  // along X
-    const baseD = 110.0; // along Y
     const baseH = this.centerHeightMm; // 45mm tall
-    const headstockBaseGeo = new THREE.BoxGeometry(baseW, baseD, baseH);
+
+    // Common materials
     const headstockMat = new THREE.MeshStandardMaterial({
-      color: 0x1e293b, // Dark anodized industrial slate aluminum
+      color: 0x1e293b, // Industrial slate aluminum bracket
       metalness: 0.85,
       roughness: 0.35
     });
-    const headstockBase = new THREE.Mesh(headstockBaseGeo, headstockMat);
-    headstockBase.position.set(startX - 30, yCenter, 0.10 + baseH / 2);
-    this.rotaryGroup.add(headstockBase);
-
-    // 2. Stepper Motor Housing (NEMA 17: 42x42x40mm) with 15mm Pulley
-    const motorGeo = new THREE.BoxGeometry(40, 42, 42);
-    const motorMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.7, roughness: 0.4 });
-    const motorMesh = new THREE.Mesh(motorGeo, motorMat);
-    motorMesh.position.set(startX - 35, yCenter - 32, 0.10 + 22);
-    this.rotaryGroup.add(motorMesh);
-
-    // Motor 15mm timing pulley
-    const motorPulleyGeo = new THREE.CylinderGeometry(this.motorPulleyMm / 2, this.motorPulleyMm / 2, 12, 24);
-    motorPulleyGeo.rotateZ(Math.PI / 2);
     const pulleyMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.9, roughness: 0.2 });
-    const motorPulley = new THREE.Mesh(motorPulleyGeo, pulleyMat);
-    motorPulley.position.set(startX - 10, yCenter - 32, 0.10 + 22);
-    this.rotaryGroup.add(motorPulley);
-
-    // 3. Spindle 55mm Timing Pulley & Enclosed Timing Belt
-    const chuckPulleyGeo = new THREE.CylinderGeometry(this.chuckPulleyMm / 2, this.chuckPulleyMm / 2, 10, 36);
-    chuckPulleyGeo.rotateZ(Math.PI / 2);
-    const chuckPulley = new THREE.Mesh(chuckPulleyGeo, pulleyMat);
-    chuckPulley.position.set(startX - 10, yCenter, zCenter);
-    this.rotaryGroup.add(chuckPulley);
-
-    // 4. Rotating 3-Jaw Self-Centering Chuck Assembly (Rotates with A-axis)
-    this.chuckJawsGroup = new THREE.Group();
-    this.chuckJawsGroup.position.set(startX, yCenter, zCenter);
-
-    // Chuck Main Body (Ø65mm steel cylinder, 25mm thick)
-    const chuckBodyGeo = new THREE.CylinderGeometry(32.5, 32.5, 25, 36);
-    chuckBodyGeo.rotateZ(Math.PI / 2);
-    chuckBodyGeo.translate(12.5, 0, 0);
     const chuckSteelMat = new THREE.MeshStandardMaterial({
-      color: 0x475569, // Polished high-carbon lathe steel
+      color: 0x475569, // High-carbon polished lathe steel
       metalness: 0.92,
       roughness: 0.25
     });
+    const jawMat = new THREE.MeshStandardMaterial({ color: 0xcfd8dc, metalness: 0.95, roughness: 0.2 });
+
+    // =========================================================================
+    // 1. HEADSTOCK CHUCK ASSEMBLY (Clamps at X = this.chuckX)
+    // =========================================================================
+    this.headstockGroup = new THREE.Group();
+    this.headstockGroup.name = 'CLE_Headstock_Assembly';
+
+    // A. Headstock Mounting Base (Sits at Z = 0.10mm, extends into -X behind the chuck face)
+    const baseW = 55.0;  // along X
+    const baseD = 110.0; // along Y
+    const headstockBaseGeo = new THREE.BoxGeometry(baseW, baseD, baseH);
+    const headstockBase = new THREE.Mesh(headstockBaseGeo, headstockMat);
+    // Position base center at x = -40, so front face is at -12.5 (clearing the chuck)
+    headstockBase.position.set(-35, 0, 0.10 + baseH / 2 - zCenter);
+    this.headstockGroup.add(headstockBase);
+
+    // B. Stepper Motor Housing (NEMA 17: 42x42x40mm)
+    const motorGeo = new THREE.BoxGeometry(40, 42, 42);
+    const motorMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.7, roughness: 0.4 });
+    const motorMesh = new THREE.Mesh(motorGeo, motorMat);
+    motorMesh.position.set(-35, -32, 0.10 + 22 - zCenter);
+    this.headstockGroup.add(motorMesh);
+
+    // Motor 15mm timing pulley
+    const motorPulleyGeo = new THREE.CylinderGeometry(this.motorPulleyMm / 2, this.motorPulleyMm / 2, 10, 24);
+    motorPulleyGeo.rotateZ(Math.PI / 2);
+    const motorPulley = new THREE.Mesh(motorPulleyGeo, pulleyMat);
+    motorPulley.position.set(-10, -32, 0.10 + 22 - zCenter);
+    this.headstockGroup.add(motorPulley);
+
+    // Spindle 55mm timing pulley
+    const chuckPulleyGeo = new THREE.CylinderGeometry(this.chuckPulleyMm / 2, this.chuckPulleyMm / 2, 8, 36);
+    chuckPulleyGeo.rotateZ(Math.PI / 2);
+    const chuckPulley = new THREE.Mesh(chuckPulleyGeo, pulleyMat);
+    chuckPulley.position.set(-12, 0, 0);
+    this.headstockGroup.add(chuckPulley);
+
+    // C. Rotating Chuck Body & Jaws (Front face of jaws meets workpiece at x = 0)
+    this.chuckJawsGroup = new THREE.Group();
+    this.chuckJawsGroup.name = 'CLE_Chuck_Rotating_Jaws';
+
+    // Chuck Cylinder Body (Ø65mm, 22mm deep, extends from x = -22 to 0)
+    const chuckBodyGeo = new THREE.CylinderGeometry(32.5, 32.5, 22, 36);
+    chuckBodyGeo.rotateZ(Math.PI / 2);
+    chuckBodyGeo.translate(-11, 0, 0);
     const chuckBody = new THREE.Mesh(chuckBodyGeo, chuckSteelMat);
     this.chuckJawsGroup.add(chuckBody);
 
-    // Chuck Front Face Ring & Bore Hole (16mm through-bore)
-    const boreGeo = new THREE.CylinderGeometry(8, 8, 26, 24);
+    // Chuck Through-Bore (16mm bore)
+    const boreGeo = new THREE.CylinderGeometry(8, 8, 24, 24);
     boreGeo.rotateZ(Math.PI / 2);
-    boreGeo.translate(13, 0, 0);
-    const boreMat = new THREE.MeshBasicMaterial({ color: 0x050505 });
-    const boreMesh = new THREE.Mesh(boreGeo, boreMat);
+    boreGeo.translate(-11, 0, 0);
+    const boreMesh = new THREE.Mesh(boreGeo, new THREE.MeshBasicMaterial({ color: 0x050505 }));
     this.chuckJawsGroup.add(boreMesh);
 
-    // 3 Stepped Hardened Steel Jaws (120° apart)
-    const jawGeo = new THREE.BoxGeometry(16, 10, 14);
-    const jawMat = new THREE.MeshStandardMaterial({ color: 0xcfd8dc, metalness: 0.95, roughness: 0.2 });
+    // 3 Stepped Steel Jaws (120° apart, gripping the object right at x = 0)
+    const jawGeo = new THREE.BoxGeometry(12, 9, 13);
     for (let j = 0; j < 3; j++) {
       const angle = (j * 120 * Math.PI) / 180;
       const jaw = new THREE.Mesh(jawGeo, jawMat);
-      const rJaw = radius * 0.75;
-      jaw.position.set(28, Math.sin(angle) * rJaw, Math.cos(angle) * rJaw);
+      const rJaw = Math.max(12, radius * 0.7);
+      jaw.position.set(-4, Math.sin(angle) * rJaw, Math.cos(angle) * rJaw);
       jaw.rotation.x = angle;
       this.chuckJawsGroup.add(jaw);
     }
-    this.rotaryGroup.add(this.chuckJawsGroup);
+    this.headstockGroup.add(this.chuckJawsGroup);
 
-    // 5. Cylindrical Stock Workpiece (Rotates with A-axis)
-    const stockGeo = new THREE.CylinderGeometry(radius, radius, this.stockLength, 36, 1);
-    stockGeo.rotateZ(Math.PI / 2);
-    stockGeo.translate(startX + 25 + this.stockLength / 2, yCenter, zCenter);
-    const stockMat = new THREE.MeshStandardMaterial({
-      color: 0xd97706, // Amber hardwood / brass stock appearance
-      roughness: 0.55,
-      metalness: 0.15,
-      transparent: true,
-      opacity: 0.45
-    });
-    this.cylinderMesh = new THREE.Mesh(stockGeo, stockMat);
-    this.cylinderMesh.name = 'CLE_Rotary_Stock';
-    this.rotaryGroup.add(this.cylinderMesh);
+    this.headstockGroup.position.set(this.chuckX, yCenter, zCenter);
+    this.rotaryGroup.add(this.headstockGroup);
 
-    // 6. Tailstock Assembly with 60° Rotating Live Center Point
-    const tailstockX = startX + 25 + this.stockLength;
-    const tailBaseGeo = new THREE.BoxGeometry(45, 90, baseH);
+    // =========================================================================
+    // 2. TAILSTOCK OPPOSING CENTER ASSEMBLY (Clamps at X = this.tailstockX)
+    // =========================================================================
+    this.tailstockGroup = new THREE.Group();
+    this.tailstockGroup.name = 'CLE_Tailstock_Assembly';
+
+    // A. 60° Rotating Live Center Cone (Tip touches workpiece precisely at x = 0, pointing towards -X)
+    const coneLen = 22.0;
+    const centerConeGeo = new THREE.ConeGeometry(Math.min(18, radius * 0.6), coneLen, 24);
+    // Tip at x = 0, base at x = +22
+    centerConeGeo.rotateZ(-Math.PI / 2);
+    centerConeGeo.translate(coneLen / 2, 0, 0);
+    this.liveCenterCone = new THREE.Mesh(centerConeGeo, jawMat);
+    this.tailstockGroup.add(this.liveCenterCone);
+
+    // B. Live Center Quill Shaft (Ø20mm cylinder from x = +18 to +45)
+    const quillGeo = new THREE.CylinderGeometry(10, 10, 28, 24);
+    quillGeo.rotateZ(Math.PI / 2);
+    quillGeo.translate(32, 0, 0);
+    const quillMesh = new THREE.Mesh(quillGeo, pulleyMat);
+    this.tailstockGroup.add(quillMesh);
+
+    // C. Tailstock Base (Sits at Z = 0.10mm, extends from x = +30 to +80)
+    const tailBaseGeo = new THREE.BoxGeometry(50, 90, baseH);
     const tailBase = new THREE.Mesh(tailBaseGeo, headstockMat);
-    tailBase.position.set(tailstockX + 30, yCenter, 0.10 + baseH / 2);
-    this.rotaryGroup.add(tailBase);
+    tailBase.position.set(55, 0, 0.10 + baseH / 2 - zCenter);
+    this.tailstockGroup.add(tailBase);
 
-    // Live Center Quill & Conical Point
-    const centerConeGeo = new THREE.ConeGeometry(radius * 0.6, 20, 24);
-    centerConeGeo.rotateZ(Math.PI / 2);
-    centerConeGeo.translate(tailstockX + 5, yCenter, zCenter);
-    const centerCone = new THREE.Mesh(centerConeGeo, jawMat);
-    this.rotaryGroup.add(centerCone);
+    this.tailstockGroup.position.set(this.tailstockX, yCenter, zCenter);
+    this.rotaryGroup.add(this.tailstockGroup);
 
-    // 7. Center of Rotation Cyan Line (X-Axis through Y=centerY, Z=zCenter)
+    // =========================================================================
+    // 3. CENTERLINE & SAFETY BOUNDARIES (Spanning exactly between Chuck & Tailstock)
+    // =========================================================================
+
+    // Cyan Rotation Centerline
     const lineVectors = [
-      new THREE.Vector3(startX - 20, yCenter, zCenter),
-      new THREE.Vector3(tailstockX + 45, yCenter, zCenter)
+      new THREE.Vector3(this.chuckX - 45, yCenter, zCenter),
+      new THREE.Vector3(this.tailstockX + 55, yCenter, zCenter)
     ];
     const axisGeo = new THREE.BufferGeometry().setFromPoints(lineVectors);
     const axisMat = new THREE.LineDashedMaterial({
@@ -2140,48 +2257,99 @@ class CLERotaryEngine {
     this.axisLine.computeLineDistances();
     this.rotaryGroup.add(this.axisLine);
 
-    // 8. Safety Floor Boundary Mesh at Zbot = zCenter - 5mm (-5mm Core Safety Limit)
+    // Floor Safety Limit at Zbot = zCenter - 5mm (-5mm Core Safety Boundary)
+    const spanLen = Math.max(20, this.tailstockX - this.chuckX);
+    const midX = (this.chuckX + this.tailstockX) / 2;
     const zBot = this.getZBot();
-    const safetyLimitGeo = new THREE.PlaneGeometry(this.stockLength + 40, this.stockDiameter + 20);
+
+    const safetyLimitGeo = new THREE.PlaneGeometry(spanLen + 10, this.stockDiameter + 20);
     const safetyLimitMat = new THREE.MeshBasicMaterial({
-      color: 0xef4444, // Bright red/amber safety boundary
+      color: 0xef4444, // Red safety warning plane
       transparent: true,
-      opacity: 0.28,
+      opacity: 0.22,
       side: THREE.DoubleSide,
       depthWrite: false
     });
     this.safetyBoundaryMesh = new THREE.Mesh(safetyLimitGeo, safetyLimitMat);
-    this.safetyBoundaryMesh.position.set(startX + 25 + this.stockLength / 2, yCenter, zBot);
+    this.safetyBoundaryMesh.position.set(midX, yCenter, zBot);
     this.safetyBoundaryMesh.name = 'CLE_Rotary_Safety_Floor';
     this.rotaryGroup.add(this.safetyBoundaryMesh);
 
-    // Safety boundary border wireframe
+    // Safety boundary wireframe border
     const boundEdges = new THREE.LineSegments(
       new THREE.EdgesGeometry(safetyLimitGeo),
       new THREE.LineBasicMaterial({ color: 0xdc2626, depthTest: false })
     );
     this.safetyBoundaryMesh.add(boundEdges);
 
-    // 9. Safe Retract Clearance Plane Wireframe at Ztop
+    // Safe Retract Clearance Plane at Ztop
     const zTop = this.getZTop();
-    const retractGeo = new THREE.PlaneGeometry(this.stockLength + 40, this.stockDiameter + 30);
+    const retractGeo = new THREE.PlaneGeometry(spanLen + 10, this.stockDiameter + 30);
     const retractMat = new THREE.MeshBasicMaterial({
       color: 0x10b981, // Emerald green clearance plane
       transparent: true,
-      opacity: 0.18,
+      opacity: 0.16,
       side: THREE.DoubleSide,
       depthWrite: false
     });
     this.retractPlaneMesh = new THREE.Mesh(retractGeo, retractMat);
-    this.retractPlaneMesh.position.set(startX + 25 + this.stockLength / 2, yCenter, zTop);
+    this.retractPlaneMesh.position.set(midX, yCenter, zTop);
     this.rotaryGroup.add(this.retractPlaneMesh);
 
     this.rotaryGroup.visible = this.enabled;
-    if (container && container.add) {
-      container.add(this.rotaryGroup);
+    container.add(this.rotaryGroup);
+
+    console.log(`[CLE Rotary] TwoTrees 4th-Axis mounted: Chuck at X=${this.chuckX}mm, Opposing Center at X=${this.tailstockX}mm (Span=${spanLen}mm), Center Y=${yCenter}mm, Z=${zCenter.toFixed(2)}mm, Zbot=${zBot.toFixed(2)}mm, Ztop=${zTop.toFixed(2)}mm.`);
+  }
+
+  // --- Dynamic Assembly Repositioning (Live Chuck & Tailstock Sliding) ---
+  updateAssemblyPositions() {
+    if (!this.rotaryGroup) {
+      if (this.enabled) this.initVisualizer();
+      return;
     }
 
-    console.log(`[CLE Rotary] TwoTrees 4th-Axis visualizer mounted: Center Y=${yCenter}mm, Z=${zCenter.toFixed(2)}mm (45mm above bed), Zbot=${zBot.toFixed(2)}mm, Ztop=${zTop.toFixed(2)}mm.`);
+    const zCenter = this.getZCenter();
+    const yCenter = this.centerY;
+    const spanLen = Math.max(10, this.tailstockX - this.chuckX);
+    const midX = (this.chuckX + this.tailstockX) / 2;
+    const zBot = this.getZBot();
+    const zTop = this.getZTop();
+
+    // 1. Slide Headstock & Chuck
+    if (this.headstockGroup) {
+      this.headstockGroup.position.set(this.chuckX, yCenter, zCenter);
+    }
+
+    // 2. Slide Tailstock & Opposing Center
+    if (this.tailstockGroup) {
+      this.tailstockGroup.position.set(this.tailstockX, yCenter, zCenter);
+    }
+
+    // 3. Update Centerline
+    if (this.axisLine && this.axisLine.geometry) {
+      const posAttr = this.axisLine.geometry.attributes.position;
+      posAttr.setXYZ(0, this.chuckX - 45, yCenter, zCenter);
+      posAttr.setXYZ(1, this.tailstockX + 55, yCenter, zCenter);
+      posAttr.needsUpdate = true;
+      this.axisLine.computeLineDistances();
+    }
+
+    // 4. Update Safety Boundaries
+    if (this.safetyBoundaryMesh) {
+      this.safetyBoundaryMesh.position.set(midX, yCenter, zBot);
+      this.safetyBoundaryMesh.scale.set(spanLen / Math.max(1, this.stockLength), 1, 1);
+    }
+    if (this.retractPlaneMesh) {
+      this.retractPlaneMesh.position.set(midX, yCenter, zTop);
+      this.retractPlaneMesh.scale.set(spanLen / Math.max(1, this.stockLength), 1, 1);
+    }
+
+    const app = window.app || window.xe;
+    if (app?.vp) {
+      app.vp.dirty = true;
+      if (app.vp.request) app.vp.request();
+    }
   }
 
   // --- Toggle 4th Axis On / Off ---
@@ -2211,7 +2379,7 @@ class CLERotaryEngine {
     if (btn) btn.classList.toggle('pressed', this.enabled);
 
     this.bridge.notify(
-      `4th Axis Rotary (A): ${this.enabled ? 'ACTIVE (Spoilboard replaced; center Y=' + this.centerY + 'mm, Z=' + this.centerHeightMm + 'mm)' : 'DISABLED (Spoilboard restored)'}`,
+      `4th Axis Rotary (A): ${this.enabled ? 'ACTIVE (Chuck at X=' + this.chuckX + 'mm, Opposing Center at X=' + this.tailstockX + 'mm)' : 'DISABLED (Spoilboard restored)'}`,
       this.enabled ? 'ok' : 'info'
     );
 
@@ -2222,17 +2390,35 @@ class CLERotaryEngine {
     }
   }
 
-  // --- Configure Mounting Position & Center of Chuck ---
-  setMountingPosition(centerY, centerHeight = 45.0, startX = 20.0) {
+  // --- Configure Mounting Position & Chuck/Tailstock Endpoints ---
+  setMountingPosition(centerY, centerHeight = 45.0, chuckX = 20.0, tailstockX = 170.0) {
     if (isFinite(centerY)) this.centerY = parseFloat(centerY);
     if (isFinite(centerHeight)) this.centerHeightMm = parseFloat(centerHeight);
-    if (isFinite(startX)) this.startX = parseFloat(startX);
+    if (isFinite(chuckX)) this.chuckX = parseFloat(chuckX);
+    if (isFinite(tailstockX)) this.tailstockX = parseFloat(tailstockX);
+    this.stockLength = Math.max(10, this.tailstockX - this.chuckX);
 
     if (this.enabled) {
-      this.initVisualizer();
+      this.updateAssemblyPositions();
       if (this.bridge?.bed) this.bridge.bed.sitWorkpieceOnSpoilboard();
     }
-    this.bridge.notify(`Rotary Mounted at Y=${this.centerY}mm, Center Height=${this.centerHeightMm}mm, X=${this.startX}mm.`, 'ok');
+    this.bridge.notify(`Rotary Mounted: Chuck at X=${this.chuckX}mm, Opposing Center at X=${this.tailstockX}mm, Center Y=${this.centerY}mm, Height=${this.centerHeightMm}mm.`, 'ok');
+  }
+
+  setChuckPosition(x) {
+    if (isFinite(x)) {
+      this.chuckX = parseFloat(x);
+      this.stockLength = Math.max(10, this.tailstockX - this.chuckX);
+      this.updateAssemblyPositions();
+    }
+  }
+
+  setTailstockPosition(x) {
+    if (isFinite(x)) {
+      this.tailstockX = parseFloat(x);
+      this.stockLength = Math.max(10, this.tailstockX - this.chuckX);
+      this.updateAssemblyPositions();
+    }
   }
 
   // --- Configure Gear / Pulley Ratio ---
@@ -2248,33 +2434,40 @@ class CLERotaryEngine {
   // --- Stock Dimensions ---
   setStockDimensions(diameter, length) {
     this.stockDiameter = parseFloat(diameter) || 50.0;
-    this.stockLength = parseFloat(length) || 150.0;
+    if (length && isFinite(length)) {
+      this.stockLength = parseFloat(length);
+      this.tailstockX = this.chuckX + this.stockLength;
+    }
     if (this.enabled) {
-      this.initVisualizer();
+      this.updateAssemblyPositions();
     }
     this.bridge.notify(`Rotary Stock: Ø${this.stockDiameter}mm × ${this.stockLength}mm (Ztop=${this.getZTop().toFixed(1)}mm, Zbot=${this.getZBot().toFixed(1)}mm).`);
   }
 
-  // --- Radial Object Rotation in 3D Scene ---
-  // Rotates the workpiece CAD bodies radially around the A-axis centerline (Y=centerY, Z=zCenter)
+  // --- Mathematically Pure On-Axis Radial Workpiece Rotation ---
+  // Rotates the CAD design object around the A-axis centerline (Y=centerY, Z=zCenter) with ZERO orbital wobble
   rotateWorkpieceRadially(rad) {
     const app = window.app || window.xe;
-    if (!app || !app.scene) return;
+    if (!app || !app.scene || !app.scene.root) return;
 
-    if (app.scene.views && app.scene.views.size > 0) {
-      for (const [id, view] of app.scene.views) {
-        if (view.group) {
-          view.group.rotation.x = rad;
-          view.group.updateMatrixWorld(true);
-        } else if (view.mesh) {
-          view.mesh.rotation.x = rad;
-          view.mesh.updateMatrixWorld(true);
-        }
-      }
-    } else if (app.scene.root) {
-      app.scene.root.rotation.x = rad;
-      app.scene.root.updateMatrixWorld(true);
-    }
+    const yCenter = this.centerY;
+    const zCenter = this.getZCenter();
+
+    // Get CAD object center in Y and Z (the rotation pivot)
+    const { cy, cz } = this.getObjectCenterYZ();
+
+    // Exact on-axis pivot transformation:
+    // When root is positioned at (0, posY, posZ) and rotated by rad:
+    // Every vertex (x, y, z) rotates purely around (X, yCenter, zCenter) with zero orbital translation!
+    const cosR = Math.cos(rad);
+    const sinR = Math.sin(rad);
+
+    const posY = yCenter - (cy * cosR - cz * sinR);
+    const posZ = zCenter - (cy * sinR + cz * cosR);
+
+    app.scene.root.position.set(0, posY, posZ);
+    app.scene.root.rotation.x = rad;
+    app.scene.root.updateMatrixWorld(true);
   }
 
   // Set absolute angle of A axis [0..360)
@@ -2282,15 +2475,12 @@ class CLERotaryEngine {
     this.currentAngle = ((angleDeg % 360) + 360) % 360;
     const rad = (this.currentAngle * Math.PI) / 180;
 
-    // 1. Rotate chuck and stock mesh in rotary visualizer
+    // 1. Rotate chuck jaws in headstock
     if (this.chuckJawsGroup) {
       this.chuckJawsGroup.rotation.x = rad;
     }
-    if (this.cylinderMesh) {
-      this.cylinderMesh.rotation.x = rad;
-    }
 
-    // 2. Rotate workpiece CAD bodies radially around A-axis centerline
+    // 2. Rotate CAD design workpiece on-axis around (yCenter, zCenter)
     this.rotateWorkpieceRadially(rad);
 
     // 3. Update DRO in UI
@@ -2434,7 +2624,7 @@ class CLERotaryEngine {
     const out = [];
     out.push(`; --- CLEJS TwoTrees 4th Axis Rotary (A) Wrapped Toolpath ---`);
     out.push(`; Ratio: ${this.gearRatio}:1, Steps/deg: ${this.getStepsPerDegree().toFixed(3)}`);
-    out.push(`; Mount: Y=${this.centerY}mm, Center Height=${this.centerHeightMm}mm from bed`);
+    out.push(`; Clamped: Chuck at X=${this.chuckX}mm, Opposing Center at X=${this.tailstockX}mm, Center Y=${this.centerY}mm, Z=${this.centerHeightMm}mm`);
     out.push(`; Safety: Ztop=${this.getZTop().toFixed(2)}mm, Zbot=${this.getZBot().toFixed(2)}mm (-5mm limit)`);
     out.push('G90 G21 ; Absolute programming, millimeters');
     out.push('G92 A0 ; Set A0 at chuck reference');
@@ -2455,61 +2645,6 @@ class CLERotaryEngine {
     return out.join('\n');
   }
 
-  // Generates complete Multi-Sided Index Mode G-Code from sliced layers
-  generateIndexedGCode(slicedLayers, options = {}) {
-    const angles = this.getIndexAngles();
-    const zTop = this.getZTop();
-    const zBot = this.getZBot();
-    const feed = options.feedRate || 1800;
-    const plunge = options.plungeRate || 350;
-    const rpm = options.rpm || 12000;
-
-    const out = [];
-    out.push('; === CLEJS A-AXIS MULTI-SIDED INDEXED TOOLPATH ===');
-    out.push(`; Index Mode: ${this.indexMode} (${angles.length} Facets: ${angles.join('°, ')}°)`);
-    out.push(`; Center of Chuck: Y=${this.centerY.toFixed(2)}mm, Z_center=${this.getZCenter().toFixed(2)}mm (45mm above bed)`);
-    out.push(`; Safety Clearance: Ztop=${zTop.toFixed(2)}mm, Safety Floor Limit: Zbot=${zBot.toFixed(2)}mm (-5mm core limit)`);
-    out.push(`; Stepper: 200 steps/rev, 16x microstep, ${this.gearRatio}:1 ratio &rarr; ${this.getStepsPerDegree().toFixed(3)} steps/deg`);
-    out.push('G21 ; mm mode');
-    out.push('G90 ; Absolute coordinates');
-    out.push(`M3 S${rpm} ; Spindle ON`);
-    out.push(`G0 Z${zTop.toFixed(2)} F2000 ; Rapid to safe clearance plane`);
-
-    for (let fIdx = 0; fIdx < angles.length; fIdx++) {
-      const angle = angles[fIdx];
-      out.push(`\n; ======================================================`);
-      out.push(`; --- FACET ${fIdx + 1}/${angles.length}: A = ${angle.toFixed(1)}° (Top-Down CNC Milling) ---`);
-      out.push(`; ======================================================`);
-      out.push(`G0 Z${zTop.toFixed(2)} ; Ensure tool is at safe clearance before rotating A`);
-      out.push(`G0 A${angle.toFixed(3)} F3000 ; Rotate 4th axis to face ${fIdx + 1}`);
-
-      // Generate top-down carving passes for this face
-      const faceLayers = slicedLayers || [];
-      for (let l = 0; l < faceLayers.length; l++) {
-        const layer = faceLayers[l];
-        const passZ = Math.max(zBot, layer.z !== undefined ? layer.z : zBot);
-        out.push(`; Pass ${l + 1}/${faceLayers.length} (Z=${passZ.toFixed(2)}mm)`);
-        out.push(`G0 X${(layer.points && layer.points[0] ? layer.points[0].x : this.startX).toFixed(2)} Y${this.centerY.toFixed(2)}`);
-        out.push(`G1 Z${passZ.toFixed(2)} F${plunge} ; Plunge to pass depth`);
-
-        if (layer.points && layer.points.length > 0) {
-          for (const pt of layer.points) {
-            out.push(`G1 X${pt.x.toFixed(2)} Y${pt.y.toFixed(2)} F${feed}`);
-          }
-        }
-      }
-      out.push(`G0 Z${zTop.toFixed(2)} ; Retract to safe clearance`);
-    }
-
-    out.push('\n; === FINISH JOB ===');
-    out.push(`G0 Z${zTop.toFixed(2)}`);
-    out.push('G0 A0.000 F3000 ; Return A to 0');
-    out.push('M5 ; Spindle OFF');
-    out.push('M2 ; Program End');
-
-    return out.join('\n');
-  }
-
   // Safely dispose Three.js geometries & materials
   disposeRotaryGroup() {
     if (!this.rotaryGroup) return;
@@ -2525,8 +2660,10 @@ class CLERotaryEngine {
       }
     });
     this.rotaryGroup = null;
+    this.headstockGroup = null;
+    this.tailstockGroup = null;
     this.chuckJawsGroup = null;
-    this.cylinderMesh = null;
+    this.liveCenterCone = null;
   }
 }
 
@@ -3664,8 +3801,12 @@ class CLESlicerEngine {
     const extractedNames = [];
 
     // 1. Extract from JumpStart scene views with exact matrixWorld transformation
+    // If user has specific body selection, prioritize slicing the selected body
+    const selSet = (app?.sel && app.sel.length > 0) ? new Set(app.sel) : null;
+
     if (views && views.size > 0) {
       for (const [id, view] of views) {
+        if (selSet && !selSet.has(id)) continue;
         const body = (bodies.find(b => b.id === id)) || view.body;
         if (body && (body.hidden || body.hole)) continue;
 
@@ -4046,7 +4187,7 @@ class CLESlicerEngine {
     this.slicedLayers = [];
     const lines = gcodeText.split('\n');
     let currentLayer = null; // Do not create phantom layer before first LAYER header!
-    let curX = 0, curY = 0, curZ = 0, curA = 0;
+    let curX = null, curY = null, curZ = null, curA = 0;
 
     for (const raw of lines) {
       const line = raw.trim();
@@ -4058,7 +4199,7 @@ class CLESlicerEngine {
           this.slicedLayers.push(currentLayer);
         }
         const matchZ = line.match(/Z=([-\d.]+)/i);
-        const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
+        const lZ = matchZ ? parseFloat(matchZ[1]) : (curZ ?? 0);
         currentLayer = { index: this.slicedLayers.length, z: lZ, points: [], isCutoutPass: true };
         continue;
       }
@@ -4070,7 +4211,7 @@ class CLESlicerEngine {
         }
         const matchZ = line.match(/Z=([-\d.]+)/i);
         const matchA = line.match(/A=([-\d.]+)/i);
-        const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
+        const lZ = matchZ ? parseFloat(matchZ[1]) : (curZ ?? 0);
         if (matchA) curA = parseFloat(matchA[1]);
         currentLayer = { index: this.slicedLayers.length, z: lZ, a: curA, points: [], isCutoutPass: false };
         continue;
@@ -4093,7 +4234,13 @@ class CLESlicerEngine {
           // Preamble moves before any layer (safe clearance plane, etc.)
           continue;
         }
-        currentLayer.points.push({ x: curX, y: curY, z: curZ, a: curA, isRapid });
+        // Only record points that specify horizontal coordinates or after coordinates have been established
+        if (curX !== null && curY !== null && (matchX || matchY || !isRapid)) {
+          const lastPt = currentLayer.points[currentLayer.points.length - 1];
+          if (!lastPt || Math.hypot(lastPt.x - curX, lastPt.y - curY) > 0.01) {
+            currentLayer.points.push({ x: curX, y: curY, z: curZ ?? currentLayer.z, a: curA, isRapid });
+          }
+        }
       }
     }
 
@@ -4211,7 +4358,9 @@ class CLESlicerEngine {
         if (d1 < bestDist) { bestDist = d1; bestIdx = j; flip = true; }
       }
 
-      if (bestIdx !== -1 && bestDist < 15.0) {
+      // ONLY chain contiguous segments belonging to the SAME connected boundary loop!
+      // Any gap > 2.0mm means another disconnected body - NEVER jump across space!
+      if (bestIdx !== -1 && bestDist < 2.0) {
         used[bestIdx] = 1;
         chain.push(flip ? segments[bestIdx][0] : segments[bestIdx][1]);
       } else {
@@ -4813,8 +4962,8 @@ class CLESlicerEngine {
         if (app.vp.updateCamera) app.vp.updateCamera();
       }
 
-      // 5. 3D Dowel Registration Pins (Vivid Gold Cylinders through laminated stack)
-      if (this.laminationConfig.enabled && this.dowelPoints && this.dowelPoints.length > 0) {
+      // 5. 3D Dowel Registration Pins (Only in Lamination Mode through physical sliced sheets)
+      if (this.mode === 'lamination' && this.laminationConfig.enabled && this.dowelPoints && this.dowelPoints.length > 0) {
         const pinH = Math.max(10, maxZ - minZ + 8.0);
         const pinCenterZ = (minZ + maxZ) / 2;
 
@@ -5335,6 +5484,7 @@ class CLESlicerEngine {
 
       <button class="cle-btn" id="cle-hud-trace" style="background:#059669; color:#fff; font-weight:600; padding:3px 8px;" title="Simulate 3D toolhead movement over slices">Trace 3D</button>
       <button class="cle-btn" id="cle-hud-rot-a" style="background:#ea580c; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Rotate Object 90° about A-Axis (X) for 4th Axis Rotary Milling">Rot 90° A</button>
+      <button class="cle-btn" id="cle-hud-rot-fit" style="background:#d97706; color:#fff; font-weight:600; padding:3px 8px; border-radius:5px;" title="Auto-clamp Chuck and Opposing Center to CAD workpiece ends">Clamp Ends</button>
       <div style="border-left:1px solid var(--line); height:18px;"></div>
       <button class="cle-btn" id="cle-hud-export" style="background:var(--accent); color:var(--on-accent); font-weight:600; padding:3px 8px;">Export .NC</button>
       <button class="cle-btn" id="cle-hud-upload" style="background:var(--ok); color:#fff; font-weight:600; padding:3px 8px;">To SD</button>
@@ -5539,6 +5689,16 @@ class CLESlicerEngine {
           this.bridge.bed.rotateWorkpiece('X', 90);
           this.clearVisualizer();
           await this.sliceModel();
+        }
+      };
+    }
+
+    // Auto-Fit Chuck and Opposing Center to Workpiece Ends
+    const rotFitBtn = document.getElementById('cle-hud-rot-fit');
+    if (rotFitBtn) {
+      rotFitBtn.onclick = () => {
+        if (this.bridge?.rotary) {
+          this.bridge.rotary.fitToObject();
         }
       };
     }
@@ -7490,6 +7650,7 @@ class CLEBridge {
     // 3. 4th Axis & Slicer
     m("Rotary & Slicer", "", [
       { id: "cle-r-rotary", label: "4th Axis (A)", title: "Toggle 4th Axis Rotary Chuck & Cylindrical Stock in 3D View", icon: "lathe", pressed: this.rotary.enabled, fn: () => this.rotary.toggle() },
+      { id: "cle-r-rot-fit", label: "Clamp Ends", title: "Auto-Clamp Chuck & Opposing Center to CAD Object Ends", icon: "box", fn: () => this.rotary.fitToObject() },
       { id: "cle-r-rot-setup", label: "A-Axis Setup", title: "TwoTrees Rotary Setup: Gear Ratio (5:1), Pulley, Center Y, Z=45mm & Safety", icon: "features", fn: () => this.openModal("rotary") },
       { id: "cle-r-turning", label: "Turning", title: "Lathe Continuous Spindle Turning (RPM & Deg/s)", icon: "motion", pressed: this.rotary.isTurning, fn: () => this.rotary.toggleTurning() },
       { id: "cle-r-index", label: "Index Next", title: "Index A-Axis to Next Facet (Top-Down Milling)", icon: "revolve", fn: () => this.rotary.nextIndex() },
@@ -8366,9 +8527,20 @@ class CLEBridge {
               <label>Center Height from Bed (mm):</label>
               <input class="cle-input" id="rot-center-z" type="number" value="${rot.centerHeightMm}">
             </div>
-            <div class="cle-form-row">
-              <label>Chuck X Face (mm):</label>
-              <input class="cle-input" id="rot-start-x" type="number" value="${rot.startX}">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Chuck X Face (mm):</label>
+                <input class="cle-input" id="rot-chuck-x" type="number" value="${rot.chuckX}">
+              </div>
+              <div class="cle-form-row">
+                <label style="font-size:11px;">Opposing Center X (mm):</label>
+                <input class="cle-input" id="rot-tailstock-x" type="number" value="${rot.tailstockX}">
+              </div>
+            </div>
+            <div style="margin-top:6px; margin-bottom:6px;">
+              <button class="cle-btn" id="rot-btn-fit-object" style="background:#ea580c; color:#fff; font-size:11px; font-weight:700; width:100%; padding:5px 8px;" title="Automatically align Chuck to object start and Opposing Center to object end">
+                Clamp to Object Ends (Auto-Fit)
+              </button>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
               <div class="cle-form-row">
@@ -9107,10 +9279,14 @@ class CLEBridge {
       if (btnApply) {
         btnApply.onclick = async () => {
           rot.setGearRatio(ratioIn.value, mPulleyIn.value, cPulleyIn.value);
+          const cX = parseFloat(document.getElementById('rot-chuck-x')?.value) || rot.chuckX;
+          const tX = parseFloat(document.getElementById('rot-tailstock-x')?.value) || rot.tailstockX;
+          rot.setChuckPosition(cX);
+          rot.setTailstockPosition(tX);
           rot.setMountingPosition(
             document.getElementById('rot-center-y').value,
             document.getElementById('rot-center-z').value,
-            document.getElementById('rot-start-x').value
+            cX
           );
           rot.zSafetyLimit = parseFloat(document.getElementById('rot-safe-limit').value) || -5.0;
           rot.zClearance = parseFloat(document.getElementById('rot-clearance').value) || 10.0;
@@ -9130,6 +9306,8 @@ class CLEBridge {
               centerHeightMm: rot.centerHeightMm,
               centerY: rot.centerY,
               startX: rot.startX,
+              chuckX: rot.chuckX,
+              tailstockX: rot.tailstockX,
               stockDiameter: rot.stockDiameter,
               stockLength: rot.stockLength,
               zSafetyLimit: rot.zSafetyLimit,
@@ -9139,6 +9317,31 @@ class CLEBridge {
           }
           this.closeModal();
         };
+      }
+
+      // Auto-Fit Chuck & Opposing Center to CAD Object Ends
+      const btnFit = document.getElementById('rot-btn-fit-object');
+      if (btnFit) {
+        btnFit.onclick = () => {
+          rot.fitToObject();
+          const inChuckX = document.getElementById('rot-chuck-x');
+          const inTailX = document.getElementById('rot-tailstock-x');
+          const inLen = document.getElementById('rot-stock-len');
+          const inDia = document.getElementById('rot-stock-dia');
+          if (inChuckX) inChuckX.value = rot.chuckX;
+          if (inTailX) inTailX.value = rot.tailstockX;
+          if (inLen) inLen.value = rot.stockLength;
+          if (inDia) inDia.value = rot.stockDiameter;
+        };
+      }
+
+      const inChuckX = document.getElementById('rot-chuck-x');
+      if (inChuckX) {
+        inChuckX.onchange = () => rot.setChuckPosition(parseFloat(inChuckX.value) || 0);
+      }
+      const inTailX = document.getElementById('rot-tailstock-x');
+      if (inTailX) {
+        inTailX.onchange = () => rot.setTailstockPosition(parseFloat(inTailX.value) || 0);
       }
 
       // Return to Design
