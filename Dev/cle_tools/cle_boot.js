@@ -98,6 +98,15 @@ class CLEBridge {
           return this;
         };
       }
+      if (THREE.BufferAttribute && !THREE.BufferAttribute.prototype.updateRanges) {
+        Object.defineProperty(THREE.BufferAttribute.prototype, 'updateRanges', {
+          get() {
+            if (!this._updateRanges) this._updateRanges = [];
+            return this._updateRanges;
+          },
+          set(v) { this._updateRanges = v; }
+        });
+      }
     }
     if (app && app.vp) {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');

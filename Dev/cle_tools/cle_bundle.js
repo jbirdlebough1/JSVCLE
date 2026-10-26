@@ -3451,7 +3451,7 @@ class CLESlicerEngine {
   parseGCodeIntoLayers(gcodeText) {
     this.slicedLayers = [];
     const lines = gcodeText.split('\n');
-    let currentLayer = { index: 0, z: 0, points: [], isCutoutPass: false };
+    let currentLayer = null; // Do not create phantom layer before first LAYER header!
     let curX = 0, curY = 0, curZ = 0;
 
     for (const raw of lines) {
@@ -3460,7 +3460,7 @@ class CLESlicerEngine {
 
       // Spoilboard Breakthrough header
       if (line.includes('SPOILBOARD BREAKTHROUGH') || line.includes('CLEAN CUTOUT PASS')) {
-        if (currentLayer.points.length > 0) {
+        if (currentLayer && currentLayer.points.length > 0) {
           this.slicedLayers.push(currentLayer);
         }
         const matchZ = line.match(/Z=([-\d.]+)/i);
@@ -3471,14 +3471,12 @@ class CLESlicerEngine {
 
       // Layer header detection (; --- LAYER: 0 (Z=8.000) --- or ;LAYER:0 or ;LAYER_CHANGE)
       if (line.match(/^;\s*(?:---)?\s*LAYER(?:_CHANGE)?[:\s]/i)) {
-        if (currentLayer.points.length > 0) {
+        if (currentLayer && currentLayer.points.length > 0) {
           this.slicedLayers.push(currentLayer);
         }
-        const matchIdx = line.match(/LAYER(?:_CHANGE)?[:\s]*(\d+)/i);
-        const lIdx = matchIdx ? parseInt(matchIdx[1], 10) : this.slicedLayers.length;
         const matchZ = line.match(/Z=([-\d.]+)/i);
         const lZ = matchZ ? parseFloat(matchZ[1]) : curZ;
-        currentLayer = { index: lIdx, z: lZ, points: [], isCutoutPass: false };
+        currentLayer = { index: this.slicedLayers.length, z: lZ, points: [], isCutoutPass: false };
         continue;
       }
 
@@ -3493,18 +3491,15 @@ class CLESlicerEngine {
       // Move commands (G0 = Rapid, G1/G2/G3 = Cutting Feed)
       if (line.startsWith('G0') || line.startsWith('G1') || line.startsWith('G2') || line.startsWith('G3')) {
         const isRapid = line.startsWith('G0');
-        // If this is a Z change move that starts a new cut pass without explicit layer comment
-        if (matchZ && !matchX && !matchY) {
-          if (currentLayer.points.length > 5 && Math.abs(curZ - currentLayer.z) > 0.05) {
-            this.slicedLayers.push(currentLayer);
-            currentLayer = { index: this.slicedLayers.length, z: curZ, points: [] };
-          }
+        if (!currentLayer) {
+          // Preamble moves before any layer (safe clearance plane, etc.)
+          continue;
         }
         currentLayer.points.push({ x: curX, y: curY, z: curZ, isRapid });
       }
     }
 
-    if (currentLayer.points.length > 0) {
+    if (currentLayer && currentLayer.points.length > 0) {
       this.slicedLayers.push(currentLayer);
     }
   }
@@ -4004,6 +3999,15 @@ class CLESlicerEngine {
         return this;
       };
     }
+    if (THREE.BufferAttribute && !THREE.BufferAttribute.prototype.updateRanges) {
+      Object.defineProperty(THREE.BufferAttribute.prototype, 'updateRanges', {
+        get() {
+          if (!this._updateRanges) this._updateRanges = [];
+          return this._updateRanges;
+        },
+        set(v) { this._updateRanges = v; }
+      });
+    }
 
     // Mount directly to app.vp.scene for guaranteed rendering
     const container = app.vp.scene || app.vp.world;
@@ -4023,90 +4027,48 @@ class CLESlicerEngine {
     let minY = Infinity, maxY = -Infinity;
     let minZ = Infinity, maxZ = -Infinity;
 
+    // Track workpiece bounding envelope (without heavy Float32BufferAttribute allocation)
+    this.slicedLayers.forEach((layer) => {
+      for (const p of layer.points) {
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+        if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+      }
+    });
+
+    // Single reusable dynamic toolpath line for Trace 3D (Draws active cutting contour in real time with ZERO memory bloat)
+    const maxTracePts = 1024;
+    const traceGeo = new THREE.BufferGeometry();
+    const tracePositions = new Float32Array(maxTracePts * 3);
+    traceGeo.setAttribute('position', new THREE.BufferAttribute(tracePositions, 3));
+    traceGeo.setDrawRange(0, 0);
+    const traceMat = new THREE.LineBasicMaterial({
+      color: 0x00ff66, // Electric Neon Green cutting contour
+      linewidth: 4.5,
+      transparent: true,
+      opacity: 1.0,
+      depthTest: false
+    });
+    this.activeTraceLine = new THREE.Line(traceGeo, traceMat);
+    this.activeTraceLine.name = 'CLE_Active_Trace_Line';
+    this.activeTraceLine.renderOrder = 100010;
+    this.activeTraceLine.visible = false;
+    this.visualizerGroup.add(this.activeTraceLine);
+
+    // Build ultra-lightweight 2D planar slice contours (uses ShapeGeometry to save >90% memory)
     this.slicedLayers.forEach((layer, lIdx) => {
-      if (layer.points.length < 2) return;
-
-      const positions = [];
-      const colors = [];
-
-      // Color coding:
-      // Cutout Breakthrough Pass: Vivid Amber-Gold (penetrating into spoilboard)
-      // CNC/Laser (top-down): bright neon green at surface -> gold -> deep red at floor
-      // 3D (bottom-up): deep blue at bed -> bright cyan -> vivid red at top
-      let r, g, b;
-      if (layer.isCutoutPass) {
-        r = 1.0; g = 0.65; b = 0.0; // Glowing Amber for Spoilboard Cutout pass
-      } else {
-        const progress = lIdx / Math.max(1, numLayers - 1);
-        if (isTopDown) {
-          if (progress < 0.5) {
-            // Green to Gold (0 to 0.5)
-            const t = progress * 2;
-            r = t; g = 1.0; b = 0.2 * (1 - t);
-          } else {
-            // Gold to Red (0.5 to 1.0)
-            const t = (progress - 0.5) * 2;
-            r = 1.0; g = 1.0 - t * 0.8; b = 0.0;
-          }
-        } else {
-          r = progress; g = 0.5 + 0.5 * (1 - progress); b = 1.0 - progress;
-        }
-      }
-
-      for (let i = 0; i < layer.points.length - 1; i++) {
-        const p1 = layer.points[i];
-        const p2 = layer.points[i + 1];
-
-        // Track overall envelope
-        if (p1.x < minX) minX = p1.x; if (p1.x > maxX) maxX = p1.x;
-        if (p1.y < minY) minY = p1.y; if (p1.y > maxY) maxY = p1.y;
-        if (p1.z < minZ) minZ = p1.z; if (p1.z > maxZ) maxZ = p1.z;
-        if (p2.x < minX) minX = p2.x; if (p2.x > maxX) maxX = p2.x;
-        if (p2.y < minY) minY = p2.y; if (p2.y > maxY) maxY = p2.y;
-        if (p2.z < minZ) minZ = p2.z; if (p2.z > maxZ) maxZ = p2.z;
-
-        positions.push(p1.x, p1.y, p1.z);
-        positions.push(p2.x, p2.y, p2.z);
-
-        if (p2.isRapid) {
-          // Rapid traverse in distinct bright cyan
-          colors.push(0.0, 0.85, 1.0, 0.0, 0.85, 1.0);
-        } else {
-          colors.push(r, g, b, r, g, b);
-        }
-      }
-
       // Find which laminated part contains this layer
       let layerPartIdx = -1;
       if (this.laminatedParts && this.laminatedParts.length > 0) {
         layerPartIdx = this.laminatedParts.findIndex(p => layer.z >= p.minZ - 0.05 && layer.z <= p.maxZ + 0.05);
       }
 
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-
-      const mat = new THREE.LineBasicMaterial({
-        vertexColors: true,
-        linewidth: 2,
-        transparent: true,
-        opacity: 0.95,
-        depthTest: false,
-        depthWrite: false
-      });
-
-      const lineMesh = new THREE.LineSegments(geom, mat);
-      lineMesh.renderOrder = 99999;
-      lineMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isRawToolpath: true };
-      lineMesh.visible = false; // Hidden in contour mode; dynamically drawn slice-by-slice during Trace 3D!
-      this.visualizerGroup.add(lineMesh);
-
       // Slice Contour Planar Disc & Vivid Green Perimeter Outline Loop (following 3D object in X, Y, Z and A)
       const exactCross = this.computeObjectCrossSectionAtZ(layer.z);
       const contourPts = (exactCross && exactCross.length >= 3) ? exactCross : this.computeLayerContour(layer.points);
+      layer.contourPts = contourPts;
 
       if (contourPts && contourPts.length >= 3) {
-        // High-performance lightweight ShapeGeometry (avoids heavy ExtrudeGeometry math, saving >90% memory!)
         const shape = new THREE.Shape();
         shape.moveTo(contourPts[0].x, contourPts[0].y);
         for (let k = 1; k < contourPts.length; k++) {
@@ -4544,6 +4506,7 @@ class CLESlicerEngine {
         this.visualizerGroup.parent.remove(this.visualizerGroup);
       }
       this.visualizerGroup = null;
+      this.activeTraceLine = null;
     }
 
     // Restore CAD body opacity and depthWrite
@@ -4603,7 +4566,8 @@ class CLESlicerEngine {
             if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e); // Green Slice Disc
           }
         } else if (isContourBorder) {
-          mesh.visible = isTarget;
+          // If simulating trace, keep border hidden until tool cuts it; otherwise show active slice contour
+          mesh.visible = this.isSimulating ? (this._activeSimLayer === lIdx && !this.activeTraceLine?.visible) : isTarget;
           if (mesh.material) {
             mesh.material.opacity = 1.0;
             if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0x22c55e); // VIVID GREEN OUTLINE CONTOUR!
@@ -5099,6 +5063,7 @@ class CLESlicerEngine {
   }
 
   // --- 3D Toolpath Trace Simulator (Shows tool path dynamically as it cuts each slice) ---
+  // --- 3D Toolpath Trace Simulator (Visibly shows toolhead cutting/tracing the contour in real time) ---
   startTraceSimulation(speedMultiplier = 2) {
     if (!this.slicedLayers || this.slicedLayers.length === 0) {
       this.bridge.notify('Slice a model first to run trace simulator.', 'error');
@@ -5110,7 +5075,6 @@ class CLESlicerEngine {
     this.simSpeed = speedMultiplier;
 
     const numLayers = this.slicedLayers.length;
-    // Start trace from current preview slice if valid, else start at slice 0
     let curLayerIdx = (this.currentPreviewLayer >= 0 && this.currentPreviewLayer < numLayers)
       ? this.currentPreviewLayer
       : 0;
@@ -5126,19 +5090,20 @@ class CLESlicerEngine {
       this.currentPreviewLayer = lIdx;
       if (hudSlider) hudSlider.value = lIdx;
 
-      // Update preview so active slice orange contour is focused
+      // Update slice display: keep planar disc visible, but hide contour border initially
+      // so the toolhead visibly cuts and draws the green contour around the perimeter in real time!
       this.setPreviewLayer(lIdx);
-
-      // Find toolpath line mesh for this slice and reset draw range to 0
       if (this.visualizerGroup) {
         this.visualizerGroup.children.forEach(mesh => {
-          if (mesh.userData && mesh.userData.layerIndex === lIdx && mesh.userData.isRawToolpath) {
-            mesh.visible = true;
-            if (mesh.geometry && mesh.geometry.setDrawRange) {
-              mesh.geometry.setDrawRange(0, 0);
-            }
+          if (mesh.userData && mesh.userData.layerIndex === lIdx && mesh.userData.isContourBorder) {
+            mesh.visible = false; // Hide until tool finishes tracing it!
           }
         });
+      }
+
+      if (this.activeTraceLine) {
+        this.activeTraceLine.geometry.setDrawRange(0, 0);
+        this.activeTraceLine.visible = true;
       }
     };
 
@@ -5148,7 +5113,11 @@ class CLESlicerEngine {
       if (!this.isSimulating) return;
 
       const layer = this.slicedLayers[curLayerIdx];
-      if (!layer || !layer.points || layer.points.length === 0) {
+      const contour = (layer && layer.contourPts && layer.contourPts.length >= 3)
+        ? layer.contourPts
+        : (layer ? layer.points : null);
+
+      if (!layer || !contour || contour.length === 0) {
         curLayerIdx++;
         ptIdx = 0;
         if (curLayerIdx >= numLayers) {
@@ -5160,29 +5129,26 @@ class CLESlicerEngine {
         return;
       }
 
-      const pt = layer.points[ptIdx];
+      const pt = contour[ptIdx];
       if (pt && this.bridge.bed) {
-        this.bridge.bed.updateToolCursor({ X: pt.x, Y: pt.y, Z: pt.z, A: pt.a || 0 });
+        this.bridge.bed.updateToolCursor({ X: pt.x, Y: pt.y, Z: layer.z, A: pt.a || 0 });
       }
 
-      // Show toolpath as it cuts each slice: expand draw range up to current toolhead position!
-      if (this.visualizerGroup) {
-        const drawnCount = Math.min((ptIdx + 1) * 2, (layer.points.length - 1) * 2);
-        this.visualizerGroup.children.forEach(mesh => {
-          if (mesh.userData && mesh.userData.layerIndex === curLayerIdx && mesh.userData.isRawToolpath) {
-            mesh.visible = true;
-            if (mesh.geometry && mesh.geometry.setDrawRange) {
-              mesh.geometry.setDrawRange(0, Math.max(2, drawnCount));
-            }
-          }
-        });
+      // Visibly draw the cutting contour path in real time directly behind the toolhead!
+      if (this.activeTraceLine && pt) {
+        const posAttr = this.activeTraceLine.geometry.attributes.position;
+        const count = Math.min(ptIdx + 1, posAttr.count);
+        posAttr.setXYZ(ptIdx, pt.x, pt.y, layer.z);
+        posAttr.needsUpdate = true;
+        this.activeTraceLine.geometry.setDrawRange(0, count);
+        this.activeTraceLine.visible = true;
       }
 
       // Update HUD status label with live coordinates
       if (hudLabel && pt) {
         const hasRotary = (this.mode === 'rotary' || (this.bridge?.vault?.getActiveMachine()?.type === 'rotary'));
         const aStr = hasRotary ? ` A:${(pt.a || 0).toFixed(0)}°` : '';
-        hudLabel.textContent = `Tracing Slice ${curLayerIdx + 1}/${numLayers} (Z=${layer.z.toFixed(2)}mm | X:${pt.x.toFixed(1)} Y:${pt.y.toFixed(1)}${aStr})`;
+        hudLabel.innerHTML = `Tracing Slice ${curLayerIdx + 1}/${numLayers} (Z=${layer.z.toFixed(2)}mm | X:${pt.x.toFixed(1)} Y:${pt.y.toFixed(1)}${aStr}) <span style="color:#00ff66; font-weight:700;">[Cutting Contour]</span>`;
       }
 
       const app = window.app || window.xe;
@@ -5193,14 +5159,20 @@ class CLESlicerEngine {
 
       ptIdx += Math.max(1, Math.floor(this.simSpeed));
 
-      if (ptIdx >= layer.points.length) {
-        // Active slice completed! Ensure all lines drawn for this completed slice
+      if (ptIdx >= contour.length) {
+        // Complete the loop by drawing segment back to start point
+        if (this.activeTraceLine && contour[0]) {
+          const posAttr = this.activeTraceLine.geometry.attributes.position;
+          posAttr.setXYZ(contour.length, contour[0].x, contour[0].y, layer.z);
+          posAttr.needsUpdate = true;
+          this.activeTraceLine.geometry.setDrawRange(0, contour.length + 1);
+        }
+
+        // Active slice contour cut is complete! Reveal completed green contour border
         if (this.visualizerGroup) {
           this.visualizerGroup.children.forEach(mesh => {
-            if (mesh.userData && mesh.userData.layerIndex === curLayerIdx && mesh.userData.isRawToolpath) {
-              if (mesh.geometry && mesh.geometry.setDrawRange) {
-                mesh.geometry.setDrawRange(0, Infinity);
-              }
+            if (mesh.userData && mesh.userData.layerIndex === curLayerIdx && mesh.userData.isContourBorder) {
+              mesh.visible = true;
             }
           });
         }
@@ -5221,14 +5193,14 @@ class CLESlicerEngine {
     const finishTrace = () => {
       this.isSimulating = false;
       this._activeSimLayer = -1;
+      if (this.activeTraceLine) this.activeTraceLine.visible = false;
       this.bridge.notify(`Trace simulation complete: ${numLayers} slices traced.`, 'ok');
       if (traceBtn) traceBtn.textContent = 'Trace 3D';
-      // Return to clean orange contour view
       this.setPreviewLayer(this.currentPreviewLayer >= 0 ? this.currentPreviewLayer : 0);
     };
 
     this._simAnimId = requestAnimationFrame(step);
-    this.bridge.notify(`Tracing toolpath slice-by-slice (${this.simSpeed}x)...`, 'info');
+    this.bridge.notify(`Tracing contour slice-by-slice (${this.simSpeed}x speed)...`, 'info');
   }
 
   stopTraceSimulation() {
@@ -5241,13 +5213,9 @@ class CLESlicerEngine {
     const traceBtn = document.getElementById('cle-hud-trace');
     if (traceBtn) traceBtn.textContent = 'Trace 3D';
 
-    // Hide raw toolpath lines so workspace visualizer remains clean orange contours
-    if (this.visualizerGroup) {
-      this.visualizerGroup.children.forEach(mesh => {
-        if (mesh.userData && mesh.userData.isRawToolpath) {
-          mesh.visible = false;
-        }
-      });
+    if (this.activeTraceLine) {
+      this.activeTraceLine.visible = false;
+      if (this.activeTraceLine.geometry) this.activeTraceLine.geometry.setDrawRange(0, 0);
     }
 
     this.setPreviewLayer(this.currentPreviewLayer >= 0 ? this.currentPreviewLayer : 0);
@@ -6648,6 +6616,15 @@ class CLEBridge {
           if (this.parent) this.parent.remove(this);
           return this;
         };
+      }
+      if (THREE.BufferAttribute && !THREE.BufferAttribute.prototype.updateRanges) {
+        Object.defineProperty(THREE.BufferAttribute.prototype, 'updateRanges', {
+          get() {
+            if (!this._updateRanges) this._updateRanges = [];
+            return this._updateRanges;
+          },
+          set(v) { this._updateRanges = v; }
+        });
       }
     }
     if (app && app.vp) {

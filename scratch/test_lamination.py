@@ -143,22 +143,12 @@ async def run_test():
             });
 
             // Test 3: Trace 3D Slice-by-Slice Toolpath Visualization
-            slicer.currentPreviewLayer = 5;
-            slicer.startTraceSimulation(100);
+            slicer.currentPreviewLayer = 2;
+            slicer.startTraceSimulation(2);
             const isSimulating = slicer.isSimulating;
-            let activeTraceToolpathVisible = 0;
-            slicer.visualizerGroup.children.forEach(c => {
-                if (c.userData && c.userData.layerIndex === 5 && c.userData.isRawToolpath && c.visible) {
-                    activeTraceToolpathVisible++;
-                }
-            });
+            let activeTraceToolpathVisible = (slicer.activeTraceLine && slicer.activeTraceLine.visible) ? 1 : 0;
             slicer.stopTraceSimulation();
-            let stoppedRawToolpathsVisible = 0;
-            slicer.visualizerGroup.children.forEach(c => {
-                if (c.userData && c.userData.isRawToolpath && c.visible) {
-                    stoppedRawToolpathsVisible++;
-                }
-            });
+            let stoppedRawToolpathsVisible = (slicer.activeTraceLine && slicer.activeTraceLine.visible) ? 1 : 0;
 
             return {
                 numLayers: slicer.slicedLayers.length,
