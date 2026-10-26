@@ -532,6 +532,87 @@ export class CLESlicerEngine {
     return lower.concat(upper);
   }
 
+  // Compute exact closed 2D cross-section contour of solid CAD object at elevation Z
+  computeObjectCrossSectionAtZ(Z) {
+    if (!this.lastGeometry || !this.lastGeometry.triangles || this.lastGeometry.triangles.length < 9) {
+      return null;
+    }
+    const tris = this.lastGeometry.triangles;
+    const segments = [];
+
+    for (let i = 0; i < tris.length; i += 9) {
+      const az = tris[i+2], bz = tris[i+5], cz = tris[i+8];
+      const minZ = Math.min(az, bz, cz);
+      const maxZ = Math.max(az, bz, cz);
+      if (minZ > Z || maxZ < Z) continue;
+
+      const ax = tris[i], ay = tris[i+1];
+      const bx = tris[i+3], by = tris[i+4];
+      const cx = tris[i+6], cy = tris[i+7];
+
+      const pts = [];
+      // Edge AB
+      if ((az <= Z && bz >= Z) || (az >= Z && bz <= Z)) {
+        if (Math.abs(bz - az) > 1e-6) {
+          const t = (Z - az) / (bz - az);
+          pts.push({ x: ax + t * (bx - ax), y: ay + t * (by - ay) });
+        }
+      }
+      // Edge BC
+      if ((bz <= Z && cz >= Z) || (bz >= Z && cz <= Z)) {
+        if (Math.abs(cz - bz) > 1e-6) {
+          const t = (Z - bz) / (cz - bz);
+          pts.push({ x: bx + t * (cx - bx), y: by + t * (cy - by) });
+        }
+      }
+      // Edge CA
+      if ((cz <= Z && az >= Z) || (cz >= Z && az <= Z)) {
+        if (Math.abs(az - cz) > 1e-6) {
+          const t = (Z - cz) / (az - cz);
+          pts.push({ x: cx + t * (ax - cx), y: cy + t * (ay - cy) });
+        }
+      }
+
+      if (pts.length >= 2) {
+        if (Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) > 0.001) {
+          segments.push([pts[0], pts[1]]);
+        }
+      }
+    }
+
+    if (segments.length < 3) return null;
+
+    // Chain segments into ordered polygon contour loop
+    const chain = [];
+    const used = new Uint8Array(segments.length);
+    chain.push(segments[0][0], segments[0][1]);
+    used[0] = 1;
+
+    for (let iter = 1; iter < segments.length; iter++) {
+      const last = chain[chain.length - 1];
+      let bestDist = Infinity;
+      let bestIdx = -1;
+      let flip = false;
+
+      for (let j = 0; j < segments.length; j++) {
+        if (used[j]) continue;
+        const d0 = Math.hypot(segments[j][0].x - last.x, segments[j][0].y - last.y);
+        const d1 = Math.hypot(segments[j][1].x - last.x, segments[j][1].y - last.y);
+        if (d0 < bestDist) { bestDist = d0; bestIdx = j; flip = false; }
+        if (d1 < bestDist) { bestDist = d1; bestIdx = j; flip = true; }
+      }
+
+      if (bestIdx !== -1 && bestDist < 15.0) {
+        used[bestIdx] = 1;
+        chain.push(flip ? segments[bestIdx][0] : segments[bestIdx][1]);
+      } else {
+        break;
+      }
+    }
+
+    return chain.length >= 3 ? chain : null;
+  }
+
   // Partition master sliced layers into laminated stock slabs (e.g. 40mm MDF / hardwood tiers for biradial horns)
   partitionLaminatedParts() {
     this.laminatedParts = [];
@@ -1038,38 +1119,47 @@ export class CLESlicerEngine {
         this.visualizerGroup.add(ptMesh);
       }
 
-      // Cross-sectional Planar Contour Surface & Glowing Border
-      const hull = this.computeLayerContour(layer.points);
-      if (hull.length >= 3) {
+      // Solid Material Slice Slab & Glowing Boundary Contour (following 3D object in X, Y, Z and A)
+      const exactCross = this.computeObjectCrossSectionAtZ(layer.z);
+      const contourPts = (exactCross && exactCross.length >= 3) ? exactCross : this.computeLayerContour(layer.points);
+
+      if (contourPts && contourPts.length >= 3) {
+        const sliceH = Math.max(0.5, this.layerHeight || 1.0);
+        const zBot = layer.z - sliceH;
+
+        // 3D Solid Material Slice Slab (warm hardwood timber / MDF solid volume)
         const shape = new THREE.Shape();
-        shape.moveTo(hull[0].x, hull[0].y);
-        for (let k = 1; k < hull.length; k++) {
-          shape.lineTo(hull[k].x, hull[k].y);
+        shape.moveTo(contourPts[0].x, contourPts[0].y);
+        for (let k = 1; k < contourPts.length; k++) {
+          shape.lineTo(contourPts[k].x, contourPts[k].y);
         }
         shape.closePath();
 
-        const shapeGeo = new THREE.ShapeGeometry(shape);
-        const shapeMat = new THREE.MeshBasicMaterial({
-          color: 0x38bdf8, // Vivid Sky Blue
+        const extrudeGeo = new THREE.ExtrudeGeometry(shape, { depth: sliceH, bevelEnabled: false });
+        extrudeGeo.translate(0, 0, zBot);
+
+        const solidMat = new THREE.MeshStandardMaterial({
+          color: 0xcd853f, // Solid Timber / Hardwood MDF
+          roughness: 0.55,
+          metalness: 0.10,
           transparent: true,
-          opacity: 0.40,
+          opacity: 0.88,
           side: THREE.DoubleSide,
           depthWrite: false
         });
-        const contourMesh = new THREE.Mesh(shapeGeo, shapeMat);
-        contourMesh.position.z = layer.z;
-        contourMesh.name = `CLE_Contour_Plane_${lIdx}`;
-        contourMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isContourPlane: true };
-        contourMesh.renderOrder = 99998;
-        contourMesh.visible = false;
-        this.visualizerGroup.add(contourMesh);
+        const solidSliceMesh = new THREE.Mesh(extrudeGeo, solidMat);
+        solidSliceMesh.name = `CLE_Solid_Slice_${lIdx}`;
+        solidSliceMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isSolidSlice: true };
+        solidSliceMesh.renderOrder = 99990;
+        solidSliceMesh.visible = false;
+        this.visualizerGroup.add(solidSliceMesh);
 
-        // Glowing Contour Perimeter Loop
-        const loopPts = hull.map(p => new THREE.Vector3(p.x, p.y, layer.z));
+        // Glowing Surface Perimeter Contour Loop (following compound 3D curve)
+        const loopPts = contourPts.map(p => new THREE.Vector3(p.x, p.y, layer.z));
         const loopGeo = new THREE.BufferGeometry().setFromPoints(loopPts);
         const loopMat = new THREE.LineBasicMaterial({
-          color: 0xfacc15, // High-contrast glowing Gold/Amber
-          linewidth: 3,
+          color: 0xfacc15, // Glowing Gold
+          linewidth: 3.5,
           transparent: true,
           opacity: 0.95,
           depthWrite: false
@@ -1507,7 +1597,7 @@ export class CLESlicerEngine {
       const lIdx = mesh.userData.layerIndex;
       if (lIdx === undefined) return;
 
-      const isContourPlane = !!mesh.userData.isContourPlane;
+      const isSolidSlice = !!mesh.userData.isSolidSlice;
       const isContourBorder = !!mesh.userData.isContourBorder;
 
       // Active Part filter (if user isolated a specific laminated part)
@@ -1517,14 +1607,14 @@ export class CLESlicerEngine {
       }
 
       if (mode === 'single') {
-        // --- SINGLE SLICE CONTOUR MODE ---
-        // Exactly one slice at a time with vibrant 2D/3D contour plane & perimeter loop
+        // --- SINGLE SLICE SOLID MATERIAL CONTOUR MODE ---
+        // Exactly one slice at a time showing solid material volume and glowing boundary contour following the object
         const effectiveTarget = (targetIndex === -1) ? 0 : targetIndex;
         const isTarget = (lIdx === effectiveTarget);
 
-        if (isContourPlane) {
+        if (isSolidSlice) {
           mesh.visible = isTarget;
-          if (mesh.material) mesh.material.opacity = 0.45;
+          if (mesh.material) mesh.material.opacity = 0.88;
         } else if (isContourBorder) {
           mesh.visible = isTarget;
           if (mesh.material) {
@@ -1532,9 +1622,9 @@ export class CLESlicerEngine {
             if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0xfacc15); // Vivid Glowing Gold
           }
         } else {
-          // Toolpath lines & plunge points for this single slice
+          // Toolpath lines: dimmed in single slice mode so user sees the solid slice contour cleanly!
           mesh.visible = isTarget;
-          if (mesh.material) mesh.material.opacity = 1.0;
+          if (mesh.material) mesh.material.opacity = 0.35;
         }
 
       } else if (mode === 'range') {
@@ -1544,10 +1634,9 @@ export class CLESlicerEngine {
         const center = (targetIndex === -1) ? Math.floor(numLayers / 2) : targetIndex;
         const isCenter = (lIdx === center);
 
-        if (isContourPlane) {
-          // Show contour plane on center slice of the range
-          mesh.visible = isCenter;
-          if (mesh.material) mesh.material.opacity = 0.35;
+        if (isSolidSlice) {
+          mesh.visible = inRange;
+          if (mesh.material) mesh.material.opacity = isCenter ? 0.88 : 0.40;
         } else if (isContourBorder) {
           // Show contour border on range boundaries and center
           mesh.visible = inRange && (lIdx === rangeStart || lIdx === rangeEnd || isCenter);
@@ -1561,15 +1650,15 @@ export class CLESlicerEngine {
           // Toolpath passes within range
           mesh.visible = inRange;
           if (mesh.material) {
-            mesh.material.opacity = isCenter ? 1.0 : 0.55;
+            mesh.material.opacity = isCenter ? 0.80 : 0.30;
           }
         }
 
       } else {
         // --- FULL STACK MODE ---
         // Cumulative toolpath stack
-        if (isContourPlane) {
-          mesh.visible = false; // Hide planar fills in full stack
+        if (isSolidSlice) {
+          mesh.visible = false; // Hide solid slab boxes in full stack view
         } else if (isContourBorder) {
           // Highlight contour border at active pass
           mesh.visible = (targetIndex !== -1 && lIdx === targetIndex);
@@ -1711,7 +1800,21 @@ export class CLESlicerEngine {
       if (this.sliceViewMode === 'single') {
         const idx = (intVal === -1) ? 0 : intVal;
         const curL = this.slicedLayers[idx];
-        label.textContent = `Slice ${idx + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm) [Contour]`;
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        let minA = Infinity, maxA = -Infinity;
+        if (curL && curL.points) {
+          for (const p of curL.points) {
+            if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+            const deg = (Math.atan2(p.y, p.z) * (180 / Math.PI) + 360) % 360;
+            if (deg < minA) minA = deg; if (deg > maxA) maxA = deg;
+          }
+        }
+        const hasRotary = (this.mode === 'rotary' || (this.bridge?.vault?.getActiveMachine()?.type === 'rotary'));
+        const aStr = (hasRotary && isFinite(minA)) ? `, A:${minA.toFixed(0)}°..${maxA.toFixed(0)}°` : '';
+        const coordStr = isFinite(minX) ? ` | X:${minX.toFixed(0)}..${maxX.toFixed(0)} Y:${minY.toFixed(0)}..${maxY.toFixed(0)}${aStr}` : '';
+        label.textContent = `Slice ${idx + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm${coordStr}) [Solid Slice]`;
       } else if (this.sliceViewMode === 'range') {
         const half = 5;
         const center = (intVal === -1) ? Math.floor(numLayers / 2) : intVal;

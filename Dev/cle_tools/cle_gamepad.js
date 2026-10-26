@@ -162,12 +162,8 @@ export class CLEGamepadEngine {
         this.bridge.notify('Connecting to machine device...', 'info');
         await this.bridge.fluidnc.autoConnect();
       }
-      // Show device card for control
+      // Show device card for control (which auto-starts camera if permission was previously granted)
       await this.bridge.openManualControlCenter();
-      // Auto-start camera if available
-      if (this.bridge.camera) {
-        await this.bridge.camera.autoStartIfAvailable();
-      }
       this.bridge.notify('Entered MANUAL CNC/LASER MODE. Machine control card active.', 'ok');
     } else {
       // Returned to Design 3D Mode
