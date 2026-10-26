@@ -2428,7 +2428,7 @@ class CLERotaryEngine {
     const liveTipGeo = new THREE.ConeGeometry(1.8, 8.0, 16);
     liveTipGeo.rotateZ(Math.PI / 2); // points along -X into workpiece center
     liveTipGeo.translate(-4.0, 0, 0);
-    const liveTipMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.95, roughness: 0.1 });
+    const liveTipMat = new THREE.MeshStandardMaterial({ color: 0x00d2ff, metalness: 0.95, roughness: 0.1 });
     this.tailstockCenterTool.add(new THREE.Mesh(liveTipGeo, liveTipMat));
     this.tailstockCenterTool.position.set(this.tailstockX, yCenter, zCenter);
     this.centerPointGroup.add(this.tailstockCenterTool);
@@ -2440,7 +2440,7 @@ class CLERotaryEngine {
     ];
     const guideZGeo = new THREE.BufferGeometry().setFromPoints(guideZPoints);
     const guideZMat = new THREE.LineDashedMaterial({
-      color: 0xfacc15, // Bright Gold
+      color: 0x00e5ff, // Bright Electric Blue
       dashSize: 4,
       gapSize: 3,
       depthTest: false
@@ -7244,17 +7244,17 @@ class CLEBedVisualizer {
     const activeHead = this.bridge.vault ? this.bridge.vault.getActiveHead() : { type: 'spindle' };
 
     if (activeHead.type === 'laser') {
-      // LASER HEAD: Anodized Heatsink Body + Laser Cone Beam
-      const headMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, metalness: 0.6, roughness: 0.3 });
+      // LASER HEAD: Anodized Heatsink Body + Laser Cone Beam (Bright Blue for high contrast on workpiece)
+      const headMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, metalness: 0.7, roughness: 0.25 });
       const headMesh = new THREE.Mesh(new THREE.BoxGeometry(16, 16, 26), headMat);
       headMesh.position.set(0, 0, 15);
       this.cursorGroup.add(headMesh);
 
-      // Laser focal cone beam (translucent violet/red)
+      // Laser focal cone beam (Bright Electric Blue)
       const beamMat = new THREE.MeshBasicMaterial({
-        color: 0xec4899,
+        color: 0x00d2ff,
         transparent: true,
-        opacity: 0.45,
+        opacity: 0.65,
         depthWrite: false
       });
       const beamCone = new THREE.Mesh(new THREE.ConeGeometry(5, 12, 16, 1, true), beamMat);
@@ -7262,19 +7262,32 @@ class CLEBedVisualizer {
       beamCone.rotation.x = Math.PI;
       this.cursorGroup.add(beamCone);
     } else {
-      // SPINDLE HEAD: ER11/ER16 Collet Nut + Carbide Endmill Bit
-      const colletMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.8, roughness: 0.2 });
+      // SPINDLE HEAD: ER11/ER16 Collet Nut + Carbide Endmill Bit (Bright Blue for high contrast on orange/grey objects)
+      const colletMat = new THREE.MeshStandardMaterial({ color: 0x00b4d8, metalness: 0.8, roughness: 0.2 });
       const colletMesh = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 4.5, 12, 16), colletMat);
       colletMesh.position.set(0, 0, 10);
       colletMesh.rotation.x = Math.PI / 2;
       this.cursorGroup.add(colletMesh);
 
-      // Bit shank & flutes pointing down to (0,0,0)
-      const bitMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.1 });
+      // Bit shank & flutes pointing down to (0,0,0) in Bright Vivid Blue
+      const bitMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.9, roughness: 0.1 });
       const bitMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 12, 12), bitMat);
       bitMesh.position.set(0, 0, 4);
       bitMesh.rotation.x = Math.PI / 2;
       this.cursorGroup.add(bitMesh);
+
+      // Glowing Neon Blue Contact Reticle at Cutting Tip (Z=0) so tool contact is instantly visible on object surface
+      const tipRingGeo = new THREE.RingGeometry(0.8, 3.2, 24);
+      const tipRingMat = new THREE.MeshBasicMaterial({
+        color: 0x00e5ff,
+        side: THREE.DoubleSide,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.95
+      });
+      const tipRing = new THREE.Mesh(tipRingGeo, tipRingMat);
+      tipRing.position.set(0, 0, 0.05);
+      this.cursorGroup.add(tipRing);
     }
 
     // 3D Tool Lines at Cursor Tip (think of tool lines X, Y, Z)
