@@ -24,7 +24,8 @@ export class CLECameraEngine {
   // Automatically start USB camera if permission was previously granted and device exists
   async autoStartIfAvailable() {
     if (this.isActive) return true;
-    const isGranted = (this.permissionGranted || localStorage.getItem('cle.cam.permissionGranted') === 'true');
+    const vCfg = this.bridge?.vault ? this.bridge.vault.getCameraConfig() : {};
+    const isGranted = (this.permissionGranted || vCfg.permissionGranted || localStorage.getItem('cle.cam.permissionGranted') === 'true');
     // Do not pop up camera permission prompt unless user already granted permission once
     if (!isGranted) return false;
 

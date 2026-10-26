@@ -544,6 +544,28 @@ export class CLEBedVisualizer {
       }
     }
 
+    // --- Z-Axis Millimeter Ruler (Vertical Post, from Spoilboard Surface Z+0 up to Travel Z) ---
+    const tz = this.config.travelZ || 100;
+    for (let z = 0; z <= tz + 0.1; z += 5) {
+      const is50 = (Math.round(z) % 50 === 0);
+      const is20 = (Math.round(z) % 20 === 0);
+      const is10 = (Math.round(z) % 10 === 0);
+      const tickLen = is50 ? 8.0 : (is20 ? 6.0 : (is10 ? 4.5 : 2.5));
+      const curZ = zSurface + z;
+
+      // Tick line projecting out towards negative X
+      tickPts.push(baseX, baseY, curZ, baseX - tickLen, baseY, curZ);
+
+      // Number labels every 20mm and 50mm (e.g. Z0, Z20, Z40, Z60, Z80, Z100)
+      if (is20 || is50) {
+        const sprite = this.createNumberLabelSprite(THREE, `Z${Math.round(z)}`, '#38bdf8');
+        sprite.position.set(baseX - tickLen - 8.0, baseY, curZ);
+        sprite.scale.set(18, 9, 1);
+        this.bedGroup.add(sprite);
+        this.rulerSprites.push(sprite);
+      }
+    }
+
     // Add tick line segments
     const tickGeo = new THREE.BufferGeometry();
     tickGeo.setAttribute('position', new THREE.Float32BufferAttribute(tickPts, 3));

@@ -606,7 +606,7 @@ export class CLEVault {
   }
 
   // --- Persistent Camera Permission & Device Configuration ---
-  saveCameraConfig(cfg) {
+  async saveCameraConfig(cfg) {
     const current = this.getCameraConfig();
     const updated = { ...current, ...cfg, lastSaved: Date.now() };
     localStorage.setItem('cle.vault.camera', JSON.stringify(updated));
@@ -618,20 +618,23 @@ export class CLEVault {
     const mach = this.getActiveMachine();
     if (mach) {
       mach.cameraConfig = updated;
-      const list = this.getMachinesSync();
-      const idx = list.findIndex(m => m.id === mach.id);
-      if (idx >= 0) list[idx] = mach;
-      localStorage.setItem('cle.vault.machines', JSON.stringify(list));
+      await this.saveMachine(mach);
+      console.log('[CLE Vault] Camera permission & config committed to active machine in Vault.');
     }
   }
 
   getCameraConfig() {
+    const mach = this.getActiveMachine();
+    if (mach && mach.cameraConfig) {
+      if (mach.cameraConfig.permissionGranted !== undefined) {
+        localStorage.setItem('cle.cam.permissionGranted', mach.cameraConfig.permissionGranted ? 'true' : 'false');
+      }
+      return mach.cameraConfig;
+    }
     try {
       const raw = localStorage.getItem('cle.vault.camera');
       if (raw) return JSON.parse(raw);
     } catch(e) {}
-    const mach = this.getActiveMachine();
-    if (mach && mach.cameraConfig) return mach.cameraConfig;
     return {
       permissionGranted: localStorage.getItem('cle.cam.permissionGranted') === 'true',
       deviceId: localStorage.getItem('cle.cam.deviceId') || '',

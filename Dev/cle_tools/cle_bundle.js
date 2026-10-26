@@ -35,7 +35,8 @@ class CLECameraEngine {
   // Automatically start USB camera if permission was previously granted and device exists
   async autoStartIfAvailable() {
     if (this.isActive) return true;
-    const isGranted = (this.permissionGranted || localStorage.getItem('cle.cam.permissionGranted') === 'true');
+    const vCfg = this.bridge?.vault ? this.bridge.vault.getCameraConfig() : {};
+    const isGranted = (this.permissionGranted || vCfg.permissionGranted || localStorage.getItem('cle.cam.permissionGranted') === 'true');
     // Do not pop up camera permission prompt unless user already granted permission once
     if (!isGranted) return false;
 
@@ -2660,7 +2661,7 @@ class CLEVault {
   }
 
   // --- Persistent Camera Permission & Device Configuration ---
-  saveCameraConfig(cfg) {
+  async saveCameraConfig(cfg) {
     const current = this.getCameraConfig();
     const updated = { ...current, ...cfg, lastSaved: Date.now() };
     localStorage.setItem('cle.vault.camera', JSON.stringify(updated));
@@ -2672,20 +2673,23 @@ class CLEVault {
     const mach = this.getActiveMachine();
     if (mach) {
       mach.cameraConfig = updated;
-      const list = this.getMachinesSync();
-      const idx = list.findIndex(m => m.id === mach.id);
-      if (idx >= 0) list[idx] = mach;
-      localStorage.setItem('cle.vault.machines', JSON.stringify(list));
+      await this.saveMachine(mach);
+      console.log('[CLE Vault] Camera permission & config committed to active machine in Vault.');
     }
   }
 
   getCameraConfig() {
+    const mach = this.getActiveMachine();
+    if (mach && mach.cameraConfig) {
+      if (mach.cameraConfig.permissionGranted !== undefined) {
+        localStorage.setItem('cle.cam.permissionGranted', mach.cameraConfig.permissionGranted ? 'true' : 'false');
+      }
+      return mach.cameraConfig;
+    }
     try {
       const raw = localStorage.getItem('cle.vault.camera');
       if (raw) return JSON.parse(raw);
     } catch(e) {}
-    const mach = this.getActiveMachine();
-    if (mach && mach.cameraConfig) return mach.cameraConfig;
     return {
       permissionGranted: localStorage.getItem('cle.cam.permissionGranted') === 'true',
       deviceId: localStorage.getItem('cle.cam.deviceId') || '',
@@ -3886,19 +3890,34 @@ class CLESlicerEngine {
     }
   }
 
-  // Filter layer visibility according to scrubbed layer index
+  // Filter layer visibility according to scrubbed layer index (Stack vs Single Slice Contour mode)
   setPreviewLayer(targetIndex) {
     this.currentPreviewLayer = targetIndex;
     if (!this.visualizerGroup) return;
+
+    const isSingle = (this.sliceViewMode === 'single');
 
     this.visualizerGroup.children.forEach(mesh => {
       const lIdx = mesh.userData.layerIndex;
       if (lIdx === undefined) return;
       if (targetIndex === -1) {
-        mesh.visible = true; // Show all
+        mesh.visible = true; // Show all contours in full stack
+        if (mesh.material) mesh.material.opacity = 0.95;
+      } else if (isSingle) {
+        // Single Slice Contour Mode: Isolate selected contour slice
+        mesh.visible = (lIdx === targetIndex);
+        if (mesh.material) mesh.material.opacity = 1.0;
       } else {
-        // Show progression up to current layer
-        mesh.visible = (lIdx <= targetIndex);
+        // Stack Mode: Show cumulative stack up to current layer, with active layer highlighted
+        if (lIdx === targetIndex) {
+          mesh.visible = true;
+          if (mesh.material) mesh.material.opacity = 1.0;
+        } else if (lIdx < targetIndex) {
+          mesh.visible = true;
+          if (mesh.material) mesh.material.opacity = 0.45;
+        } else {
+          mesh.visible = false;
+        }
       }
     });
 
@@ -3937,6 +3956,8 @@ class CLESlicerEngine {
       document.body.appendChild(hud);
     }
 
+    if (!this.sliceViewMode) this.sliceViewMode = 'stack'; // 'stack' | 'single'
+
     const numLayers = this.slicedLayers.length;
     const isTopDown = (this.mode === 'cnc' || this.mode === 'laser');
     const modeLabel = isTopDown ? `${this.mode.toUpperCase()}: Top-Down` : '3D: Bottom-Up';
@@ -3954,6 +3975,9 @@ class CLESlicerEngine {
       </div>
       <input type="range" id="cle-hud-slider" min="-1" max="${numLayers - 1}" value="-1" style="width:130px;" title="Scrub through toolpath passes">
       <button class="cle-btn" id="cle-hud-all" style="padding:2px 8px;">Show All</button>
+
+      <!-- Single Slice vs Stack Mode Toggle -->
+      <button class="cle-btn" id="cle-hud-mode-toggle" style="padding:2px 8px; font-weight:600; border-color:var(--accent);" title="Toggle Single Slice contour inspection vs Stack">${this.sliceViewMode === 'single' ? 'Single Slice' : 'Stack View'}</button>
 
       <!-- Roll Slices and Sphere Controls -->
       <button class="cle-btn" id="cle-hud-roll-layers" style="background:#0284c7; color:#fff; font-weight:600; padding:3px 10px;" title="Roll through all slice passes sequentially">▶ Roll Slices</button>
@@ -3978,6 +4002,7 @@ class CLESlicerEngine {
 
     const slider = document.getElementById('cle-hud-slider');
     const label = document.getElementById('cle-hud-label');
+    const modeBtn = document.getElementById('cle-hud-mode-toggle');
 
     const updateHUD = (val) => {
       slider.value = val;
@@ -3986,7 +4011,8 @@ class CLESlicerEngine {
         label.textContent = `All (${numLayers} passes)`;
       } else {
         const curL = this.slicedLayers[val];
-        label.textContent = `Pass ${parseInt(val, 10) + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm)`;
+        const modePrefix = this.sliceViewMode === 'single' ? 'Slice' : 'Pass';
+        label.textContent = `${modePrefix} ${parseInt(val, 10) + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm)`;
       }
     };
 
@@ -4001,6 +4027,16 @@ class CLESlicerEngine {
       if (cur < numLayers - 1) updateHUD(cur + 1);
     };
     document.getElementById('cle-hud-all').onclick = () => updateHUD(-1);
+
+    // Toggle Single Slice vs Stack Mode
+    modeBtn.onclick = () => {
+      this.sliceViewMode = (this.sliceViewMode === 'single' ? 'stack' : 'single');
+      modeBtn.textContent = (this.sliceViewMode === 'single' ? 'Single Slice' : 'Stack View');
+      if (slider.value === '-1') {
+        slider.value = 0; // Default to first slice when entering single slice mode
+      }
+      updateHUD(slider.value);
+    };
 
     // Roll Slices sequentially
     document.getElementById('cle-hud-roll-layers').onclick = () => {
@@ -5127,6 +5163,28 @@ class CLEBedVisualizer {
         const sprite = this.createNumberLabelSprite(THREE, `${Math.round(y)}`);
         sprite.position.set(baseX - tickLen - 9.0, y, zSurface + 1.0);
         sprite.scale.set(16, 8, 1);
+        this.bedGroup.add(sprite);
+        this.rulerSprites.push(sprite);
+      }
+    }
+
+    // --- Z-Axis Millimeter Ruler (Vertical Post, from Spoilboard Surface Z+0 up to Travel Z) ---
+    const tz = this.config.travelZ || 100;
+    for (let z = 0; z <= tz + 0.1; z += 5) {
+      const is50 = (Math.round(z) % 50 === 0);
+      const is20 = (Math.round(z) % 20 === 0);
+      const is10 = (Math.round(z) % 10 === 0);
+      const tickLen = is50 ? 8.0 : (is20 ? 6.0 : (is10 ? 4.5 : 2.5));
+      const curZ = zSurface + z;
+
+      // Tick line projecting out towards negative X
+      tickPts.push(baseX, baseY, curZ, baseX - tickLen, baseY, curZ);
+
+      // Number labels every 20mm and 50mm (e.g. Z0, Z20, Z40, Z60, Z80, Z100)
+      if (is20 || is50) {
+        const sprite = this.createNumberLabelSprite(THREE, `Z${Math.round(z)}`, '#38bdf8');
+        sprite.position.set(baseX - tickLen - 8.0, baseY, curZ);
+        sprite.scale.set(18, 9, 1);
         this.bedGroup.add(sprite);
         this.rulerSprites.push(sprite);
       }
