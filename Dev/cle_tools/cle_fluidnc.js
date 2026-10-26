@@ -172,6 +172,9 @@ export class CLEFluidNCClient {
       this.updateConnectionUI(true);
       this.startSerialReadLoop();
       this.startStatusPolling();
+      if (this.bridge && this.bridge.camera) {
+        this.bridge.camera.autoStartIfAvailable();
+      }
       return true;
     } catch (err) {
       console.error('[CLE FluidNC] Serial error:', err);
@@ -276,6 +279,9 @@ export class CLEFluidNCClient {
         this.bridge.notify(`Connected to FluidTouch/FluidNC at ${displayHost}`, 'ok');
         this.updateConnectionUI(true);
         this.startStatusPolling();
+        if (this.bridge && this.bridge.camera) {
+          this.bridge.camera.autoStartIfAvailable();
+        }
       };
 
       ws.onmessage = (event) => {

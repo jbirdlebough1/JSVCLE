@@ -604,7 +604,10 @@ export class CLEBedVisualizer {
     ctx.fillText(text, 64, 32);
 
     const texture = new THREE.CanvasTexture(canvas);
+    texture.channel = 0;
     texture.minFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
     const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
     const sprite = new THREE.Sprite(spriteMat);
     sprite.renderOrder = 999;

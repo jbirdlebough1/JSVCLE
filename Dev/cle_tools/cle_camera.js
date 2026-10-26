@@ -26,16 +26,12 @@ export class CLECameraEngine {
     if (this.isActive) return true;
     const vCfg = this.bridge?.vault ? this.bridge.vault.getCameraConfig() : {};
     const isGranted = (this.permissionGranted || vCfg.permissionGranted || localStorage.getItem('cle.cam.permissionGranted') === 'true');
-    // Do not pop up camera permission prompt unless user already granted permission once
+    // If user previously granted permission, auto-open directly without any dialog
     if (!isGranted) return false;
 
     try {
-      const devices = await this.getAvailableDevices();
-      if (devices && devices.length > 0) {
-        const logi = devices.find(d => /logi|c270|webcam/i.test(d.label));
-        const devId = logi ? logi.deviceId : (this.selectedDeviceId || devices[0].deviceId);
-        return await this.startUSBCamera(devId);
-      }
+      const savedDevId = this.selectedDeviceId || vCfg.deviceId || localStorage.getItem('cle.cam.deviceId');
+      return await this.startUSBCamera(savedDevId || undefined);
     } catch (e) {
       console.warn('[CLE Camera] Auto-start check error:', e);
     }
@@ -66,23 +62,45 @@ export class CLECameraEngine {
         }
       };
 
+      // Use ideal constraint so changed deviceId hashes never throw OverconstrainedError
       if (deviceId) {
-        constraints.video.deviceId = { exact: deviceId };
+        constraints.video.deviceId = { ideal: deviceId };
       }
 
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
       this.permissionGranted = true;
-      this.selectedDeviceId = deviceId;
-      localStorage.setItem('cle.cam.deviceId', deviceId);
       localStorage.setItem('cle.cam.permissionGranted', 'true');
+      this.activeType = 'usb';
+
+      // Capture device details now that stream is established and labels are populated
+      let activeLabel = 'Logitech HD Webcam C270';
+      try {
+        const devices = await this.getAvailableDevices();
+        const logi = devices.find(d => /logi|c270|webcam/i.test(d.label));
+        const matched = logi || devices.find(d => d.deviceId === deviceId) || devices[0];
+        if (matched) {
+          this.selectedDeviceId = matched.deviceId;
+          activeLabel = matched.label || activeLabel;
+          localStorage.setItem('cle.cam.deviceId', matched.deviceId);
+          localStorage.setItem('cle.cam.deviceLabel', activeLabel);
+        }
+
+        // Update UI dropdown
+        const devSelect = document.getElementById('cle-cam-device-select');
+        if (devSelect && devices.length > 0) {
+          devSelect.innerHTML = devices.map(d => `<option value="${d.deviceId}">${d.label || 'USB Camera'}</option>`).join('');
+          if (this.selectedDeviceId) devSelect.value = this.selectedDeviceId;
+        }
+      } catch (e) {}
+
       if (this.bridge && this.bridge.vault) {
         this.bridge.vault.saveCameraConfig({
           permissionGranted: true,
-          deviceId: deviceId,
+          deviceId: this.selectedDeviceId,
+          deviceLabel: activeLabel,
           activeType: 'usb'
         });
       }
-      this.activeType = 'usb';
 
       const videoEl = document.getElementById('cle-cam-video');
       const imgEl = document.getElementById('cle-cam-img');
@@ -91,12 +109,13 @@ export class CLECameraEngine {
       if (videoEl) {
         videoEl.srcObject = this.stream;
         videoEl.style.display = 'block';
+        try { await videoEl.play(); } catch (e) {}
       }
       if (imgEl) imgEl.style.display = 'none';
       if (placeholder) placeholder.style.display = 'none';
 
       this.updateReticleCanvas();
-      this.bridge.notify('USB Camera started (720p @ 30 FPS)', 'ok');
+      this.bridge.notify(`Camera active: ${activeLabel} (720p @ 30 FPS)`, 'ok');
       return true;
     } catch (err) {
       console.error('[CLE Camera] Start USB cam error:', err);

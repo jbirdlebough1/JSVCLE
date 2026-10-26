@@ -252,7 +252,42 @@ class CLERequestHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(404, {"error": "Vault file not initialized yet."})
         else:
-            self._send_json(404, {"error": "Not found"})
+            # Static file serving from PROJECT_ROOT for http://localhost:8765/Dev/index.htm
+            rel_path = clean_path.lstrip("/")
+            file_path = (PROJECT_ROOT / rel_path).resolve()
+            if file_path.is_file() and str(file_path).startswith(str(PROJECT_ROOT)):
+                ext = file_path.suffix.lower()
+                mime_map = {
+                    ".html": "text/html; charset=utf-8",
+                    ".htm": "text/html; charset=utf-8",
+                    ".js": "application/javascript; charset=utf-8",
+                    ".mjs": "application/javascript; charset=utf-8",
+                    ".css": "text/css; charset=utf-8",
+                    ".json": "application/json; charset=utf-8",
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".gif": "image/gif",
+                    ".svg": "image/svg+xml",
+                    ".ico": "image/x-icon",
+                    ".stl": "application/sla",
+                    ".nc": "text/plain; charset=utf-8"
+                }
+                content_type = mime_map.get(ext, "application/octet-stream")
+                try:
+                    data = file_path.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                except Exception as e:
+                    self._send_json(500, {"error": str(e)})
+                    return
+            self._send_json(404, {"error": f"Path not found: {clean_path}"})
 
     def do_POST(self):
         content_len = int(self.headers.get("Content-Length", 0))

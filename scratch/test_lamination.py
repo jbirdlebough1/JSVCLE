@@ -63,20 +63,46 @@ async def run_test():
                 hasOp4Cutout: p.gcode ? p.gcode.includes('OPERATION 4: Spoilboard Clean Perimeter Cutout') : false
             }));
             
-            // Check visualizer group objects
+            // Check visualizer group objects: dowels, joints, contours
             let dowelPinCount = 0;
             let jointPlaneCount = 0;
+            let contourPlaneCount = 0;
+            let contourBorderCount = 0;
             if (slicer.visualizerGroup) {
                 slicer.visualizerGroup.traverse(obj => {
                     if (obj.name && obj.name.startsWith('CLE_Dowel_Pin_')) dowelPinCount++;
                     if (obj.name && obj.name.startsWith('CLE_Part_Joint_')) jointPlaneCount++;
+                    if (obj.name && obj.name.startsWith('CLE_Contour_Plane_')) contourPlaneCount++;
+                    if (obj.name && obj.name.startsWith('CLE_Contour_Border_')) contourBorderCount++;
                 });
             }
             
-            // Test active part isolation
-            slicer.setActivePart(0);
-            const hudBarPresent = !!document.getElementById('cle-hud-part-bar');
-            const partButtons = document.querySelectorAll('.cle-hud-part-btn').length;
+            // Test 1: Single Slice Mode with Contour
+            slicer.sliceViewMode = 'single';
+            slicer.setPreviewLayer(15);
+            let singleVisiblePlanes = 0;
+            let singleVisibleBorders = 0;
+            let singleVisibleMeshes = 0;
+            slicer.visualizerGroup.traverse(obj => {
+                if (obj.name === 'CLE_Contour_Plane_15' && obj.visible) singleVisiblePlanes++;
+                if (obj.name === 'CLE_Contour_Border_15' && obj.visible) singleVisibleBorders++;
+                if (obj.userData && obj.userData.layerIndex === 15 && !obj.userData.isContourPlane && !obj.userData.isContourBorder && obj.visible) singleVisibleMeshes++;
+            });
+
+            // Test 2: Range Mode
+            slicer.sliceViewMode = 'range';
+            slicer.rangeWindow = 10;
+            slicer.setPreviewLayer(20); // Range 15 to 25
+            let rangeVisibleCount = 0;
+            slicer.visualizerGroup.children.forEach(c => {
+                const l = c.userData.layerIndex;
+                if (l !== undefined && !c.userData.isContourPlane && !c.userData.isContourBorder && c.visible) {
+                    rangeVisibleCount++;
+                }
+            });
+
+            // Test 3: Camera configuration in Vault
+            const camConfig = window.CLE.vault.getCameraConfig();
             
             return {
                 numLayers: slicer.slicedLayers.length,
@@ -84,9 +110,17 @@ async def run_test():
                 parts,
                 dowelPinCount,
                 jointPlaneCount,
-                dowelPoints: slicer.dowelPoints,
-                hudBarPresent,
-                partButtons
+                contourPlaneCount,
+                contourBorderCount,
+                singleSliceTest: {
+                    activePlaneVisible: singleVisiblePlanes === 1,
+                    activeBorderVisible: singleVisibleBorders === 1,
+                    activeToolpathVisible: singleVisibleMeshes > 0
+                },
+                rangeModeTest: {
+                    rangeVisibleCount: rangeVisibleCount
+                },
+                camConfigSaved: camConfig
             };
         }""")
         

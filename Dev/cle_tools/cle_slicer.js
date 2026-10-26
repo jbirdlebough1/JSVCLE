@@ -499,6 +499,39 @@ export class CLESlicerEngine {
     }
   }
 
+  // Compute 2D convex perimeter contour loop from slice cutting points
+  computeLayerContour(points) {
+    if (!points || points.length < 3) return [];
+    const cutPts = points.filter(p => !p.isRapid);
+    const pts = (cutPts.length >= 3 ? cutPts : points).map(p => ({ x: p.x, y: p.y }));
+    if (pts.length < 3) return [];
+
+    // Monotone chain 2D convex hull algorithm
+    pts.sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x);
+    const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+    const lower = [];
+    for (const p of pts) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+        lower.pop();
+      }
+      lower.push(p);
+    }
+
+    const upper = [];
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const p = pts[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+        upper.pop();
+      }
+      upper.push(p);
+    }
+
+    lower.pop();
+    upper.pop();
+    return lower.concat(upper);
+  }
+
   // Partition master sliced layers into laminated stock slabs (e.g. 40mm MDF / hardwood tiers for biradial horns)
   partitionLaminatedParts() {
     this.laminatedParts = [];
@@ -847,7 +880,10 @@ export class CLESlicerEngine {
     ctx.fillText(text, 80, 32);
 
     const texture = new THREE.CanvasTexture(canvas);
+    texture.channel = 0;
     texture.minFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
     const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
     const sprite = new THREE.Sprite(spriteMat);
     sprite.renderOrder = 100005;
@@ -1000,6 +1036,50 @@ export class CLESlicerEngine {
         ptMesh.renderOrder = 100000;
         ptMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx };
         this.visualizerGroup.add(ptMesh);
+      }
+
+      // Cross-sectional Planar Contour Surface & Glowing Border
+      const hull = this.computeLayerContour(layer.points);
+      if (hull.length >= 3) {
+        const shape = new THREE.Shape();
+        shape.moveTo(hull[0].x, hull[0].y);
+        for (let k = 1; k < hull.length; k++) {
+          shape.lineTo(hull[k].x, hull[k].y);
+        }
+        shape.closePath();
+
+        const shapeGeo = new THREE.ShapeGeometry(shape);
+        const shapeMat = new THREE.MeshBasicMaterial({
+          color: 0x38bdf8, // Vivid Sky Blue
+          transparent: true,
+          opacity: 0.40,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+        const contourMesh = new THREE.Mesh(shapeGeo, shapeMat);
+        contourMesh.position.z = layer.z;
+        contourMesh.name = `CLE_Contour_Plane_${lIdx}`;
+        contourMesh.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isContourPlane: true };
+        contourMesh.renderOrder = 99998;
+        contourMesh.visible = false;
+        this.visualizerGroup.add(contourMesh);
+
+        // Glowing Contour Perimeter Loop
+        const loopPts = hull.map(p => new THREE.Vector3(p.x, p.y, layer.z));
+        const loopGeo = new THREE.BufferGeometry().setFromPoints(loopPts);
+        const loopMat = new THREE.LineBasicMaterial({
+          color: 0xfacc15, // High-contrast glowing Gold/Amber
+          linewidth: 3,
+          transparent: true,
+          opacity: 0.95,
+          depthWrite: false
+        });
+        const contourBorder = new THREE.LineLoop(loopGeo, loopMat);
+        contourBorder.name = `CLE_Contour_Border_${lIdx}`;
+        contourBorder.userData = { layerIndex: lIdx, zElevation: layer.z, partIndex: layerPartIdx, isContourBorder: true };
+        contourBorder.renderOrder = 100001;
+        contourBorder.visible = false;
+        this.visualizerGroup.add(contourBorder);
       }
     });
 
@@ -1405,41 +1485,108 @@ export class CLESlicerEngine {
     }
   }
 
-  // Filter layer visibility according to scrubbed layer index (Stack vs Single Slice Contour mode)
+  // Filter layer visibility according to scrubbed layer index (Single Slice Contour vs Range Window vs Full Stack)
   setPreviewLayer(targetIndex) {
     this.currentPreviewLayer = targetIndex;
     if (!this.visualizerGroup) return;
 
-    const isSingle = (this.sliceViewMode === 'single');
+    const mode = this.sliceViewMode || 'single'; // 'single' | 'range' | 'stack'
+    const numLayers = this.slicedLayers ? this.slicedLayers.length : 0;
+    const rangeWindow = this.rangeWindow || 10;
+    const halfWin = Math.floor(rangeWindow / 2);
+
+    let rangeStart = 0;
+    let rangeEnd = numLayers - 1;
+    if (mode === 'range') {
+      const center = (targetIndex === -1) ? Math.floor(numLayers / 2) : targetIndex;
+      rangeStart = Math.max(0, center - halfWin);
+      rangeEnd = Math.min(numLayers - 1, center + halfWin);
+    }
 
     this.visualizerGroup.children.forEach(mesh => {
       const lIdx = mesh.userData.layerIndex;
       if (lIdx === undefined) return;
 
-      // If a specific laminated part is active, keep other parts dimmed
+      const isContourPlane = !!mesh.userData.isContourPlane;
+      const isContourBorder = !!mesh.userData.isContourBorder;
+
+      // Active Part filter (if user isolated a specific laminated part)
       if (this.activePartIndex >= 0 && mesh.userData.partIndex !== undefined && mesh.userData.partIndex !== this.activePartIndex) {
-        mesh.visible = (targetIndex === -1 && !isSingle);
-        if (mesh.material) mesh.material.opacity = 0.15;
+        mesh.visible = false;
         return;
       }
 
-      if (targetIndex === -1) {
-        mesh.visible = true; // Show all contours in full stack
-        if (mesh.material) mesh.material.opacity = 0.95;
-      } else if (isSingle) {
-        // Single Slice Contour Mode: Isolate selected contour slice
-        mesh.visible = (lIdx === targetIndex);
-        if (mesh.material) mesh.material.opacity = 1.0;
-      } else {
-        // Stack Mode: Show cumulative stack up to current layer, with active layer highlighted
-        if (lIdx === targetIndex) {
-          mesh.visible = true;
-          if (mesh.material) mesh.material.opacity = 1.0;
-        } else if (lIdx < targetIndex) {
-          mesh.visible = true;
+      if (mode === 'single') {
+        // --- SINGLE SLICE CONTOUR MODE ---
+        // Exactly one slice at a time with vibrant 2D/3D contour plane & perimeter loop
+        const effectiveTarget = (targetIndex === -1) ? 0 : targetIndex;
+        const isTarget = (lIdx === effectiveTarget);
+
+        if (isContourPlane) {
+          mesh.visible = isTarget;
           if (mesh.material) mesh.material.opacity = 0.45;
+        } else if (isContourBorder) {
+          mesh.visible = isTarget;
+          if (mesh.material) {
+            mesh.material.opacity = 1.0;
+            if (mesh.material.color && mesh.material.color.setHex) mesh.material.color.setHex(0xfacc15); // Vivid Glowing Gold
+          }
         } else {
-          mesh.visible = false;
+          // Toolpath lines & plunge points for this single slice
+          mesh.visible = isTarget;
+          if (mesh.material) mesh.material.opacity = 1.0;
+        }
+
+      } else if (mode === 'range') {
+        // --- RANGE OF SLICES SCROLL MODE ---
+        // Shows window of slices (e.g. 10 passes) scrolling through the stack
+        const inRange = (lIdx >= rangeStart && lIdx <= rangeEnd);
+        const center = (targetIndex === -1) ? Math.floor(numLayers / 2) : targetIndex;
+        const isCenter = (lIdx === center);
+
+        if (isContourPlane) {
+          // Show contour plane on center slice of the range
+          mesh.visible = isCenter;
+          if (mesh.material) mesh.material.opacity = 0.35;
+        } else if (isContourBorder) {
+          // Show contour border on range boundaries and center
+          mesh.visible = inRange && (lIdx === rangeStart || lIdx === rangeEnd || isCenter);
+          if (mesh.material) {
+            mesh.material.opacity = isCenter ? 1.0 : 0.70;
+            if (mesh.material.color && mesh.material.color.setHex) {
+              mesh.material.color.setHex(isCenter ? 0xfacc15 : 0x38bdf8);
+            }
+          }
+        } else {
+          // Toolpath passes within range
+          mesh.visible = inRange;
+          if (mesh.material) {
+            mesh.material.opacity = isCenter ? 1.0 : 0.55;
+          }
+        }
+
+      } else {
+        // --- FULL STACK MODE ---
+        // Cumulative toolpath stack
+        if (isContourPlane) {
+          mesh.visible = false; // Hide planar fills in full stack
+        } else if (isContourBorder) {
+          // Highlight contour border at active pass
+          mesh.visible = (targetIndex !== -1 && lIdx === targetIndex);
+          if (mesh.material) mesh.material.opacity = 0.90;
+        } else {
+          if (targetIndex === -1) {
+            mesh.visible = true;
+            if (mesh.material) mesh.material.opacity = 0.95;
+          } else if (lIdx === targetIndex) {
+            mesh.visible = true;
+            if (mesh.material) mesh.material.opacity = 1.0;
+          } else if (lIdx < targetIndex) {
+            mesh.visible = true;
+            if (mesh.material) mesh.material.opacity = 0.40;
+          } else {
+            mesh.visible = false;
+          }
         }
       }
     });
@@ -1499,8 +1646,12 @@ export class CLESlicerEngine {
       <input type="range" id="cle-hud-slider" min="-1" max="${numLayers - 1}" value="-1" style="width:130px;" title="Scrub through toolpath passes">
       <button class="cle-btn" id="cle-hud-all" style="padding:2px 8px;">Show All</button>
 
-      <!-- Single Slice vs Stack Mode Toggle -->
-      <button class="cle-btn" id="cle-hud-mode-toggle" style="padding:2px 8px; font-weight:600; border-color:var(--accent);" title="Toggle Single Slice contour inspection vs Stack">${this.sliceViewMode === 'single' ? 'Single Slice' : 'Stack View'}</button>
+      <!-- 3-Way Mode Switcher: Single Slice Contour / Range Window / Full Stack -->
+      <div style="display:flex; gap:2px; background:rgba(0,0,0,0.15); padding:2px; border-radius:6px; border:1px solid var(--line);">
+        <button class="cle-btn cle-hud-mode-pill ${this.sliceViewMode === 'single' ? 'active' : ''}" data-mode="single" style="padding:2px 8px; font-weight:700; font-size:11px; background:${this.sliceViewMode === 'single' ? 'var(--accent)' : 'transparent'}; color:${this.sliceViewMode === 'single' ? 'var(--on-accent)' : 'var(--ink)'};" title="Single Slice Mode: View exactly one slice contour at a time">Single Slice</button>
+        <button class="cle-btn cle-hud-mode-pill ${this.sliceViewMode === 'range' ? 'active' : ''}" data-mode="range" style="padding:2px 8px; font-weight:700; font-size:11px; background:${this.sliceViewMode === 'range' ? 'var(--accent)' : 'transparent'}; color:${this.sliceViewMode === 'range' ? 'var(--on-accent)' : 'var(--ink)'};" title="Range Mode: Scroll a window of slices through the stack">Range (10)</button>
+        <button class="cle-btn cle-hud-mode-pill ${this.sliceViewMode === 'stack' ? 'active' : ''}" data-mode="stack" style="padding:2px 8px; font-weight:700; font-size:11px; background:${this.sliceViewMode === 'stack' ? 'var(--accent)' : 'transparent'}; color:${this.sliceViewMode === 'stack' ? 'var(--on-accent)' : 'var(--ink)'};" title="Full Stack Mode: View entire continuous toolpath stack">Full Stack</button>
+      </div>
 
       <!-- Roll Slices and Sphere Controls -->
       <button class="cle-btn" id="cle-hud-roll-layers" style="background:#0284c7; color:#fff; font-weight:600; padding:3px 10px;" title="Roll through all slice passes sequentially">▶ Roll Slices</button>
@@ -1542,17 +1693,40 @@ export class CLESlicerEngine {
 
     const slider = document.getElementById('cle-hud-slider');
     const label = document.getElementById('cle-hud-label');
-    const modeBtn = document.getElementById('cle-hud-mode-toggle');
+
+    const updateModePills = () => {
+      hud.querySelectorAll('.cle-hud-mode-pill').forEach(btn => {
+        const m = btn.getAttribute('data-mode');
+        const isActive = (m === this.sliceViewMode);
+        btn.style.background = isActive ? 'var(--accent)' : 'transparent';
+        btn.style.color = isActive ? 'var(--on-accent)' : 'var(--ink)';
+      });
+    };
 
     const updateHUD = (val) => {
       slider.value = val;
-      this.setPreviewLayer(parseInt(val, 10));
-      if (val == -1) {
-        label.textContent = `All (${numLayers} passes)`;
+      const intVal = parseInt(val, 10);
+      this.setPreviewLayer(intVal);
+
+      if (this.sliceViewMode === 'single') {
+        const idx = (intVal === -1) ? 0 : intVal;
+        const curL = this.slicedLayers[idx];
+        label.textContent = `Slice ${idx + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm) [Contour]`;
+      } else if (this.sliceViewMode === 'range') {
+        const half = 5;
+        const center = (intVal === -1) ? Math.floor(numLayers / 2) : intVal;
+        const rStart = Math.max(0, center - half);
+        const rEnd = Math.min(numLayers - 1, center + half);
+        const zS = this.slicedLayers[rStart] ? this.slicedLayers[rStart].z.toFixed(1) : '--';
+        const zE = this.slicedLayers[rEnd] ? this.slicedLayers[rEnd].z.toFixed(1) : '--';
+        label.textContent = `Range ${rStart + 1}-${rEnd + 1}/${numLayers} (Z ${zS}..${zE}mm)`;
       } else {
-        const curL = this.slicedLayers[val];
-        const modePrefix = this.sliceViewMode === 'single' ? 'Slice' : 'Pass';
-        label.textContent = `${modePrefix} ${parseInt(val, 10) + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm)`;
+        if (intVal === -1) {
+          label.textContent = `All (${numLayers} passes)`;
+        } else {
+          const curL = this.slicedLayers[intVal];
+          label.textContent = `Stack to Pass ${intVal + 1}/${numLayers} (Z=${curL ? curL.z.toFixed(2) : '--'}mm)`;
+        }
       }
     };
 
@@ -1568,15 +1742,20 @@ export class CLESlicerEngine {
     };
     document.getElementById('cle-hud-all').onclick = () => updateHUD(-1);
 
-    // Toggle Single Slice vs Stack Mode
-    modeBtn.onclick = () => {
-      this.sliceViewMode = (this.sliceViewMode === 'single' ? 'stack' : 'single');
-      modeBtn.textContent = (this.sliceViewMode === 'single' ? 'Single Slice' : 'Stack View');
-      if (slider.value === '-1') {
-        slider.value = 0; // Default to first slice when entering single slice mode
-      }
-      updateHUD(slider.value);
-    };
+    // 3-Way Mode Switcher Click Handlers
+    hud.querySelectorAll('.cle-hud-mode-pill').forEach(btn => {
+      btn.onclick = () => {
+        const targetMode = btn.getAttribute('data-mode');
+        this.sliceViewMode = targetMode;
+        if (targetMode === 'single' && slider.value === '-1') {
+          slider.value = 0;
+        } else if (targetMode === 'range' && slider.value === '-1') {
+          slider.value = Math.floor(numLayers / 2);
+        }
+        updateModePills();
+        updateHUD(slider.value);
+      };
+    });
 
     // Roll Slices sequentially
     document.getElementById('cle-hud-roll-layers').onclick = () => {
