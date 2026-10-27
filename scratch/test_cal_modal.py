@@ -67,3 +67,4 @@ with sync_playwright() as p:
 
     print("\nCalibration tests 1 & 2 fully verified!")
     browser.close()
+
