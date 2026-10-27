@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>JSVCLE Studio — Developer Guide</title>
+  <style>
+    @page {
+      size: letter;
+      margin: 14mm 14mm 14mm 14mm;
+      @bottom-right {
+        content: counter(page);
+      }
+    }
+    
+    *, *:before, *:after {
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.5;
+      color: #1e293b;
+      background: #ffffff;
+      margin: 0;
+      padding: 0;
+    }
+    
+    h1 {
+      font-size: 22pt;
+      font-weight: 800;
+      color: #0f172a;
+      border-bottom: 2px solid #0284c7;
+      padding-bottom: 6px;
+      margin-top: 0;
+      margin-bottom: 12px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    
+    h2 {
+      font-size: 14pt;
+      font-weight: 700;
+      color: #0369a1;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 4px;
+      margin-top: 20px;
+      margin-bottom: 10px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    
+    h3 {
+      font-size: 12pt;
+      font-weight: 600;
+      color: #0f172a;
+      margin-top: 14px;
+      margin-bottom: 6px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    
+    p, li {
+      color: #334155;
+    }
+    
+    p {
+      margin: 0 0 8px 0;
+    }
+    
+    ul, ol {
+      margin: 4px 0 10px 20px;
+      padding: 0;
+    }
+    
+    li {
+      margin-bottom: 4px;
+    }
+    
+    /* Disclaimer Card */
+    .disclaimer-card {
+      border: 2px solid #dc2626;
+      border-radius: 6px;
+      background: #fef2f2;
+      margin: 14px 0 20px 0;
+      padding: 12px 16px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    
+    .disclaimer-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    
+    .disclaimer-badge {
+      background: #dc2626;
+      color: #ffffff;
+      font-weight: 800;
+      font-size: 9pt;
+      letter-spacing: 0.5px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    
+    .disclaimer-title {
+      font-size: 11pt;
+      font-weight: 800;
+      color: #991b1b;
+      letter-spacing: 0.3px;
+    }
+    
+    .disclaimer-body p {
+      color: #7f1d1d;
+      font-size: 9.5pt;
+      line-height: 1.45;
+      margin-bottom: 6px;
+    }
+    
+    .community-rules {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #fecaca;
+      font-size: 9.5pt;
+      color: #991b1b;
+    }
+    
+    .community-rules ul {
+      margin: 4px 0 0 16px;
+    }
+    
+    .community-rules li {
+      color: #7f1d1d;
+    }
+    
+    /* Diagram Figures */
+    .diagram-figure {
+      margin: 14px auto 16px auto;
+      text-align: center;
+      page-break-inside: avoid;
+      break-inside: avoid;
+      max-width: 100%;
+    }
+    
+    .diagram-svg {
+      max-width: 96%;
+      max-height: 420px;
+      height: auto;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 10px;
+      background: #f8fafc;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      object-fit: contain;
+    }
+    
+    .diagram-caption {
+      font-size: 8.5pt;
+      font-weight: 600;
+      color: #64748b;
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    /* Tables */
+    .table-container {
+      margin: 10px 0 14px 0;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 9pt;
+      background: #ffffff;
+    }
+    
+    th, td {
+      padding: 6px 10px;
+      border: 1px solid #cbd5e1;
+      text-align: left;
+    }
+    
+    th {
+      background: #f1f5f9;
+      color: #0f172a;
+      font-weight: 700;
+    }
+    
+    tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+    
+    /* Code Blocks */
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 8.5pt;
+      background: #f1f5f9;
+      padding: 1px 4px;
+      border-radius: 3px;
+      color: #0f172a;
+    }
+    
+    pre.code-block {
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 10px 14px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 8.5pt;
+      line-height: 1.4;
+      page-break-inside: avoid;
+      break-inside: avoid;
+      margin: 8px 0 12px 0;
+    }
+    
+    pre.code-block code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+    }
+    
+    hr {
+      border: 0;
+      border-top: 1px solid #e2e8f0;
+      margin: 18px 0;
+    }
+  </style>
+</head>
+<body>
+  
+<div class="disclaimer-card">
+  <div class="disclaimer-header">
+    <span class="disclaimer-badge">CAUTION</span>
+    <span class="disclaimer-title">RESEARCH EXPERIMENTATION & LIABILITY DISCLAIMER</span>
+  </div>
+  <div class="disclaimer-body">
+    <p><strong>This software is purely research experimentation and is provided strictly "AS IS".</strong> It may damage your device, CNC machine, spindle, laser diode, workpiece, or computer. The goal of this project is the exploration of what is possible in unified in-browser digital fabrication. Users accept all risks and agree to hold authors, contributors, and developers completely harmless regardless of outcome. <strong>USE AT YOUR OWN RISK.</strong></p>
+    <p>All comments, feedback, and discussion are encouraged and welcome in community posts.</p>
+    <div class="community-rules">
+      <strong>Community Rules:</strong>
+      <ul>
+        <li><strong>Open Source & Copyleft:</strong> Keep all innovations accessible and free for everyone.</li>
+        <li><strong>Constructive Community:</strong> Keep all commentary positive, helpful, and respectful.</li>
+        <li><strong>Action-Oriented Collaboration:</strong> Write code to fix issues and share your solutions back to the group.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+  <p>></p>
+<p><blockquote>All comments, feedback, and discussion are encouraged and welcome in community posts.  </blockquote></p>
+<p><blockquote><strong>Community Rules:</strong></blockquote></p>
+<p><blockquote>1. <strong>Open Source & Copyleft:</strong> Keep all innovations accessible and free for everyone.</blockquote></p>
+<p><blockquote>2. <strong>Constructive Community:</strong> Keep all commentary positive, helpful, and respectful.</blockquote></p>
+<p><blockquote>3. <strong>Action-Oriented Collaboration:</strong> Write code to fix issues and share your solutions back to the group.</blockquote></p>
+<hr/>
+<h1>JSVCLE Studio — Developer Guide</h1>
+<p><strong>JumpStart 3D CAD + Vellum Vector Studio + Continuous Layer Extension (CLE)</strong>  </p>
+<p><em>Architecture, Subsystem Internals, Lifecycle, API Reference, and Tooling Manual</em></p>
+<hr/>
+<h2>1. System Architecture & High-Level Design</h2>
+<h3>1.1 Architectural Overview</h3>
+<p>JSVCLE Studio is a modular digital fabrication platform combining three core runtime environments into an integrated desktop architecture:</p>
+<ol>
+<li><strong>JumpStart 3D CAD Core (<code>Dev/index.htm</code>)</strong>: An in-browser Boundary Representation (B-Rep) parametric solid modeling engine built on Three.js and custom geometric kernel primitives.</li>
+<li><strong>Vellum Vector Studio (<code>Vellum/index.htm</code>)</strong>: A standalone 2D parametric vector editor, SVG engine, and laser path generator running within an isolated or modal iframe context.</li>
+<li><strong>Continuous Layer Extension (CLE) (<code>Dev/cle_tools/</code>)</strong>: A modular suite of ES6 classes mounted directly into JumpStart's runtime lifecycle to provide CNC/laser toolpath slicing, physical machine envelope simulation, 4th axis rotary modeling, dual-mode gamepad control, hardware telemetry, and job recovery.</li>
+<li><strong>Local Hardware & Git Vault Service (<code>tools/CLE_server.py</code>)</strong>: A zero-dependency Python 3 HTTP daemon listening on <code>127.0.0.1:8765</code> providing CLE Git snapshotting, controller profile persistence, and PrusaSlicer CLI execution fallback.</li>
+</ol>
+<p>![dev_architecture.svg](diagrams/dev_architecture.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_architecture.svg" alt="dev_architecture.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Architecture</div></div>
+<hr/>
+<h3>1.2 Repository Structure & Component Hierarchy</h3>
+<p>![dev_repo_tree.svg](diagrams/dev_repo_tree.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_repo_tree.svg" alt="dev_repo_tree.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Repo Tree</div></div>
+<hr/>
+<h2>2. Functional Capability Model</h2>
+<p>JSVCLE operates under a unified functional capability matrix across CAD, CAM, 2D Vector, and CNC control domains:</p>
+<p>![dev_capability_matrix.svg](diagrams/dev_capability_matrix.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_capability_matrix.svg" alt="dev_capability_matrix.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Capability Matrix</div></div>
+<hr/>
+<h2>3. Development Environment & DevInstaller</h2>
+<p>The JSVCLE build and development infrastructure is designed for zero friction on Windows 11 64-bit developer workstations.</p>
+<h3>3.1 Toolchain Verification Hierarchy</h3>
+<p>![dev_toolchain_flow.svg](diagrams/dev_toolchain_flow.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_toolchain_flow.svg" alt="dev_toolchain_flow.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Toolchain Flow</div></div>
+<h3>3.2 Master Build Pipeline (<code>build_full_tree.bat</code> / <code>Build-FullTree.ps1</code>)</h3>
+<p>The master build script automates a 6-stage release pipeline:</p>
+<p>![dev_build_pipeline.svg](diagrams/dev_build_pipeline.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_build_pipeline.svg" alt="dev_build_pipeline.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Build Pipeline</div></div>
+<hr/>
+<h2>4. File-by-File Breakdown & Module Reference</h2>
+<p>![dev_class_hierarchy.svg](diagrams/dev_class_hierarchy.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_class_hierarchy.svg" alt="dev_class_hierarchy.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Class Hierarchy</div></div>
+<h3>4.1 Master Bootstrap & UI Lifecycle: <code>Dev/cle_tools/cle_boot.js</code></h3>
+<ul>
+<li><strong>Role</strong>: Master orchestrator. Instantiates all sub-engines, builds top navigation tabs, injects the ribbon UI, manages modal dialogs, and controls DOM toasts.</li>
+<li><strong>Global Exports</strong>:</li>
+<li><code>window.CLE</code>: Master instance of <code>CLEBridge</code>.</li>
+<li><strong>Key Methods</strong>:</li>
+<li><code>init()</code>: Lifecycle hook executed on <code>DOMContentLoaded</code>. Mounts CSS, builds UI ribbon, initializes bed visualizer, attaches keyboard hooks, and pings <code>CLE_server.py</code>.</li>
+<li><code>injectStyles()</code>: Appends <code>cle_theme.css</code> styles into the JumpStart host DOM.</li>
+<li><code>buildTopNavigationTabs()</code>: Appends <code>CAD | CAM | Laser | Rotary | Slicer | Vellum</code> workspace selector tabs to the top header.</li>
+<li><code>buildRibbon()</code>: Renders contextual action bars (Connection, Jog Controls, Spoilboard, Slicer, Rotary, Vault).</li>
+<li><code>showVaultSaveNotice(msg)</code>: Displays animated non-blocking HUD notification.</li>
+<li><code>openModal(title, contentHtml)</code> / <code>closeModal()</code>: Standardized modal dialog manager.</li>
+</ul>
+<h3>4.2 Spoilboard, Machine Table & Rulers: <code>Dev/cle_tools/cle_bed.js</code></h3>
+<ul>
+<li><strong>Role</strong>: Renders the physical CNC workspace in Three.js, including MDF spoilboard, extruded aluminum base frame, precision millimeter ruler graduations, workpiece seating, and the live 4-axis toolhead cursor.</li>
+<li><strong>Class</strong>: <code>CLEBedVisualizer(bridge)</code></li>
+<li><strong>Key Properties</strong>:</li>
+<li><code>config.travelX</code>, <code>config.travelY</code>, <code>config.travelZ</code>: Active machine envelope dimensions ($600 \times 500 \times 100\,\text{mm}$).</li>
+<li><code>config.spoilboardThickness</code>: MDF slab thickness (default $20.0\,\text{mm}$).</li>
+<li><code>config.cutoutOvercut</code>: Safe breakthrough allowance into spoilboard (default $0.2\,\text{mm}$).</li>
+<li><code>workpieceZ</code>: Calculated top-of-spoilboard seating height ($Z = \text{thickness} + 0.1\,\text{mm} = 20.10\,\text{mm}$).</li>
+<li><code>bedGroup</code>: <code>THREE.Group</code> containing table meshes and grid lines.</li>
+<li><code>cursorGroup</code>: <code>THREE.Group</code> containing live spindle cone, tool tip, projected shadow reticle, and DRO billboard.</li>
+<li><strong>Key Methods</strong>:</li>
+<li><code>mountToScene()</code>: Hooks into JumpStart's active Three.js scene (<code>window.app.scene</code> or <code>window.xe.scene</code>).</li>
+<li><code>buildBedMesh()</code>: Generates aluminum bed frame and textured MDF spoilboard.</li>
+<li><code>buildRulers()</code>: Generates millimeter graduations and numeric labels along X (0 to 600mm) and Y (0 to 500mm) using canvas texture sprites.</li>
+<li><code>updateToolheadPosition(x, y, z, a)</code>: Moves live 3D cursor, casts vertical shadow down onto spoilboard surface, and updates floating DRO coordinate tag.</li>
+<li><code>placeWorkpieceOnSpoilboard(mesh)</code>: Aligns bottom bounding box of CAD solid or grayscale relief to <code>Z = workpieceZ</code>.</li>
+</ul>
+<h3>4.3 Slicer & Toolpath Engine: <code>Dev/cle_tools/cle_slicer.js</code></h3>
+<ul>
+<li><strong>Role</strong>: Multi-mode CNC, Laser, and 3D slicing engine. Converts B-Rep solids, meshes, and 2D grayscale relief depth maps into multi-pass G-code.</li>
+<li><strong>Class</strong>: <code>CLESlicerEngine(bridge)</code></li>
+<li><strong>Key Modes</strong>:</li>
+<li><code>mode = 'cnc'</code>: Top-Down roughing and finishing passes ($Z_{\max} \rightarrow Z_{\min}$) down to spoilboard overcut.</li>
+<li><code>mode = 'laser'</code>: Top-down planar vector marking and vector rastering.</li>
+<li><code>mode = '3d'</code>: Bottom-up additive FDM slicing ($Z_0 \rightarrow Z_{\max}$).</li>
+<li><code>laminationConfig.enabled = true</code>: Laminated slicing for biradial horns and thick slab stock. Partitions tall models into discrete slabs (e.g. $30.0\,\text{mm}$) with automated $\varnothing 8.0\,\text{mm}$ alignment dowel holes.</li>
+<li><code>sliceGrayscaleRelief(imageEl, options)</code>: Creates 3D continuous relief mesh from grayscale image brightness and computes carving toolpath.</li>
+<li><strong>Key Methods</strong>:</li>
+<li><code>sliceActiveModel()</code>: Inspects JumpStart CAD geometry, extracts planar boundary contours, computes infill hatch, and renders 3D layer visualization stack.</li>
+<li><code>generateLaminatedSlabs(cadMesh)</code>: Splits geometry along Z planes into separate machining jobs with registration pins.</li>
+<li><code>renderLayerStack()</code>: Generates color-coded <code>THREE.LineSegments</code> representing rapid moves (red), feed moves (cyan), and retracts (yellow).</li>
+<li><code>exportGCodeToFluidNC(filename)</code>: Sends generated toolpath over HTTP to <code>CLE_server.py</code> or streams to FluidNC SD card.</li>
+</ul>
+<h3>4.4 Hardware Comms & FluidNC Client: <code>Dev/cle_tools/cle_fluidnc.js</code></h3>
+<ul>
+<li><strong>Role</strong>: Communicates with physical CNC/Laser controller hardware via WebSerial API (USB) and WebSocket (Wi-Fi).</li>
+<li><strong>Class</strong>: <code>CLEFluidNCClient(bridge)</code></li>
+<li><strong>Key Properties</strong>:</li>
+<li><code>port</code>: Active <code>SerialPort</code> instance.</li>
+<li><code>ws</code>: Active <code>WebSocket</code> instance.</li>
+<li><code>status</code>: Machine status string (<code>Idle</code>, <code>Run</code>, <code>Jog</code>, <code>Hold</code>, <code>Alarm</code>).</li>
+<li><code>dro</code>: Machine coordinates <code>{ X, Y, Z, A }</code> and work coordinates <code>{ wX, wY, wZ, wA }</code>.</li>
+<li><strong>Key Methods</strong>:</li>
+<li><code>connectSerial(baudRate = 115200)</code>: Requests WebSerial USB device and opens reader/writer streams.</li>
+<li><code>connectWebSocket(ipAddress)</code>: Connects to FluidNC WebSocket stream on port 81 or 8080.</li>
+<li><code>send(gcodeLine)</code>: Queues and transmits G-code command string.</li>
+<li><code>jog(axis, distance, feedRate)</code>: Sends real-time jog string <code>$J=G91 G21 {axis}{distance} F{feedRate}</code>.</li>
+<li><code>feedHold()</code>: Sends immediate <code>!</code> character.</li>
+<li><code>resumeJob()</code>: Sends immediate <code>~</code> character.</li>
+<li><code>emergencyReset()</code>: Sends immediate Ctrl+X (<code>\x18</code>) character.</li>
+<li><code>pollStatus()</code>: Sends <code>?</code> query every $100\,\text{ms}$ to parse <code><Status|WPos:X,Y,Z,A|FS:feed,speed></code> responses.</li>
+</ul>
+<h3>4.5 Dual-Mode Gamepad Engine: <code>Dev/cle_tools/cle_gamepad.js</code></h3>
+<ul>
+<li><strong>Role</strong>: Connects USB/Bluetooth gamepads (Nintendo Switch Pro, Xbox, PlayStation) with dual-mode behavior.</li>
+<li><strong>Class</strong>: <code>CLEGamepadEngine(bridge)</code></li>
+<li><strong>Operational Modes</strong>:</li>
+<li><code>Mode 0: Design CAD Mode</code>: Left stick orbits CAD camera; right stick pans; triggers zoom in/out.</li>
+<li><code>Mode 1: CNC Machine Jog Mode</code>: Left stick jogs X/Y axes; right stick jogs Z axis; bumpers jog A rotary axis.</li>
+<li><strong>Key Methods</strong>:</li>
+<li><code>poll()</code>: High-frequency loop synchronized to <code>requestAnimationFrame</code>.</li>
+<li><code>applyDeadband(value, threshold = 0.12)</code>: Filters joystick analog drift.</li>
+<li><code>calculateJogRate(axisDeflection)</code>: Applies quadratic acceleration curve for precise micro-stepping on soft deflections and high-speed transit on full deflections.</li>
+<li><code>openRemapModal()</code>: Opens visual remap interface for button and axis reassignment.</li>
+</ul>
+<h3>4.6 4th Axis Rotary (A) & Lathe: <code>Dev/cle_tools/cle_rotary.js</code></h3>
+<ul>
+<li><strong>Role</strong>: Simulates and toolpaths continuous 4th axis rotary operations.</li>
+<li><strong>Class</strong>: <code>CLERotaryEngine(bridge)</code></li>
+<li><strong>Key Properties</strong>:</li>
+<li><code>chuckDiameter</code>: Visual 3-jaw chuck diameter (default $80\,\text{mm}$ or $100\,\text{mm}$).</li>
+<li><code>stockLength</code>, <code>stockDiameter</code>: Visual cylinder stock dimensions.</li>
+<li><code>rotaryGroup</code>: <code>THREE.Group</code> attached to machine bed.</li>
+<li><strong>Key Methods</strong>:</li>
+<li><code>mountToBed()</code>: Positions rotary chuck along the left edge of the spoilboard ($X=50\,\text{mm}, Y=250\,\text{mm}, Z=60\,\text{mm}$).</li>
+<li><code>updateAngle(deg)</code>: Continuously rotates chuck, jaws, and stock cylinder in 3D viewport.</li>
+<li><code>clampWorkpiece(length, diameter)</code>: Adjusts 3D stock cylinder dimensions and centers on lathe axis.</li>
+</ul>
+<h3>4.7 CLE Design Vault Client: <code>Dev/cle_tools/cle_vault.js</code></h3>
+<ul>
+<li><strong>Role</strong>: Frontend client communicating with <code>tools/CLE_server.py</code> to provide version control and profile persistence.</li>
+<li><strong>Class</strong>: <code>CLEVault(bridge)</code></li>
+<li><strong>Key Methods</strong>:</li>
+<li><code>saveProject(projectName, cadStateJson, comment)</code>: Posts project bundle to <code>/api/vault/save</code>. Triggers automatic Git commit in <code>vault/projects/{name}/</code>.</li>
+<li><code>getProjectHistory(projectName)</code>: Fetches commit hash, author, timestamp, and message log.</li>
+<li><code>checkoutProjectVersion(projectName, commitHash)</code>: Restores exact historical project state.</li>
+<li><code>saveControllerProfile(profileName, mapping)</code>: Saves gamepad mapping to <code>vault/profiles/</code>.</li>
+<li><code>saveMachineProfile(machineId, config)</code>: Saves machine envelope, limits, and bed offsets to <code>vault/machines/</code>.</li>
+</ul>
+<h3>4.8 Vellum Vector Studio Bridge: <code>Dev/cle_tools/cle_vellum.js</code></h3>
+<ul>
+<li><strong>Role</strong>: Bi-directional integration bridge between JumpStart 3D and ClassyApps Vellum Vector Studio.</li>
+<li><strong>Class</strong>: <code>CLEVellumBridge(bridge)</code></li>
+<li><strong>Key Properties</strong>:</li>
+<li><code>modalEl</code>: Fullscreen overlay container.</li>
+<li><code>iframeEl</code>: Embedded iframe hosting <code>Vellum/index.htm</code>.</li>
+<li><strong>Key Methods</strong>:</li>
+<li><code>openVellum()</code> / <code>closeVellum()</code>: Toggles fullscreen Vellum workspace overlay.</li>
+<li><code>initMessageListener()</code>: Listens for <code>window.addEventListener('message')</code> events containing <code>CLE_VELLUM_EXPORT</code>.</li>
+<li><code>handleExport(payload)</code>: Receives vector data from Vellum:</li>
+<li><strong>Option 1 (New Sketch)</strong>: Injects 2D curve into JumpStart as an editable sketch on the active plane.</li>
+<li><strong>Option 2 (Direct Extrude)</strong>: Invokes JumpStart's CAD kernel to extrude the closed vector boundary into a 3D solid at specified thickness (e.g. $5.0\,\text{mm}$).</li>
+<li><strong>Option 3 (Bed Image Overlay)</strong>: Embeds vector silhouette onto the CNC spoilboard table for alignment.</li>
+</ul>
+<h3>4.9 Local Hardware & Git Vault Server: <code>tools/CLE_server.py</code></h3>
+<ul>
+<li><strong>Role</strong>: Python 3 HTTP daemon on <code>127.0.0.1:8765</code>. Standard library only (<code>http.server</code>, <code>subprocess</code>, <code>json</code>, <code>pathlib</code>).</li>
+<li><strong>Classes</strong>:</li>
+<li><code>GitVaultEngine</code>: Automates <code>git init</code>, <code>git add</code>, <code>git commit</code>, <code>git log</code>, and <code>git checkout</code> inside <code>vault/projects/{name}/</code>.</li>
+<li><code>PrusaSlicerEngine</code>: CLI wrapper executing bundled or system PrusaSlicer binary to export sliced G-code.</li>
+<li><code>CLEVaultHandler(BaseHTTPRequestHandler)</code>: REST endpoint dispatcher with CORS support.</li>
+<li><strong>API Endpoints</strong>:</li>
+<li><code>GET /api/status</code>: Returns server health, active port, and Git binary path.</li>
+<li><code>POST /api/vault/save</code>: Receives <code>{ project, json_data, comment }</code> $\rightarrow$ writes <code>model.json</code> $\rightarrow$ Git commit.</li>
+<li><code>GET /api/vault/history?project={name}</code>: Returns Git commit history array.</li>
+<li><code>POST /api/vault/checkout</code>: Receives <code>{ project, hash }</code> $\rightarrow$ runs <code>git checkout {hash}</code> $\rightarrow$ returns restored JSON.</li>
+<li><code>POST /api/profile/save</code> & <code>GET /api/profile/list</code>: Manages gamepad mappings in <code>vault/profiles/</code>.</li>
+<li><code>POST /api/machine/save</code> & <code>GET /api/machine/list</code>: Manages machine configurations in <code>vault/machines/</code>.</li>
+<li><code>POST /api/slice/prusa</code>: Accepts STL or geometry payload $\rightarrow$ runs PrusaSlicer CLI $\rightarrow$ returns G-code.</li>
+</ul>
+<hr/>
+<h2>5. Execution Flow, Lifecycles & Event Architecture</h2>
+<h3>5.1 System Initialization Lifecycle</h3>
+<p>When <code>Dev/index.htm</code> is loaded, JSVCLE initializes through 4 deterministic phases:</p>
+<p>![dev_lifecycle.svg](diagrams/dev_lifecycle.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_lifecycle.svg" alt="dev_lifecycle.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Lifecycle</div></div>
+<hr/>
+<h3>5.2 Slicer Toolpath Generation & G-Code Export Execution Flow</h3>
+<p>![dev_slicer_flow.svg](diagrams/dev_slicer_flow.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_slicer_flow.svg" alt="dev_slicer_flow.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Slicer Flow</div></div>
+<hr/>
+<h3>5.3 Grayscale 2D Photo to 3D Continuous Z Relief Carving Flow</h3>
+<p>![dev_grayscale_flow.svg](diagrams/dev_grayscale_flow.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_grayscale_flow.svg" alt="dev_grayscale_flow.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Grayscale Flow</div></div>
+<hr/>
+<h3>5.4 Hardware Telemetry, Real-Time DRO & Jogging Execution Flow</h3>
+<p>![dev_telemetry_flow.svg](diagrams/dev_telemetry_flow.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_telemetry_flow.svg" alt="dev_telemetry_flow.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Telemetry Flow</div></div>
+<hr/>
+<h3>5.5 Job Crash Recovery with Lookback Buffer Execution Flow</h3>
+<p>![dev_recovery_flow.svg](diagrams/dev_recovery_flow.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_recovery_flow.svg" alt="dev_recovery_flow.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Recovery Flow</div></div>
+<hr/>
+<h3>5.6 CLE Git Vault Project State Snapshot & Restoration Flow</h3>
+<p>![dev_vault_flow.svg](diagrams/dev_vault_flow.svg)</p>
+<div class="diagram-figure"><img src="diagrams/dev_vault_flow.svg" alt="dev_vault_flow.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Dev Vault Flow</div></div>
+<hr/>
+<h2>6. Window Global Namespaces Reference</h2>
+<div class="table-container"><table><thead><tr><th>Global Identifier</th><th>Providing Module</th><th>Description</th></tr></thead><tbody><tr><td><code>window.CLE</code></td><td><code>Dev/cle_tools/cle_boot.js</code></td><td>Master singleton instance of <code>CLEBridge</code>. Houses references to all sub-engines (<code>CLE.bed</code>, <code>CLE.slicer</code>, <code>CLE.fluidnc</code>, <code>CLE.rotary</code>, <code>CLE.gamepad</code>, <code>CLE.vault</code>, <code>CLE.vellum</code>, <code>CLE.recovery</code>).</td></tr><tr><td><code>window.app</code> / <code>window.xe</code></td><td>JumpStart CAD Core (<code>Dev/index.htm</code>)</td><td>Master JumpStart application instance. Manages Three.js scene (<code>app.scene</code>), active camera (<code>app.camera</code>), renderer, B-Rep bodies, and command stack.</td></tr><tr><td><code>window.Se</code></td><td>JumpStart CAD Core</td><td>CAD document model containing active sketches, parametric features, planes, and solid bodies.</td></tr><tr><td><code>window.Ei</code></td><td>Vellum Core (<code>Vellum/index.htm</code>)</td><td>Vellum application instance managing 2D SVG canvas elements, layers, selection sets, and vector export pipelines.</td></tr><tr><td><code>window.Vellum</code></td><td>Vellum Core</td><td>Vellum standalone API namespace for curve generation and laser kerf calculation.</td></tr></tbody></table></div>
+<hr/>
+<h2>7. Glossary of Functions, Classes & Technical Terms</h2>
+<h3>Technical Classes & Methods</h3>
+<ul>
+<li><code>CLEBridge</code>: The central controller class instantiated at <code>window.CLE</code>. Aggregates all subsystems and coordinates UI lifecycle.</li>
+<li><code>CLEBedVisualizer.mountToScene()</code>: Binds the CNC table, MDF spoilboard, and millimeter graduation rulers into JumpStart's active Three.js scene hierarchy.</li>
+<li><code>CLEBedVisualizer.placeWorkpieceOnSpoilboard(mesh)</code>: Analyzes the bounding box of a 3D CAD mesh or relief mesh and translates its Z-origin so the bottom rests exactly at $Z = 20.10\,\text{mm}$ (spoilboard surface + safe clearance).</li>
+<li><code>CLESlicerEngine.sliceActiveModel()</code>: Traverses the active solid body, intersects slicing planes along the Z-axis, generates contour boundaries, calculates infill paths, and compiles CNC/laser G-code.</li>
+<li><code>CLESlicerEngine.generateLaminatedSlabs(cadMesh)</code>: Partitions tall CAD models into horizontal $30\,\text{mm}$ slab layers with dowel pin registration holes for laminated acoustic horns.</li>
+<li><code>CLEFluidNCClient.jog(axis, distance, feedRate)</code>: Formats and sends non-modal GRBL jog commands (<code>$J=G91 G21 ...</code>) via USB Serial or WebSocket.</li>
+<li><code>CLEJobRecoveryEngine.recordExecutedLine(lineNumber, gcodeStr)</code>: Circular buffer tracking executed toolpath lines in browser local storage.</li>
+<li><code>CLEJobRecoveryEngine.resumeAfterCrash()</code>: Reads crash line index, backs up 5 lines (<code>-5</code> lookback), raises spindle to safe Z clearance, moves to XY restart point, spins up spindle, and resumes carving.</li>
+<li><code>CLEGamepadEngine.calculateJogRate(axisDeflection)</code>: Mathematical transfer function applying quadratic scaling $f(x) = \text{sign}(x) \cdot x^2 \cdot V_{\max}$ for smooth jog speed control.</li>
+<li><code>GitVaultEngine.ensure_repo(projectDir)</code>: Backend Python method that validates the presence of <code>.git</code> in a project vault directory, initializing an isolated Git repository if absent.</li>
+<li><code>CLEVellumBridge.handleExport(payload)</code>: Message handler parsing vector payloads exported from Vellum Vector Studio into JumpStart CAD geometry.</li>
+</ul>
+<h3>Engineering & Domain Terms</h3>
+<ul>
+<li><strong>B-Rep (Boundary Representation)</strong>: The method used by CAD kernels to represent 3D solid objects by their enclosing boundary surfaces (faces, edges, vertices).</li>
+<li><strong>Continuous Z Relief</strong>: Converting a continuous 2D grayscale image (0–255 pixel intensity) into continuous toolhead depth coordinates for 3D sculptural carving.</li>
+<li><strong>DRO (Digital Readout)</strong>: Real-time numeric display of the toolhead's current coordinates across X, Y, Z, and A axes in millimeters and degrees.</li>
+<li><strong>FluidNC</strong>: High-performance, open-source CNC firmware running on ESP32 microcontrollers supporting multi-axis motion, USB serial, and Wi-Fi WebSockets.</li>
+<li><strong>Laminated Slicing</strong>: Slicing thick or curved objects (such as acoustic loudspeaker horns) into separate wood slab layers that are machined independently and aligned using dowel pins.</li>
+<li><strong>CLE Git Vault</strong>: An architectural pattern where every machine configuration, tool library change, and CAD model revision is automatically committed to a local, zero-network Git repository.</li>
+<li><strong>Lookback Buffer (<code>-5</code> lines)</strong>: Crash recovery strategy where resume execution starts 5 toolpath lines prior to the recorded crash point, ensuring smooth overlap without leaving uncarved gouges or ridges.</li>
+<li><strong>Spoilboard</strong>: A sacrificial MDF board mounted to the aluminum CNC bed table, allowing cutting tools to cleanly break through workpieces without damaging the machine frame.</li>
+<li><strong>WebSerial API</strong>: Modern browser W3C standard allowing web applications to directly read and write to serial COM ports at baud rates up to 115200 without browser plugins.</li>
+</ul>
+</body>
+</html>

@@ -1,3 +1,16 @@
+
+> [!CAUTION]
+> **RESEARCH EXPERIMENTATION & LIABILITY DISCLAIMER**  
+> This software is purely research experimentation and is provided strictly **"AS IS"**. It may damage your device, CNC machine, spindle, laser diode, workpiece, or computer. The goal of this project is the exploration of what is possible in unified in-browser digital fabrication. Users accept all risks and agree to hold authors, contributors, and developers completely harmless regardless of outcome. **USE AT YOUR OWN RISK.**
+>
+> All comments, feedback, and discussion are encouraged and welcome in community posts.  
+> **Community Rules:**
+> 1. **Open Source & Copyleft:** Keep all innovations accessible and free for everyone.
+> 2. **Constructive Community:** Keep all commentary positive, helpful, and respectful.
+> 3. **Action-Oriented Collaboration:** Write code to fix issues and share your solutions back to the group.
+
+---
+
 # JSVCLE Studio — User Guide
 **JumpStart 3D CAD + Vellum Vector Studio + Continuous Layer Extension (CLE)**  
 *Version 01.00.66 — Windows 11 Edition*
@@ -17,6 +30,9 @@
    - **Grayscale to Continuous Z Slicer:** 2D photo-to-3D relief depth extraction with dynamic multi-axis raster toolpath generation.
    - **Machine State Git Vault:** Automatic state snapshotting and version control for machine calibration, tool libraries, and project history.
 
+
+![ug_architecture.svg](diagrams/ug_architecture.svg)
+
 ```mermaid
 flowchart LR
     subgraph JSVCLE_Studio["JSVCLE Studio Desktop Environment"]
@@ -26,6 +42,8 @@ flowchart LR
     end
     CS <--> Machine["FluidNC CNC / Laser Controller\n(FluidNC ESP32 Motion Controller)"]
 ```
+
+
 
 ---
 
@@ -47,6 +65,9 @@ Before running the installer, ensure your workstation meets the following specif
 
 ## 3. Installation Guide
 
+
+![ug_installer_flow.svg](diagrams/ug_installer_flow.svg)
+
 ```mermaid
 flowchart TD
     Installer["JSVCLE_Experimental_v01.00.66.exe"] --> UAC["Windows UAC Elevation (All Users)"]
@@ -57,6 +78,8 @@ flowchart TD
     ExtractFiles --> Shortcuts["Create Desktop & Start Menu Icons (All Users)"]
     Shortcuts --> Launch["Start CLE_server.py (Port 8765) & Launch Browser Workspace"]
 ```
+
+
 
 ### Step 1: Running the Setup Executable
 1. Locate [`JSVCLE_Experimental_v01.00.66.exe`](file:///d:/CLEJS/dist/JSVCLE_Experimental_v01.00.66.exe) in your distribution folder or download location.
@@ -89,6 +112,9 @@ On the final wizard page, leave **Launch JSVCLE Studio** checked and click **Fin
 
 ## 4. Initial Configuration
 
+
+![ug_initial_config.svg](diagrams/ug_initial_config.svg)
+
 ```mermaid
 flowchart LR
     subgraph Step1["1. Hardware Comms"]
@@ -110,6 +136,8 @@ flowchart LR
     Step1 --> Step2 --> Step3
 ```
 
+
+
 ### 4.1 Connecting to Your Machine
 1. Open **JSVCLE Studio**.
 2. Click the **CLE Suite** tab in the top workspace bar.
@@ -127,6 +155,9 @@ flowchart LR
 ---
 
 ## 5. Three Real-World Usage Workflows
+
+
+![ug_three_workflows.svg](diagrams/ug_three_workflows.svg)
 
 ```mermaid
 flowchart TD
@@ -154,6 +185,8 @@ flowchart TD
 
     GCode1 & GCode2 & GCode3 --> FluidNCMachine["FluidNC CNC / Laser Controller\n(WebSerial USB / WebSocket)"]
 ```
+
+
 
 ### Example 1: 3D CAD Solid Modeling & Continuous Layer Slicing
 *Goal: Model a mechanical mounting bracket and generate a multi-pass CNC carving toolpath.*

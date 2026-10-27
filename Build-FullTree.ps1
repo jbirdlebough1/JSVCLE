@@ -83,9 +83,23 @@ if (-not $SkipTests) {
 }
 
 # -------------------------------------------------------------
-# STEP 5: Validate Tree Against GitHub Remote
+# STEP 5: Build Diagrams and PDF Documentation
 # -------------------------------------------------------------
-Write-Host "`n[STEP 5/6] Validating against GitHub remote ($RemoteName)..." -ForegroundColor Yellow
+Write-Host "`n[STEP 5/7] Generating visual diagrams and PDF documentation..." -ForegroundColor Yellow
+$DocScript = Join-Path $RootDir "tools\build_docs_and_pdf.py"
+if (Test-Path $DocScript) {
+    & python $DocScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [WARNING] build_docs_and_pdf.py exited with code $LASTEXITCODE" -ForegroundColor Yellow
+    } else {
+        Write-Host "  [OK] Diagrams and PDF documentation generated." -ForegroundColor Green
+    }
+}
+
+# -------------------------------------------------------------
+# STEP 6: Validate Tree Against GitHub Remote
+# -------------------------------------------------------------
+Write-Host "`n[STEP 6/7] Validating against GitHub remote ($RemoteName)..." -ForegroundColor Yellow
 $HasGit = Get-Command git -ErrorAction SilentlyContinue
 if ($HasGit) {
     $Remotes = git remote
@@ -106,7 +120,7 @@ if ($HasGit) {
 # STEP 6: Compile Inno Setup Master Installer
 # -------------------------------------------------------------
 if (-not $SkipInstaller) {
-    Write-Host "`n[STEP 6/6] Compiling distribution installer with Inno Setup..." -ForegroundColor Yellow
+    Write-Host "`n[STEP 7/7] Compiling distribution installer with Inno Setup..." -ForegroundColor Yellow
     $InnoPaths = @(
         "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",

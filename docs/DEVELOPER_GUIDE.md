@@ -1,3 +1,16 @@
+
+> [!CAUTION]
+> **RESEARCH EXPERIMENTATION & LIABILITY DISCLAIMER**  
+> This software is purely research experimentation and is provided strictly **"AS IS"**. It may damage your device, CNC machine, spindle, laser diode, workpiece, or computer. The goal of this project is the exploration of what is possible in unified in-browser digital fabrication. Users accept all risks and agree to hold authors, contributors, and developers completely harmless regardless of outcome. **USE AT YOUR OWN RISK.**
+>
+> All comments, feedback, and discussion are encouraged and welcome in community posts.  
+> **Community Rules:**
+> 1. **Open Source & Copyleft:** Keep all innovations accessible and free for everyone.
+> 2. **Constructive Community:** Keep all commentary positive, helpful, and respectful.
+> 3. **Action-Oriented Collaboration:** Write code to fix issues and share your solutions back to the group.
+
+---
+
 # JSVCLE Studio — Developer Guide
 **JumpStart 3D CAD + Vellum Vector Studio + Continuous Layer Extension (CLE)**  
 *Architecture, Subsystem Internals, Lifecycle, API Reference, and Tooling Manual*
@@ -12,6 +25,9 @@ JSVCLE Studio is a modular digital fabrication platform combining three core run
 2. **Vellum Vector Studio (`Vellum/index.htm`)**: A standalone 2D parametric vector editor, SVG engine, and laser path generator running within an isolated or modal iframe context.
 3. **Continuous Layer Extension (CLE) (`Dev/cle_tools/`)**: A modular suite of ES6 classes mounted directly into JumpStart's runtime lifecycle to provide CNC/laser toolpath slicing, physical machine envelope simulation, 4th axis rotary modeling, dual-mode gamepad control, hardware telemetry, and job recovery.
 4. **Local Hardware & Git Vault Service (`tools/CLE_server.py`)**: A zero-dependency Python 3 HTTP daemon listening on `127.0.0.1:8765` providing CLE Git snapshotting, controller profile persistence, and PrusaSlicer CLI execution fallback.
+
+
+![dev_architecture.svg](diagrams/dev_architecture.svg)
 
 ```mermaid
 flowchart TD
@@ -56,14 +72,18 @@ flowchart TD
     end
 
     VellumBridge <-->|Window PostMessage Protocol| VellumCore
-    FluidNC <-->|WebSerial USB (115200 baud) or WebSocket| FluidNCHW
+    FluidNC <-->|"WebSerial USB 115200 baud or WebSocket"| FluidNCHW
     VaultFE <-->|HTTP REST /api/vault/*| Server
     Slicer <-->|HTTP REST /api/slice/prusa| Server
 ```
 
+
 ---
 
 ### 1.2 Repository Structure & Component Hierarchy
+
+
+![dev_repo_tree.svg](diagrams/dev_repo_tree.svg)
 
 ```mermaid
 graph TD
@@ -103,11 +123,15 @@ graph TD
     Tools --> ToolsComponents
 ```
 
+
 ---
 
 ## 2. Functional Capability Model
 
 JSVCLE operates under a unified functional capability matrix across CAD, CAM, 2D Vector, and CNC control domains:
+
+
+![dev_capability_matrix.svg](diagrams/dev_capability_matrix.svg)
 
 ```mermaid
 graph LR
@@ -149,6 +173,7 @@ graph LR
     CAM_Domain -->|G-Code Streams & SD Upload| Hardware_Domain
 ```
 
+
 ---
 
 ## 3. Development Environment & DevInstaller
@@ -156,6 +181,9 @@ graph LR
 The JSVCLE build and development infrastructure is designed for zero friction on Windows 11 64-bit developer workstations.
 
 ### 3.1 Toolchain Verification Hierarchy
+
+
+![dev_toolchain_flow.svg](diagrams/dev_toolchain_flow.svg)
 
 ```mermaid
 flowchart TD
@@ -177,9 +205,13 @@ flowchart TD
     InstallBrowser --> DevReady["Workstation Ready for Master Builds!"]
 ```
 
+
 ### 3.2 Master Build Pipeline (`build_full_tree.bat` / `Build-FullTree.ps1`)
 
 The master build script automates a 6-stage release pipeline:
+
+
+![dev_build_pipeline.svg](diagrams/dev_build_pipeline.svg)
 
 ```mermaid
 sequenceDiagram
@@ -203,9 +235,13 @@ sequenceDiagram
     Dist-->>Dev: Build Artifact + SHA-256 Checksum Verified
 ```
 
+
 ---
 
 ## 4. File-by-File Breakdown & Module Reference
+
+
+![dev_class_hierarchy.svg](diagrams/dev_class_hierarchy.svg)
 
 ```mermaid
 classDiagram
@@ -305,6 +341,7 @@ classDiagram
     CLEBridge *-- CLEVellumBridge
     CLEBridge *-- CLEVault
 ```
+
 
 ### 4.1 Master Bootstrap & UI Lifecycle: `Dev/cle_tools/cle_boot.js`
 - **Role**: Master orchestrator. Instantiates all sub-engines, builds top navigation tabs, injects the ribbon UI, manages modal dialogs, and controls DOM toasts.
@@ -439,6 +476,9 @@ classDiagram
 
 When `Dev/index.htm` is loaded, JSVCLE initializes through 4 deterministic phases:
 
+
+![dev_lifecycle.svg](diagrams/dev_lifecycle.svg)
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -472,9 +512,13 @@ sequenceDiagram
     Boot->>DOM: Display "CLE Suite Ready (v01.00.66)" Toast
 ```
 
+
 ---
 
 ### 5.2 Slicer Toolpath Generation & G-Code Export Execution Flow
+
+
+![dev_slicer_flow.svg](diagrams/dev_slicer_flow.svg)
 
 ```mermaid
 flowchart TD
@@ -498,9 +542,13 @@ flowchart TD
     ExportChoice -- "Stream to SD" --> FluidNCSD["HTTP / WebSocket Stream to FluidNC SD Card"]
 ```
 
+
 ---
 
 ### 5.3 Grayscale 2D Photo to 3D Continuous Z Relief Carving Flow
+
+
+![dev_grayscale_flow.svg](diagrams/dev_grayscale_flow.svg)
 
 ```mermaid
 sequenceDiagram
@@ -535,9 +583,13 @@ sequenceDiagram
     UI-->>User: Live 3D Simulation Ready
 ```
 
+
 ---
 
 ### 5.4 Hardware Telemetry, Real-Time DRO & Jogging Execution Flow
+
+
+![dev_telemetry_flow.svg](diagrams/dev_telemetry_flow.svg)
 
 ```mermaid
 sequenceDiagram
@@ -568,9 +620,13 @@ sequenceDiagram
     end
 ```
 
+
 ---
 
 ### 5.5 Job Crash Recovery with Lookback Buffer Execution Flow
+
+
+![dev_recovery_flow.svg](diagrams/dev_recovery_flow.svg)
 
 ```mermaid
 flowchart TD
@@ -590,9 +646,13 @@ flowchart TD
     ResumeStream --> SeamlessCarve["Continuous carving seamlessly resumed without gouging!"]
 ```
 
+
 ---
 
 ### 5.6 CLE Git Vault Project State Snapshot & Restoration Flow
+
+
+![dev_vault_flow.svg](diagrams/dev_vault_flow.svg)
 
 ```mermaid
 sequenceDiagram
@@ -621,6 +681,7 @@ sequenceDiagram
     FE->>FE: Rehydrate JumpStart 3D CAD document (window.Se)
     FE-->>User: Historical version loaded and rendered in 3D viewport!
 ```
+
 
 ---
 

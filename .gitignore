@@ -3,6 +3,7 @@
 
 # Output distribution packages
 dist/
+docs_staging/
 
 # Embedded runtime (downloaded on demand by DevInstaller)
 tools/python_runtime/

@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>JSVCLE Studio — User Guide</title>
+  <style>
+    @page {
+      size: letter;
+      margin: 14mm 14mm 14mm 14mm;
+      @bottom-right {
+        content: counter(page);
+      }
+    }
+    
+    *, *:before, *:after {
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.5;
+      color: #1e293b;
+      background: #ffffff;
+      margin: 0;
+      padding: 0;
+    }
+    
+    h1 {
+      font-size: 22pt;
+      font-weight: 800;
+      color: #0f172a;
+      border-bottom: 2px solid #0284c7;
+      padding-bottom: 6px;
+      margin-top: 0;
+      margin-bottom: 12px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    
+    h2 {
+      font-size: 14pt;
+      font-weight: 700;
+      color: #0369a1;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 4px;
+      margin-top: 20px;
+      margin-bottom: 10px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    
+    h3 {
+      font-size: 12pt;
+      font-weight: 600;
+      color: #0f172a;
+      margin-top: 14px;
+      margin-bottom: 6px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    
+    p, li {
+      color: #334155;
+    }
+    
+    p {
+      margin: 0 0 8px 0;
+    }
+    
+    ul, ol {
+      margin: 4px 0 10px 20px;
+      padding: 0;
+    }
+    
+    li {
+      margin-bottom: 4px;
+    }
+    
+    /* Disclaimer Card */
+    .disclaimer-card {
+      border: 2px solid #dc2626;
+      border-radius: 6px;
+      background: #fef2f2;
+      margin: 14px 0 20px 0;
+      padding: 12px 16px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    
+    .disclaimer-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    
+    .disclaimer-badge {
+      background: #dc2626;
+      color: #ffffff;
+      font-weight: 800;
+      font-size: 9pt;
+      letter-spacing: 0.5px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    
+    .disclaimer-title {
+      font-size: 11pt;
+      font-weight: 800;
+      color: #991b1b;
+      letter-spacing: 0.3px;
+    }
+    
+    .disclaimer-body p {
+      color: #7f1d1d;
+      font-size: 9.5pt;
+      line-height: 1.45;
+      margin-bottom: 6px;
+    }
+    
+    .community-rules {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #fecaca;
+      font-size: 9.5pt;
+      color: #991b1b;
+    }
+    
+    .community-rules ul {
+      margin: 4px 0 0 16px;
+    }
+    
+    .community-rules li {
+      color: #7f1d1d;
+    }
+    
+    /* Diagram Figures */
+    .diagram-figure {
+      margin: 14px auto 16px auto;
+      text-align: center;
+      page-break-inside: avoid;
+      break-inside: avoid;
+      max-width: 100%;
+    }
+    
+    .diagram-svg {
+      max-width: 96%;
+      max-height: 420px;
+      height: auto;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 10px;
+      background: #f8fafc;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      object-fit: contain;
+    }
+    
+    .diagram-caption {
+      font-size: 8.5pt;
+      font-weight: 600;
+      color: #64748b;
+      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    /* Tables */
+    .table-container {
+      margin: 10px 0 14px 0;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 9pt;
+      background: #ffffff;
+    }
+    
+    th, td {
+      padding: 6px 10px;
+      border: 1px solid #cbd5e1;
+      text-align: left;
+    }
+    
+    th {
+      background: #f1f5f9;
+      color: #0f172a;
+      font-weight: 700;
+    }
+    
+    tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+    
+    /* Code Blocks */
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 8.5pt;
+      background: #f1f5f9;
+      padding: 1px 4px;
+      border-radius: 3px;
+      color: #0f172a;
+    }
+    
+    pre.code-block {
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 10px 14px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 8.5pt;
+      line-height: 1.4;
+      page-break-inside: avoid;
+      break-inside: avoid;
+      margin: 8px 0 12px 0;
+    }
+    
+    pre.code-block code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+    }
+    
+    hr {
+      border: 0;
+      border-top: 1px solid #e2e8f0;
+      margin: 18px 0;
+    }
+  </style>
+</head>
+<body>
+  
+<div class="disclaimer-card">
+  <div class="disclaimer-header">
+    <span class="disclaimer-badge">CAUTION</span>
+    <span class="disclaimer-title">RESEARCH EXPERIMENTATION & LIABILITY DISCLAIMER</span>
+  </div>
+  <div class="disclaimer-body">
+    <p><strong>This software is purely research experimentation and is provided strictly "AS IS".</strong> It may damage your device, CNC machine, spindle, laser diode, workpiece, or computer. The goal of this project is the exploration of what is possible in unified in-browser digital fabrication. Users accept all risks and agree to hold authors, contributors, and developers completely harmless regardless of outcome. <strong>USE AT YOUR OWN RISK.</strong></p>
+    <p>All comments, feedback, and discussion are encouraged and welcome in community posts.</p>
+    <div class="community-rules">
+      <strong>Community Rules:</strong>
+      <ul>
+        <li><strong>Open Source & Copyleft:</strong> Keep all innovations accessible and free for everyone.</li>
+        <li><strong>Constructive Community:</strong> Keep all commentary positive, helpful, and respectful.</li>
+        <li><strong>Action-Oriented Collaboration:</strong> Write code to fix issues and share your solutions back to the group.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+  <p>></p>
+<p><blockquote>All comments, feedback, and discussion are encouraged and welcome in community posts.  </blockquote></p>
+<p><blockquote><strong>Community Rules:</strong></blockquote></p>
+<p><blockquote>1. <strong>Open Source & Copyleft:</strong> Keep all innovations accessible and free for everyone.</blockquote></p>
+<p><blockquote>2. <strong>Constructive Community:</strong> Keep all commentary positive, helpful, and respectful.</blockquote></p>
+<p><blockquote>3. <strong>Action-Oriented Collaboration:</strong> Write code to fix issues and share your solutions back to the group.</blockquote></p>
+<hr/>
+<h1>JSVCLE Studio — User Guide</h1>
+<p><strong>JumpStart 3D CAD + Vellum Vector Studio + Continuous Layer Extension (CLE)</strong>  </p>
+<p><em>Version 01.00.66 — Windows 11 Edition</em></p>
+<hr/>
+<h2>1. Overview: What is JSVCLE Studio?</h2>
+<p><strong>JSVCLE Studio</strong> is a unified, all-in-one digital fabrication workspace designed for makers, CNC machinists, woodworkers, and laser engravers. It combines three powerful engineering applications into a single synchronized desktop environment:</p>
+<ol>
+<li><strong>JumpStart 3D CAD (<code>Dev/index.htm</code>)</strong>: An intuitive, precision boundary-representation (B-Rep) 3D parametric CAD modeling application for mechanical design, solids, extrusions, revolving, and Boolean operations.</li>
+<li><strong>Vellum Vector Studio (<code>Vellum/index.htm</code>)</strong>: A dedicated 2D vector graphic and laser studio featuring curve drawing, text formatting, path booleans, DXF/SVG import/export, and automatic raster-to-vector tracing.</li>
+<li><strong>Continuous Layer Extension (CLE)</strong>: A real-time CAM, multi-axis machine control, and slicing suite directly integrated into JumpStart 3D. CLE features:</li>
+<ul>
+<li><strong>Hardware Telemetry & Control:</strong> WebSerial USB and WebSocket networking for FluidNC CNC/Laser controllers with a live 4-axis Digital Readout (DRO).</li>
+<li><strong>Interactive Spoilboard & Bed Manager:</strong> Visual CNC table with automatic workpiece seating, breakthrough safe margins, and click-and-drag spoilboard placement.</li>
+<li><strong>4th Axis Rotary (A) Chuck & Center Tool:</strong> Live visual chuck, stock cylinder, auto-clamping, and lathe turning tools.</li>
+<li><strong>Grayscale to Continuous Z Slicer:</strong> 2D photo-to-3D relief depth extraction with dynamic multi-axis raster toolpath generation.</li>
+<li><strong>Machine State Git Vault:</strong> Automatic state snapshotting and version control for machine calibration, tool libraries, and project history.</li>
+</ul>
+</ol>
+<p>![ug_architecture.svg](diagrams/ug_architecture.svg)</p>
+<div class="diagram-figure"><img src="diagrams/ug_architecture.svg" alt="ug_architecture.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Ug Architecture</div></div>
+<hr/>
+<h2>2. System Requirements</h2>
+<p>Before running the installer, ensure your workstation meets the following specifications:</p>
+<div class="table-container"><table><thead><tr><th>Component</th><th>Minimum Requirements</th><th>Recommended Requirements</th></tr></thead><tbody><tr><td><strong>Operating System</strong></td><td>Windows 11 (64-bit, Version 22H2+)</td><td>Windows 11 Pro (64-bit, latest release)</td></tr><tr><td><strong>Processor (CPU)</strong></td><td>Intel Core i7 (8-Way / 8 Cores) or AMD Ryzen 7</td><td>Intel Core i9 (24-Way / 24 Cores @ 4.0 GHz+) or AMD Ryzen 9</td></tr><tr><td><strong>System Memory (RAM)</strong></td><td>16 GB DDR4/DDR5</td><td>32 GB+ High-Speed DDR5</td></tr><tr><td><strong>Storage (SSD)</strong></td><td>2 GB free on High-Speed SATA/NVMe SSD</td><td>Ultra-Fast PCIe Gen 4/5 NVMe SSD</td></tr><tr><td><strong>Graphics (GPU)</strong></td><td>WebGL 2.0 compatible (Intel Iris Xe or dedicated)</td><td>NVIDIA GeForce RTX 3060+ / AMD Radeon RX 6700+</td></tr><tr><td><strong>Display Resolution</strong></td><td>1920 × 1080 (Full HD)</td><td>2560 × 1440 (2K QHD) or 3840 × 2160 (4K UHD)</td></tr><tr><td><strong>Ports</strong></td><td>1× USB 2.0/3.0 port (for CNC USB Serial communication)</td><td>USB 3.0 + Wi-Fi 6 (for FluidNC WebSocket)</td></tr></tbody></table></div>
+<hr/>
+<h2>3. Installation Guide</h2>
+<p>![ug_installer_flow.svg](diagrams/ug_installer_flow.svg)</p>
+<div class="diagram-figure"><img src="diagrams/ug_installer_flow.svg" alt="ug_installer_flow.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Ug Installer Flow</div></div>
+<h3>Step 1: Running the Setup Executable</h3>
+<ol>
+<li>Locate [<code>JSVCLE_Experimental_v01.00.66.exe</code>](file:///d:/CLEJS/dist/JSVCLE_Experimental_v01.00.66.exe) in your distribution folder or download location.</li>
+<li>Double-click the <code>.exe</code> installer. If prompted by Windows User Account Control (UAC), click <strong>Yes</strong> to allow installation for All Users.</li>
+</ol>
+<h3>Step 2: System Requirements Notice</h3>
+<p>The installer presents a <strong>System Requirements Notice</strong> dialog detailing the minimum (i7 8-way, 16GB RAM) and recommended (i9 24-way, 32GB RAM) specifications. Click <strong>OK</strong> to begin configuration.</p>
+<h3>Step 3: Destination Location</h3>
+<p>By default, JSVCLE Studio installs to:</p>
+<p>``<code></p>
+<p>C:\JSVCLE</p>
+</code>`<code>
+<p>You can click <strong>Browse...</strong> to choose any other drive or directory on your system.</p>
+<h3>Step 4: Installation & Background Service Setup</h3>
+<p>Click <strong>Install</strong>. The installer automatically extracts:</p>
+<ul>
+<li>JumpStart 3D and the CLE suite (</code>Dev/<code>)</li>
+<li>Vellum Vector Studio (</code>Vellum/<code>)</li>
+<li>Local Background Server and Embedded Python Runtime (</code>tools/<code>)</li>
+<li>Machine Vault and Tool Library (</code>vault/<code>)</li>
+<li>Comprehensive Documentation (</code>docs/<code>)</li>
+<li>Windows startup entries in </code>{autostartup}\CLE_Server<code> so the hardware service starts quietly whenever you log into Windows.</li>
+<li>Desktop and Start Menu shortcuts for all users.</li>
+</ul>
+<h3>Step 5: Launching the Application</h3>
+<p>On the final wizard page, leave <strong>Launch JSVCLE Studio</strong> checked and click <strong>Finish</strong>. The background server starts automatically, and the application opens in your default browser.</p>
+<hr/>
+<h2>4. Initial Configuration</h2>
+<p>![ug_initial_config.svg](diagrams/ug_initial_config.svg)</p>
+<div class="diagram-figure"><img src="diagrams/ug_initial_config.svg" alt="ug_initial_config.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Ug Initial Config</div></div>
+<h3>4.1 Connecting to Your Machine</h3>
+<ol>
+<li>Open <strong>JSVCLE Studio</strong>.</li>
+<li>Click the <strong>CLE Suite</strong> tab in the top workspace bar.</li>
+<li>In the ribbon under <strong>Connection</strong>:</li>
+<ul>
+<li><strong>USB Serial:</strong> Click <strong>USB List</strong>, select your machine's COM port (e.g. </code>COM3<code> for CH340 / CP2102), and choose baud rate </code>115200<code>.</li>
+<li><strong>WiFi / WebSocket:</strong> If running FluidNC over Wi-Fi, click <strong>WiFi/WS</strong> and enter your controller's IP address (e.g. </code>192.168.1.150<code>).</li>
+<li>Once connected, the top status badge will turn green: </code>FluidNC: Idle<code>.</li>
+</ul>
+</ol>
+<h3>4.2 Configuring the Machine Bed & Spoilboard</h3>
+<ol>
+<li>Click <strong>Setup & Spoilboard</strong> in the CLE ribbon.</li>
+<li>Select your machine profile from the dropdown (e.g. <strong>FluidNC Standard CNC / Laser</strong> or custom machine profile).</li>
+<li>The 3D viewport instantly renders your exact spoilboard dimensions (e.g. $600 \times 500 \times 20\,\text{mm}$ MDF), aluminum extrusion base, and live origin reticle.</li>
+<li>If your spoilboard thickness differs from standard ($20.0\,\text{mm}$), enter your measured thickness in the Spoilboard dialog and click <strong>Save to Vault</strong>.</li>
+</ol>
+<hr/>
+<h2>5. Three Real-World Usage Workflows</h2>
+<p>![ug_three_workflows.svg](diagrams/ug_three_workflows.svg)</p>
+<div class="diagram-figure"><img src="diagrams/ug_three_workflows.svg" alt="ug_three_workflows.svg" class="diagram-svg" /><div class="diagram-caption">Figure: Ug Three Workflows</div></div>
+<h3>Example 1: 3D CAD Solid Modeling & Continuous Layer Slicing</h3>
+<p><em>Goal: Model a mechanical mounting bracket and generate a multi-pass CNC carving toolpath.</em></p>
+<ol>
+<li><strong>Design the 3D Part:</strong></li>
+<ul>
+<li>In the <strong>Design 3D</strong> workspace tab, click <strong>Box</strong> or draw a 2D sketch and click <strong>Extrude</strong> (e.g., $100 \times 60 \times 15\,\text{mm}$).</li>
+<li>Add mounting holes using the <strong>Cylinder (Hole)</strong> tool.</li>
+<li><strong>Place on CNC Spoilboard:</strong></li>
+<li>Switch to the <strong>CLE Suite</strong> tab.</li>
+<li>Click the 3D body on the bed. A luminous neon cyan outline and the <strong>Bed Placement HUD</strong> appear.</li>
+<li>Click <strong>🎯 Center</strong> on the HUD to position the bracket symmetrically at $(X=300, Y=250)$ on the spoilboard.</li>
+<li><strong>Slice to Toolpaths:</strong></li>
+<li>In the ribbon, click <strong>Slice & 3D Stack</strong>.</li>
+<li>Select your Target Machine: <strong>CNC Milling (Top-Down passes)</strong>.</li>
+<li>Set Layer Height (e.g. $1.5\,\text{mm}$ step-down) and Spoilboard Breakthrough ($0.20\,\text{mm}$ overcut for clean part release).</li>
+<li>Click <strong>Slice & Display in 3D Viewport</strong>.</li>
+<li><strong>Simulate & Export:</strong></li>
+<li>The interactive <strong>Slicer HUD</strong> mounts at the bottom of the viewport.</li>
+<li>Click <strong>Play Trace</strong> to watch the simulated toolhead carve each layer in real time.</li>
+<li>Click <strong>Export G-Code (.nc)</strong> or <strong>Upload to SD Card</strong> to transfer the program directly to your machine.</li>
+</ul>
+</ol>
+<hr/>
+<h3>Example 2: 2D Vector Design in Vellum & Extrusion to 3D</h3>
+<p><em>Goal: Create an artistic vector plaque in Vellum Vector Studio and transfer it into 3D CAD.</em></p>
+<ol>
+<li><strong>Open Vellum Vector Studio:</strong></li>
+<ul>
+<li>Click the <strong>Vector Studio</strong> button in the CLE ribbon (or click <strong>Vector</strong> in the workspace tabs).</li>
+<li>Vellum opens in full-screen overlay mode.</li>
+<li><strong>Draw Vector Geometry:</strong></li>
+<li>Use the <strong>Pen (Curve)</strong>, <strong>Shape</strong>, or <strong>Text</strong> tools to draw your emblem.</li>
+<li>Use <strong>Autotrace</strong> if importing a bitmap logo (</code>.svg<code>, </code>.png<code>).</li>
+<li><strong>Export to JS Workspace:</strong></li>
+<li>In Vellum's top menu, click <strong>Export</strong> $\rightarrow$ <strong>Save to JS Workspace...</strong>.</li>
+<li>Choose <strong>Option 2: 3D Extruded Body (Solid)</strong> and enter extrusion thickness (e.g. $6.0\,\text{mm}$).</li>
+<li>Click <strong>Transfer to JS Workspace</strong>.</li>
+<li><strong>Result:</strong></li>
+<li>Vellum closes and returns you directly to JumpStart 3D.</li>
+<li>Your vector shape is converted into a native 3D watertight solid, resting at bed center $(300, 250, 20.10\,\text{mm})$ on the spoilboard!</li>
+</ul>
+</ol>
+<hr/>
+<h3>Example 3: Grayscale Photo to 3D Relief & Continuous Z Carving</h3>
+<p><em>Goal: Convert a 2D portrait photo into a carved 3D wood relief carving.</em></p>
+<ol>
+<li><strong>Import Image:</strong></li>
+<ul>
+<li>Click <strong>Grayscale 3D</strong> (</code>#cle-r-grayscale<code>) in the CLE ribbon.</li>
+<li>Under <em>Select Image Source</em>, choose <strong>📁 Browse File...</strong> (or select a photo already transferred from Vellum).</li>
+<li><strong>Modulate Image Depth:</strong></li>
+<li>View the live thumbnail on the preview canvas.</li>
+<li>Adjust <strong>Contrast</strong>, <strong>Brightness</strong>, and <strong>Gamma Curve</strong> to bring out facial contours.</li>
+<li>Check <strong>Invert Grayscale</strong> if white represents high peaks and dark represents low carving floors.</li>
+<li><strong>Set Physical Dimensions:</strong></li>
+<li>Width: $120.0\,\text{mm}$, Height: $90.0\,\text{mm}$.</li>
+<li>Max Relief Depth: $5.0\,\text{mm}$, Base Floor: $2.0\,\text{mm}$.</li>
+<li><strong>Choose Action:</strong></li>
+<li>Click <strong>📦 Create 3D Object in Workspace</strong>: Generates a watertight solid 3D mesh (maple finish) in the CAD scene for parametric combination.</li>
+<li>Click <strong>⚡ Slice to Continuous Z</strong>: Generates smooth multi-axis 3D carving raster toolpaths that vary $Z$ dynamically along each pass, and mounts the Slicer HUD for simulation!</li>
+</ul>
+</ol>
+<hr/>
+<h2>6. Troubleshooting Guide</h2>
+<div class="table-container"><table><thead><tr><th>Symptom</th><th>Probable Cause</th><th>Recommended Solution</th></tr></thead><tbody><tr><td><strong>FluidNC Offline / COM Port not found</strong></td><td>USB cable disconnected or CH340 driver missing</td><td>Check USB connection. In Windows Device Manager, ensure the COM port shows under <em>Ports (COM & LPT)</em>. Install the CH340/CP2102 driver if needed.</td></tr><tr><td><strong>"CLE_server not responding" warning</strong></td><td>Background Python service stopped</td><td>Run </code>cle_server_start.bat<code> from your install directory (</code>C:\JSVCLE<code>). Verify that </code>http://127.0.0.1:8765/api/status<code> returns </code>{"status":"running"}<code> in your browser.</td></tr><tr><td><strong>3D Viewport is blank or black</strong></td><td>WebGL disabled or hardware acceleration off</td><td>In your browser, go to </code>chrome://settings/system<code> (or edge settings) and enable <strong>Use graphics acceleration when available</strong>. Verify WebGL support at </code>get.webgl.org<code>.</td></tr><tr><td><strong>Slices cut through the aluminum bed</strong></td><td>Zero point misconfigured or no spoilboard defined</td><td>Ensure your spoilboard thickness is entered correctly in the Spoilboard Setup modal ($20.0\,\text{mm}$). Never set cutout overcut greater than spoilboard thickness.</td></tr><tr><td><strong>Vellum "Save to JS Workspace" doesn't switch</strong></td><td>Browser popup or cross-frame permission blocked</td><td>JSVCLE uses standard internal frame messaging. Ensure you are launching the application via </code>cle_start.bat<code> or localhost rather than a restricted sandbox.</td></tr></tbody></table></div>
+<hr/>
+<h2>7. Uninstallation</h2>
+<p>To remove JSVCLE Studio completely from your computer:</p>
+<ol>
+<li>Open <strong>Windows Settings</strong> $\rightarrow$ <strong>Apps</strong> $\rightarrow$ <strong>Installed Apps</strong>.</li>
+<li>Locate <strong>JSVCLE Studio</strong> in the list.</li>
+<li>Click the three dots </code>...<code> and select <strong>Uninstall</strong>.</li>
+</ol>
+<p>   <em>(Alternatively, run </code>C:\JSVCLE\unins000.exe<code> directly or click "Uninstall JSVCLE" in the Start Menu).</em></p>
+<ol>
+<li>The uninstaller removes all desktop icons, start menu folders, startup background service hooks, and application files cleanly.</li>
+</ol>
+<hr/>
+<h2>8. Glossary of Terms</h2>
+<ul>
+<li><strong>DRO (Digital Readout):</strong> Real-time display of machine axes ($X, Y, Z, A$) in Work Coordinate System (WCS) millimeters and degrees.</li>
+<li><strong>WCS (Work Coordinate System):</strong> The part coordinate frame (</code>G54`), where $(0, 0, 0)$ is set relative to your workpiece stock rather than machine limits.</li>
+<li><strong>Spoilboard:</strong> A sacrificial MDF board mounted on top of the aluminum extrusion bed that allows through-cuts without damaging cutting tools or the machine table.</li>
+<li><strong>Continuous Z Slicing:</strong> A 3D CAM carving strategy where the toolhead moves smoothly in $X, Y,$ and $Z$ simultaneously following natural surface height contours, avoiding stepped stair-stepping.</li>
+<li><strong>4th Axis (A-Axis):</strong> A rotary chuck and tailstock alignment tool that replaces the spoilboard for round stock turning, fluting, and multi-sided indexing.</li>
+<li><strong>Breakthrough Pass:</strong> A final perimeter cutout pass that cuts $0.20\,\text{mm}$ into the MDF spoilboard so parts release cleanly without tabs.</li>
+<li><strong>FluidNC:</strong> High-performance, open-source CNC and laser motion control firmware running on ESP32 microcontrollers with WebSerial and WebSocket support.</li>
+</ul>
+</body>
+</html>
