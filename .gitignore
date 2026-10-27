@@ -12,3 +12,5 @@ tools/python_runtime/
 .DS_Store
 Thumbs.db
 *.log
+.~lock.*#
+.~lock.*

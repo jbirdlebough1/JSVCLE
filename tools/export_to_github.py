@@ -19,6 +19,7 @@ EXCLUDED_DIRS = {
     ".gemini",
     "scratch",
     "test_install_sandbox",
+    "docs_staging",
     "dist",
     "__pycache__",
     ".system_generated",
