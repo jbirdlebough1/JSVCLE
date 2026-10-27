@@ -6,3 +6,4 @@ with open("Dev/cle_tools/cle_slicer.js", "r", encoding="utf-8") as f:
 idx = text.find("getActiveBodyGeometry(")
 print("getActiveBodyGeometry at:", idx)
 print(text[idx:idx+1500])
+

@@ -6,3 +6,4 @@ with open("Dev/cle_tools/cle_boot.js", "r", encoding="utf-8") as f:
 idx = text.find("id=\"cle-gray-browse-btn\"")
 print("idx browse-btn HTML:", idx)
 print(text[idx-200:idx+400])
+

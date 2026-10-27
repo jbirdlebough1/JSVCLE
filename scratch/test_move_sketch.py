@@ -61,3 +61,4 @@ with sync_playwright() as p:
 
     print("[MOVE RESULT]:", res)
     browser.close()
+

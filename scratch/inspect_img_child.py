@@ -58,3 +58,4 @@ with sync_playwright() as p:
 
     print("[CHILDREN]:", res)
     browser.close()
+

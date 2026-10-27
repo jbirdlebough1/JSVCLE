@@ -60,3 +60,4 @@ with sync_playwright() as p:
 
     print("[TEST RESULT]:", res)
     browser.close()
+

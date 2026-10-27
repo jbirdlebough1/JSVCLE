@@ -64,3 +64,4 @@ with sync_playwright() as p:
 
     print("[UPDATED RAYCAST RESULT]:", res)
     browser.close()
+

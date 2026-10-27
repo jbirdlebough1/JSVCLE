@@ -50,3 +50,4 @@ with open("Dev/cle_tools/cle_slicer.js", "w", encoding="utf-8") as f:
     f.write(slicer_code)
 
 print("Updated cle_slicer.js successfully!")
+

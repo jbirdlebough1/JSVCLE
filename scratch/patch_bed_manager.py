@@ -444,3 +444,4 @@ with open("Dev/cle_tools/cle_bed.js", "w", encoding="utf-8") as f:
     f.write(bed_code)
 
 print("Updated cle_bed.js successfully!")
+

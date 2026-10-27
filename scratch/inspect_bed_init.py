@@ -5,3 +5,4 @@ with open("Dev/cle_tools/cle_bed.js", "r", encoding="utf-8") as f:
 
 print("Last 1000 characters of cle_bed.js:")
 print(text[-1000:])
+

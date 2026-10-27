@@ -9,3 +9,4 @@ print(f"Found {len(matches)} .image matches:")
 for m in matches[:10]:
     print("--- MATCH AT", m)
     print(text[m-50:m+250])
+

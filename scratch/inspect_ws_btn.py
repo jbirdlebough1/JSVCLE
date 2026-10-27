@@ -5,3 +5,4 @@ with open("Dev/cle_tools/cle_boot.js", "r", encoding="utf-8") as f:
 
 idx = text.find("const wsImgBtn = document.getElementById('cle-gray-ws-btn');")
 print(text[idx-50:idx+2000])
+
