@@ -11297,6 +11297,45 @@ setTimeout(async ()=>{
   } else { try{ localStorage.removeItem(BACKUP_STORE_KEY); }catch(e){} }
 }, 600);
 
+  // Expose Vellum interface globally for JumpStart / CLE integration
+  window.Vellum = {
+    get state() { return state; },
+    get PAGE() { return PAGE; },
+    get objects() { return state.objects; },
+    objBBox,
+    unionBBox,
+    exportSVG,
+    async getExportSvg() {
+      if (typeof ensureTextFontsLoaded === 'function') await ensureTextFontsLoaded();
+      const bboxes = state.objects.map(objBBox);
+      const bb = bboxes.length ? unionBBox(bboxes) : { x: PAGE.x, y: PAGE.y, w: PAGE.w, h: PAGE.h };
+      const pad = 0;
+      const vb = `${bb.x} ${bb.y} ${bb.w} ${bb.h}`;
+      let body = '';
+      const defs = []; const idCounter = { n: 1 };
+      for (const o of state.objects) {
+        if (o.visible === false) continue;
+        if (o.type === 'image') {
+          const rot = o.angle ? ` transform="rotate(${o.angle} ${o.x + o.w / 2} ${o.y + o.h / 2})"` : '';
+          body += `<image x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" opacity="${o.opacity === undefined ? 1 : o.opacity}" href="${o.src}"${rot}/>
+`;
+        } else if (o.type === 'text') {
+          const fillAttr = o.fill && o.fill !== 'none' ? svgFillAttr(o.fill, defs, idCounter) : 'none';
+          const hasStroke = o.stroke && o.stroke !== 'none' && o.strokeWidth > 0;
+          const strokeAttrs = hasStroke ? ` stroke="${o.stroke}" stroke-width="${svgStrokeW(o)}"` : '';
+          body += svgPlainTextBlock(o, fillAttr, strokeAttrs);
+        } else {
+          const d = segmentsToPathD(o.segments);
+          const fillAttr = svgFillAttr(o.fill, defs, idCounter, o);
+          body += `<path d="${d}" fill="${fillAttr}" stroke="${o.stroke === 'none' ? 'none' : o.stroke}" stroke-width="${svgStrokeW(o)}"/>
+`;
+        }
+      }
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" width="${bb.w}" height="${bb.h}">
+${defs.length ? '<defs>' + defs.join('\n') + '</defs>\n' : ''}${body}</svg>`;
+    }
+  };
 
 })();
 </script>
@@ -11410,7 +11449,7 @@ setTimeout(async ()=>{
 
     function openModal() {
       if (!modal) return;
-      const objs = (typeof state !== 'undefined' && state.objects) ? state.objects : [];
+      const objs = (window.Vellum && window.Vellum.objects) || (typeof state !== 'undefined' && state.objects) || [];
       const hasVectors = objs.some(o => o.visible !== false && o.type !== 'image' && o.segments && o.segments.length > 0);
       const hasImages = objs.some(o => o.visible !== false && o.type === 'image');
 
@@ -11498,12 +11537,17 @@ setTimeout(async ()=>{
         confirmBtn.disabled = true;
         confirmBtn.textContent = 'Transferring...';
         try {
-          const svgData = await buildSvgData();
+          let svgData = '';
+          if (window.Vellum && window.Vellum.getExportSvg) {
+            svgData = await window.Vellum.getExportSvg();
+          } else {
+            svgData = await buildSvgData();
+          }
           const mode = radExtrude && radExtrude.checked ? 'extrude' : radImage && radImage.checked ? 'image' : 'sketch';
           const thickness = parseFloat(document.getElementById('jsExtrudeThickness')?.value) || 5.0;
           const plane = document.getElementById('jsTargetPlane')?.value || 'XY';
           const name = document.getElementById('jsPartName')?.value.trim() || 'Vellum Design';
-          const objectsList = (typeof state !== 'undefined' && state.objects) ? state.objects : [];
+          const objectsList = (window.Vellum && window.Vellum.objects) ? window.Vellum.objects.slice() : ((typeof state !== 'undefined' && state.objects) ? state.objects.slice() : []);
 
           // Collect images if any
           const imagesList = [];

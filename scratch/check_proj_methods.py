@@ -21,3 +21,4 @@ with sync_playwright() as p:
     print("\nsaveVersion:\n", res["saveVersionSource"])
     print("\nsaveNow:\n", res["saveNowSource"])
     browser.close()
+

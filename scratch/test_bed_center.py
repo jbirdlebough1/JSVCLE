@@ -56,3 +56,4 @@ with sync_playwright() as p:
     }""")
     print("Bed Center Test Result:", res)
     browser.close()
+

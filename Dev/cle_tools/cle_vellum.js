@@ -115,6 +115,13 @@ export class CLEVellumBridge {
   }
 
   open() {
+    const activeTab = document.querySelector('.wstabs button[aria-selected="true"]');
+    if (activeTab && activeTab.id !== 'ws-vellum') {
+      this.returnWorkspace = activeTab.id; // e.g. 'ws-cle' or 'ws-design'
+    } else if (!this.returnWorkspace) {
+      this.returnWorkspace = 'ws-cle';
+    }
+
     this.ensureUI();
     this.modalEl.style.display = 'flex';
     this.isOpen = true;
@@ -130,13 +137,22 @@ export class CLEVellumBridge {
     this.modalEl.style.display = 'none';
     this.isOpen = false;
     const app = window.app || window.xe;
-    const wsTab = document.getElementById('ws-vellum');
-    if (wsTab && wsTab.getAttribute('aria-selected') === 'true') {
-      const wsCle = document.getElementById('ws-cle');
-      const wsDesign = document.getElementById('ws-design');
-      if (wsCle) wsCle.click();
-      else if (wsDesign) wsDesign.click();
+
+    // Ensure we are in 3D viewport, not inside 2D sketcher
+    if (app && app.sketcher && app.sketcher.active && app.exitSketch) {
+      app.exitSketch();
     }
+
+    // Return to the workspace where user initiated (CLE or Design)
+    const targetWsId = this.returnWorkspace || 'ws-cle';
+    const targetTab = document.getElementById(targetWsId);
+    const fallbackTab = document.getElementById('ws-cle') || document.getElementById('ws-design');
+    if (targetTab) {
+      targetTab.click();
+    } else if (fallbackTab) {
+      fallbackTab.click();
+    }
+
     if (app && app.vp && app.vp.request) {
       app.vp.request();
     }
@@ -389,6 +405,22 @@ export class CLEVellumBridge {
       doc.sketches.push(newSketch);
 
       if (mode === 'extrude' && hasVectors) {
+        // Detect closed profiles using JumpStart's internal profile detector
+        let profiles = [];
+        if (window.Ei) {
+          try {
+            const det = window.Ei(newSketch);
+            if (Array.isArray(det) && det.length > 0) {
+              profiles = det.map(p => ({ key: p.key, pt: p.pt }));
+            }
+          } catch (err) {
+            console.warn('[CLE Vellum] error computing profiles with Ei:', err);
+          }
+        }
+        if (profiles.length === 0) {
+          profiles = [{ key: 'p0', pt: [0, 0] }];
+        }
+
         const bodyId = 'b_' + Date.now();
         doc.bodies.push({
           id: bodyId,
@@ -401,7 +433,7 @@ export class CLEVellumBridge {
           node: {
             t: 'extrude',
             sketch: skId,
-            profiles: [{ key: 'p0', pt: [0, 0] }],
+            profiles: profiles,
             dist: parseFloat(thickness) || 5.0,
             mode: 'one',
             dist2: 0,
@@ -413,26 +445,29 @@ export class CLEVellumBridge {
 
     this.close();
 
-    // Notify user & trigger scene update
+    // Notify user & trigger scene and bed update
     if (app) {
+      if (app.sketcher && app.sketcher.active && app.exitSketch) {
+        app.exitSketch();
+      }
       if (app.scene && app.scene.refresh) app.scene.refresh();
       if (app.refreshUI) app.refreshUI('change');
       if (app.vp && app.vp.request) app.vp.request();
-      if (window.CLE && window.CLE.bed && window.CLE.bed.fitBedView) {
-        window.CLE.bed.fitBedView();
-      } else if (app.fit) {
-        app.fit();
-      }
+    }
 
-      if (!hasVectors && hasImages) {
-        if (app.toast) app.toast(`Placed "${partName}" onto 3D workplane! (Tip: Use Vellum's Trace tool to generate 3D cut paths)`, 'ok');
-        if (app.enterSketch) app.enterSketch(skId);
-      } else if (mode === 'extrude' && hasVectors) {
-        if (app.toast) app.toast(`Created 3D Extruded Body "${partName}" (${thickness}mm) from Vellum!`, 'ok');
-      } else {
-        if (app.enterSketch) app.enterSketch(skId);
-        if (app.toast) app.toast(`Imported "${partName}" as 2D editable sketch on ${plane} plane!`, 'ok');
-      }
+    if (window.CLE && window.CLE.bed) {
+      if (window.CLE.bed.sitWorkpieceOnSpoilboard) window.CLE.bed.sitWorkpieceOnSpoilboard();
+      if (window.CLE.bed.fitBedView) window.CLE.bed.fitBedView();
+    } else if (app && app.fit) {
+      app.fit();
+    }
+
+    if (!hasVectors && hasImages) {
+      if (app && app.toast) app.toast(`Placed "${partName}" onto center of bed!`, 'ok');
+    } else if (mode === 'extrude' && hasVectors) {
+      if (app && app.toast) app.toast(`Created 3D Extruded Body "${partName}" (${thickness}mm) at center of bed!`, 'ok');
+    } else {
+      if (app && app.toast) app.toast(`Imported 2D sketch "${partName}" at center of bed!`, 'ok');
     }
   }
 }

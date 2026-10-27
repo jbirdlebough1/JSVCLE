@@ -134,3 +134,4 @@ with sync_playwright() as p:
 
     print("\nALL VERIFICATION CHECKS PASSED PERFECTLY!")
     browser.close()
+

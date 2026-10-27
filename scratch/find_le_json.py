@@ -6,3 +6,4 @@ idx = text.rfind('function le(', 0, pos)
 print('le found at:', idx)
 if idx != -1:
     print(text[idx:idx+600])
+

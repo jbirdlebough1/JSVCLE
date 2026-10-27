@@ -19,3 +19,4 @@ with sync_playwright() as p:
     }""")
     print("Projects:", res)
     browser.close()
+
