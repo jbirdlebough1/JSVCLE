@@ -284,3 +284,4 @@ if idx1 != -1 and idx2 != -1:
     print("Vellum/index.htm successfully updated with Image Support!")
 else:
     print(f"Indices not found: idx1={idx1}, idx2={idx2}")
+

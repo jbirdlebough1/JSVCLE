@@ -52,3 +52,4 @@ with sync_playwright() as p:
 
     print("Result of sketchView with image:", res)
     browser.close()
+

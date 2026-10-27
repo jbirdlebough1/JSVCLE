@@ -51,3 +51,4 @@ with sync_playwright() as p:
 
     print("Result of adding image to sketch:", res)
     browser.close()
+

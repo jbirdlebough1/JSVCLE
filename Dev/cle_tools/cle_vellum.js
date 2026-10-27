@@ -289,6 +289,33 @@ export class CLEVellumBridge {
   }
 
   /**
+   * Get machine bed center coordinates dynamically
+   * Defaults to TTC6050 (X=300, Y=250, Z=20.10mm on top of spoilboard)
+   */
+  getBedCenter() {
+    let cx = 300;
+    let cy = 250;
+    let cz = 20.10; // 0.10 bed base + 20.0 spoilboard
+
+    try {
+      if (window.CLE) {
+        if (window.CLE.machine && window.CLE.machine.travel) {
+          const t = window.CLE.machine.travel;
+          if (t.x && t.x.max) cx = (t.x.min || 0) + (t.x.max - (t.x.min || 0)) / 2;
+          if (t.y && t.y.max) cy = (t.y.min || 0) + (t.y.max - (t.y.min || 0)) / 2;
+        }
+        if (window.CLE.spoilboard && typeof window.CLE.spoilboard.thickness === 'number') {
+          cz = 0.10 + window.CLE.spoilboard.thickness;
+        }
+      }
+    } catch (e) {
+      console.warn('[CLE Vellum] error determining bed center:', e);
+    }
+
+    return { x: cx, y: cy, z: cz };
+  }
+
+  /**
    * Handle incoming Vellum export payload
    */
   handleExport(payload) {
@@ -309,12 +336,13 @@ export class CLEVellumBridge {
       return;
     }
 
-    // Determine plane
-    let planeDef = { o: [0, 0, 0], x: [1, 0, 0], n: [0, 0, 1] }; // Default XY Top
+    // Determine plane origin at center of machine bed
+    const bedCenter = this.getBedCenter();
+    let planeDef = { o: [bedCenter.x, bedCenter.y, bedCenter.z], x: [1, 0, 0], n: [0, 0, 1] }; // Default XY Top
     if (plane === 'XZ') {
-      planeDef = { o: [0, 0, 0], x: [1, 0, 0], n: [0, 1, 0] };
+      planeDef = { o: [bedCenter.x, bedCenter.y, bedCenter.z], x: [1, 0, 0], n: [0, 1, 0] };
     } else if (plane === 'YZ') {
-      planeDef = { o: [0, 0, 0], x: [0, 1, 0], n: [1, 0, 0] };
+      planeDef = { o: [bedCenter.x, bedCenter.y, bedCenter.z], x: [0, 1, 0], n: [1, 0, 0] };
     }
 
     const skId = 'sk_' + Date.now();
@@ -390,7 +418,11 @@ export class CLEVellumBridge {
       if (app.scene && app.scene.refresh) app.scene.refresh();
       if (app.refreshUI) app.refreshUI('change');
       if (app.vp && app.vp.request) app.vp.request();
-      if (app.fit) app.fit();
+      if (window.CLE && window.CLE.bed && window.CLE.bed.fitBedView) {
+        window.CLE.bed.fitBedView();
+      } else if (app.fit) {
+        app.fit();
+      }
 
       if (!hasVectors && hasImages) {
         if (app.toast) app.toast(`Placed "${partName}" onto 3D workplane! (Tip: Use Vellum's Trace tool to generate 3D cut paths)`, 'ok');

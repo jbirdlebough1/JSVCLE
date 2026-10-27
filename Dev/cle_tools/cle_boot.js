@@ -115,6 +115,7 @@ class CLEBridge {
     }
     if (app && app.vp) {
       console.log('[CLEJS] Attached to active JumpStart 3D runtime context.');
+      this.injectTopBarButton();
       if (this.bed) this.bed.init();
       if (this.slicer) this.slicer.init();
       const mach = this.vault?.getActiveMachine();
@@ -173,6 +174,47 @@ class CLEBridge {
       setTimeout(() => this.injectTopBarButton(), 200);
       return;
     }
+
+    // Bind Project Topbar Buttons
+    const btnNew = document.getElementById('btn-new-project');
+    if (btnNew && !btnNew._cleBound) {
+      btnNew._cleBound = true;
+      btnNew.onclick = () => this.newProject();
+    }
+
+    const btnSave = document.getElementById('btn-save-project');
+    if (btnSave && !btnSave._cleBound) {
+      btnSave._cleBound = true;
+      btnSave.onclick = () => this.saveProject();
+    }
+
+    const btnSaveAs = document.getElementById('btn-save-as-project');
+    if (btnSaveAs && !btnSaveAs._cleBound) {
+      btnSaveAs._cleBound = true;
+      btnSaveAs.onclick = () => this.saveProjectAs();
+    }
+
+    // Bind Open/Export Dropdown Menu actions
+    const menuExport = document.getElementById('menu-export');
+    if (menuExport && !menuExport._cleBound) {
+      menuExport._cleBound = true;
+      menuExport.addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        const act = btn.dataset.act;
+        if (act === 'new') {
+          menuExport.hidden = true;
+          this.newProject();
+        } else if (act === 'save') {
+          menuExport.hidden = true;
+          this.saveProject();
+        } else if (act === 'saveas') {
+          menuExport.hidden = true;
+          this.saveProjectAs();
+        }
+      });
+    }
+
     if (document.getElementById('cle-main-btn')) return;
 
     const btn = document.createElement('button');
@@ -186,12 +228,157 @@ class CLEBridge {
     topbar.appendChild(btn);
   }
 
+  /**
+   * Clear workspace and start a fresh project
+   */
+  newProject(force = false) {
+    const doc = (window.Se && window.Se.doc) || (window.app && window.app.doc);
+    const hasBodies = doc && Array.isArray(doc.bodies) && doc.bodies.length > 0;
+    const hasSketches = doc && Array.isArray(doc.sketches) && doc.sketches.length > 0;
+
+    if (!force && (hasBodies || hasSketches)) {
+      const ok = confirm("Start a new project? This will clear all bodies and sketches in the current workspace.");
+      if (!ok) return;
+    }
+
+    const app = window.app || window.xe;
+
+    // Use JumpStart's internal newDesign if available
+    if (app && app.projects && app.projects.newDesign) {
+      app.projects.newDesign("advanced");
+    } else if (window.Se && window.Se.load && window.uo) {
+      window.Se.load(window.uo("Untitled", "advanced"));
+    } else if (window.Se && window.Se.update) {
+      window.Se.update(d => {
+        d.bodies = [];
+        d.sketches = [];
+        d.joints = [];
+        d.name = "Untitled";
+        d.ver = 1;
+      }, "New Project");
+    }
+
+    // Clear CLE visualizers, toolpaths, and active modes
+    if (this.slicer && this.slicer.clearVisualizer) this.slicer.clearVisualizer();
+    if (this.recovery && this.recovery.clearVisualizer) this.recovery.clearVisualizer();
+    if (this.calibration && this.calibration.clearVisualizer) this.calibration.clearVisualizer();
+    if (this.test && this.test.clearVisualizer) this.test.clearVisualizer();
+
+    // Reset document name field in topbar if present
+    const docnameEl = document.querySelector('.docname');
+    if (docnameEl) docnameEl.value = 'Untitled';
+
+    // Reset Bed & Camera
+    if (this.bed) {
+      if (this.bed.fitBedView) this.bed.fitBedView();
+      if (this.bed.sitWorkpieceOnSpoilboard) this.bed.sitWorkpieceOnSpoilboard();
+    } else if (app && app.vp && app.vp.setView) {
+      app.vp.setView("home");
+    }
+
+    this.notify("Started new project — Workspace cleared.", "ok");
+  }
+
+  /**
+   * Quick Save current project version
+   */
+  async saveProject() {
+    const app = window.app || window.xe;
+    const doc = (window.Se && window.Se.doc) || (app && app.doc);
+    const name = (doc && doc.name) ? doc.name : "Untitled";
+
+    if (app && app.projects && app.projects.saveVersion) {
+      try {
+        await app.projects.saveVersion();
+        this.notify(`Project saved as "${name}" version!`, 'ok');
+        return;
+      } catch (err) {
+        console.warn('[CLE] saveVersion error:', err);
+      }
+    }
+
+    if (app && app.projects && app.projects.saveNow) {
+      try {
+        await app.projects.saveNow();
+        this.notify(`Project "${name}" saved!`, 'ok');
+        return;
+      } catch (err) {
+        console.warn('[CLE] saveNow error:', err);
+      }
+    }
+
+    this.downloadProjectFile(name, doc);
+    this.notify(`Project "${name}" exported!`, 'ok');
+  }
+
+  /**
+   * Save As named project copy & download JSON
+   */
+  async saveProjectAs(customName = null) {
+    const app = window.app || window.xe;
+    const doc = (window.Se && window.Se.doc) || (app && app.doc);
+    const currentName = (doc && doc.name) ? doc.name : "Untitled";
+
+    const chosen = customName !== null ? customName : prompt("Enter project name:", currentName);
+    if (!chosen || !chosen.trim()) return;
+
+    const trimmed = chosen.trim();
+
+    if (window.Se && window.Se.update) {
+      window.Se.update(d => {
+        d.name = trimmed;
+      }, `Rename to ${trimmed}`);
+    } else if (doc) {
+      doc.name = trimmed;
+    }
+
+    const docnameEl = document.querySelector('.docname');
+    if (docnameEl) docnameEl.value = trimmed;
+
+    // Save version in browser storage
+    if (app && app.projects && app.projects.saveVersion) {
+      try {
+        await app.projects.saveVersion();
+      } catch (err) {
+        console.warn('[CLE] saveVersion error:', err);
+      }
+    } else if (app && app.projects && app.projects.saveNow) {
+      try {
+        await app.projects.saveNow();
+      } catch (err) {
+        console.warn('[CLE] saveNow error:', err);
+      }
+    }
+
+    // Always trigger .json project file download so user has their named copy!
+    this.downloadProjectFile(trimmed, doc);
+    this.notify(`Project saved as "${trimmed}" and downloaded!`, 'ok');
+  }
+
+  /**
+   * Export project document as downloadable JSON file
+   */
+  downloadProjectFile(name, doc) {
+    const payloadDoc = doc || (window.Se && window.Se.doc) || (window.app && window.app.doc) || {};
+    const safeName = (name || payloadDoc.name || 'Untitled').replace(/[<>/\\":;?*|=,]+/g, '_').trim() || 'Untitled';
+    const jsonStr = JSON.stringify({ app: "jumpstart-3d", version: 1, doc: payloadDoc }, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = safeName.endsWith('.json') ? safeName : `${safeName}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   // Native JumpStart Advanced Ribbon Renderer (When "CLE" tab in wstabs is clicked)
   renderAdvancedRibbon(m, s, n) {
     const activeMach = this.vault.getActiveMachine();
     this.machineName = activeMach.name;
 
-    // 0. Return to Design Workspace & Vector Studio
+    // 0. Return to Design Workspace, Vector Studio & Project Actions
     m("Design", "", [
       {
         id: "cle-r-return-design",
@@ -216,6 +403,30 @@ class CLEBridge {
         fn: () => {
           if (window.CLE && window.CLE.vellum) window.CLE.vellum.open();
         }
+      },
+      {
+        id: "cle-r-new-proj",
+        label: "New Project",
+        title: "Start a Fresh New Project (Clears Workspace)",
+        icon: "newSketch",
+        cls: "accent",
+        fn: () => this.newProject()
+      },
+      {
+        id: "cle-r-save-proj",
+        label: "Save",
+        title: "Save Project Version",
+        icon: "box",
+        cls: "accent",
+        fn: () => this.saveProject()
+      },
+      {
+        id: "cle-r-saveas-proj",
+        label: "Save As",
+        title: "Save Project As (Named File & Version)",
+        icon: "features",
+        cls: "accent",
+        fn: () => this.saveProjectAs()
       }
     ]);
 

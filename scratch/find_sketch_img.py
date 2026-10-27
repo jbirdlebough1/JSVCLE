@@ -6,3 +6,4 @@ matches = [m.start() for m in re.finditer(r'\.image\b', text[11000000:12000000])
 for idx in matches:
     pos = 11000000 + idx
     print('pos:', pos, text[pos-30:pos+150])
+
