@@ -15,6 +15,7 @@ import { CLESlicerEngine } from './cle_slicer.js';
 import { CLECameraEngine } from './cle_camera.js';
 import { CLEToolLibrary } from './cle_tool_library.js';
 import { CLEBedVisualizer } from './cle_bed.js';
+import { CLEVellumBridge } from './cle_vellum.js';
 
 class CLEBridge {
   constructor() {
@@ -31,6 +32,7 @@ class CLEBridge {
     this.slicer = new CLESlicerEngine(this);
     this.toolLibrary = new CLEToolLibrary(this);
     this.bed = new CLEBedVisualizer(this);
+    this.vellum = new CLEVellumBridge(this);
 
     this.activeModal = null;
   }
@@ -189,7 +191,7 @@ class CLEBridge {
     const activeMach = this.vault.getActiveMachine();
     this.machineName = activeMach.name;
 
-    // 0. Return to Design Workspace (JumpStart CAD)
+    // 0. Return to Design Workspace & Vector Studio
     m("Design", "", [
       {
         id: "cle-r-return-design",
@@ -203,6 +205,16 @@ class CLEBridge {
           if (btn) btn.click();
           else if (window.app && window.app.setWorkspace) window.app.setWorkspace('design');
           this.notify('Returned to JumpStart Design CAD workspace.', 'info');
+        }
+      },
+      {
+        id: "cle-r-vellum",
+        label: "Vector Studio",
+        title: "Open Vellum Vector Studio (2D Vector Drawing, Box Maker, Laser Outlines)",
+        icon: "sketch",
+        cls: "accent",
+        fn: () => {
+          if (window.CLE && window.CLE.vellum) window.CLE.vellum.open();
         }
       }
     ]);

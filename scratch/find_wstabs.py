@@ -1,13 +1,8 @@
-with open('Dev/index.htm', 'r', encoding='utf-8') as f:
+with open('Dev/index.htm', 'r', encoding='utf-8', errors='ignore') as f:
     text = f.read()
 
-pos = 0
-while True:
-    pos = text.find('wstabs', pos)
-    if pos == -1:
-        break
-    print(f"Found wstabs at {pos}:")
-    print(text[max(0, pos-100):min(len(text), pos+300)])
-    print("-" * 50)
-    pos += 6
+idx1 = text.find('["cle","CLE"]')
+print('idx1:', idx1, repr(text[idx1-20:idx1+80]))
 
+idx2 = text.find('if(Vr==="cle")')
+print('idx2:', idx2, repr(text[idx2-20:idx2+120]))
