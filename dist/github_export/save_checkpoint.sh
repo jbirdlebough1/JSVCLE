@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# CLEJS Automated Checkpoint & Zero-Information-Loss Sync Script
+set -e
+
+if (pwd -W) >/dev/null 2>&1; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -W)"
+else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+PYTHON_BIN="python"
+if ! command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+fi
+
+COMMIT_MSG="${1:-Checkpoint $(date '+%Y-%m-%d %H:%M:%S')}"
+CONV_ID="${2:-c1c01b32-0294-42e0-a526-18f205e9d6d5}"
+
+# Locate Brain Directory across Windows Native, Git Bash, and WSL
+BRAIN_DIR=""
+if [ -n "$USERPROFILE" ] && [ -d "$USERPROFILE/.gemini/antigravity/brain/$CONV_ID/.system_generated/logs" ]; then
+    BRAIN_DIR="$USERPROFILE/.gemini/antigravity/brain/$CONV_ID/.system_generated/logs"
+elif [ -d "/mnt/c/Users/jclou/.gemini/antigravity/brain/$CONV_ID/.system_generated/logs" ]; then
+    BRAIN_DIR="/mnt/c/Users/jclou/.gemini/antigravity/brain/$CONV_ID/.system_generated/logs"
+elif [ -d "$HOME/.gemini/antigravity/brain/$CONV_ID/.system_generated/logs" ]; then
+    BRAIN_DIR="$HOME/.gemini/antigravity/brain/$CONV_ID/.system_generated/logs"
+fi
+
+SESSION_TARGET="$SCRIPT_DIR/sessions/$CONV_ID"
+mkdir -p "$SESSION_TARGET"
+
+# 1. Sync session transcripts
+if [ -n "$BRAIN_DIR" ] && [ -d "$BRAIN_DIR" ]; then
+    [ -f "$BRAIN_DIR/transcript.jsonl" ] && cp -f "$BRAIN_DIR/transcript.jsonl" "$SESSION_TARGET/"
+    [ -f "$BRAIN_DIR/transcript_full.jsonl" ] && cp -f "$BRAIN_DIR/transcript_full.jsonl" "$SESSION_TARGET/"
+    echo -e "\033[0;32m[CLEJS] Synced session transcripts from $BRAIN_DIR\033[0m"
+else
+    echo -e "\033[0;33m[CLEJS] Warning: Brain directory not found. Proceeding with commit.\033[0m"
+fi
+
+# 2. Update session metadata using python
+INFO_FILE="$SESSION_TARGET/session-info.json"
+if [ -f "$INFO_FILE" ]; then
+    $PYTHON_BIN -c "
+import json, datetime
+try:
+    with open(r'$INFO_FILE', 'r', encoding='utf-8') as f:
+        meta = json.load(f)
+    meta['last_checkpoint'] = datetime.datetime.now().isoformat()
+    meta['checkpoint_count'] = int(meta.get('checkpoint_count', 0)) + 1
+    with open(r'$INFO_FILE', 'w', encoding='utf-8') as f:
+        json.dump(meta, f, indent=2)
+except Exception as e:
+    print('Metadata update warning:', e)
+"
+fi
+
+# 3. Stage and commit
+cd "$SCRIPT_DIR"
+git add .
+if git status --porcelain | grep -q .; then
+    git commit -m "[Session $CONV_ID] $COMMIT_MSG"
+    echo -e "\033[0;36m[CLEJS] Successfully committed checkpoint: $COMMIT_MSG\033[0m"
+else
+    echo -e "\033[0;33m[CLEJS] Working tree clean, nothing to commit.\033[0m"
+fi

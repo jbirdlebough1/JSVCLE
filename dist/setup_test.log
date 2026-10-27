@@ -1,0 +1,468 @@
+﻿2026-10-27 13:45:07.387   Log opened. (Time zone: UTC-07:00)
+2026-10-27 13:45:07.387   Setup version: Inno Setup version 6.7.3
+2026-10-27 13:45:07.387   Original Setup EXE: D:\CLEJS\dist\JSVCLE_Experimental_v01.00.66.exe
+2026-10-27 13:45:07.387   Setup command line: /SL5="$970916,19110354,893952,D:\CLEJS\dist\JSVCLE_Experimental_v01.00.66.exe" /DIR="D:\CLEJS\test_install_sandbox" /CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG="D:\CLEJS\dist\setup_test.log" 
+2026-10-27 13:45:07.387   Windows version: 10.0.26300
+2026-10-27 13:45:07.387   Windows architecture: x64 (64-bit)
+2026-10-27 13:45:07.387   Machine types supported by system: x86 x64
+2026-10-27 13:45:07.387   User privileges: None
+2026-10-27 13:45:07.387   Administrative install mode: No
+2026-10-27 13:45:07.387   Install mode root key: HKEY_CURRENT_USER
+2026-10-27 13:45:07.387   64-bit install mode: Yes
+2026-10-27 13:45:07.387   RedirectionGuard status for current process: Enabled in enforcing mode
+2026-10-27 13:45:07.387   Created temporary directory: C:\Users\jclou\AppData\Local\Temp\is-6A9WBXM88E.tmp
+2026-10-27 13:45:07.471   Found 10 files to register with RestartManager.
+2026-10-27 13:45:07.471   Calling RestartManager's RmGetList.
+2026-10-27 13:45:07.471   RmGetList finished successfully.
+2026-10-27 13:45:07.471   RestartManager found no applications using one of our files.
+2026-10-27 13:45:07.484   Starting the installation process.
+2026-10-27 13:45:07.485   Creating directory: D:\CLEJS\test_install_sandbox
+2026-10-27 13:45:07.531   Setting permissions on directory: D:\CLEJS\test_install_sandbox
+2026-10-27 13:45:07.534   Creating directory: D:\CLEJS\test_install_sandbox\Dev
+2026-10-27 13:45:07.588   Setting permissions on directory: D:\CLEJS\test_install_sandbox\Dev
+2026-10-27 13:45:07.588   Creating directory: D:\CLEJS\test_install_sandbox\Vellum
+2026-10-27 13:45:07.638   Setting permissions on directory: D:\CLEJS\test_install_sandbox\Vellum
+2026-10-27 13:45:07.638   Creating directory: D:\CLEJS\test_install_sandbox\tools
+2026-10-27 13:45:07.670   Setting permissions on directory: D:\CLEJS\test_install_sandbox\tools
+2026-10-27 13:45:07.670   Creating directory: D:\CLEJS\test_install_sandbox\vault
+2026-10-27 13:45:07.721   Setting permissions on directory: D:\CLEJS\test_install_sandbox\vault
+2026-10-27 13:45:07.734   Creating directory: D:\CLEJS\test_install_sandbox\dist
+2026-10-27 13:45:07.851   Setting permissions on directory: D:\CLEJS\test_install_sandbox\dist
+2026-10-27 13:45:07.855   Creating directory: D:\CLEJS\test_install_sandbox\Dev\slicer
+2026-10-27 13:45:07.970   Creating directory: D:\CLEJS\test_install_sandbox\vault\projects
+2026-10-27 13:45:08.016   Creating directory: D:\CLEJS\test_install_sandbox\vault\profiles
+2026-10-27 13:45:08.071   Creating directory: D:\CLEJS\test_install_sandbox\vault\machines
+2026-10-27 13:45:08.120   Directory for uninstall files: D:\CLEJS\test_install_sandbox
+2026-10-27 13:45:08.120   Creating new uninstall log: D:\CLEJS\test_install_sandbox\unins000.dat
+2026-10-27 13:45:08.125   -- File entry --
+2026-10-27 13:45:08.125   Dest filename: D:\CLEJS\test_install_sandbox\unins000.exe
+2026-10-27 13:45:08.125   Non-default bitness: 32-bit
+2026-10-27 13:45:08.132   Time stamp of our file: 2026-10-27 13:45:07.220
+2026-10-27 13:45:08.132   Installing the file.
+2026-10-27 13:45:08.284   Successfully installed the file.
+2026-10-27 13:45:08.285   -- File entry --
+2026-10-27 13:45:08.285   Dest filename: D:\CLEJS\test_install_sandbox\Dev\index.htm
+2026-10-27 13:45:08.285   Time stamp of our file: 2026-10-26 21:04:46.000
+2026-10-27 13:45:08.285   Installing the file.
+2026-10-27 13:45:09.321   Successfully installed the file.
+2026-10-27 13:45:09.321   -- File entry --
+2026-10-27 13:45:09.321   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_bed.js
+2026-10-27 13:45:09.321   Time stamp of our file: 2026-10-26 22:06:32.000
+2026-10-27 13:45:09.321   Installing the file.
+2026-10-27 13:45:09.321   Creating directory: D:\CLEJS\test_install_sandbox\Dev\cle_tools
+2026-10-27 13:45:09.387   Successfully installed the file.
+2026-10-27 13:45:09.387   -- File entry --
+2026-10-27 13:45:09.387   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_boot.js
+2026-10-27 13:45:09.387   Time stamp of our file: 2026-10-26 22:07:36.000
+2026-10-27 13:45:09.387   Installing the file.
+2026-10-27 13:45:09.404   Successfully installed the file.
+2026-10-27 13:45:09.404   -- File entry --
+2026-10-27 13:45:09.404   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_bundle.js
+2026-10-27 13:45:09.404   Time stamp of our file: 2026-10-27 13:43:20.000
+2026-10-27 13:45:09.404   Installing the file.
+2026-10-27 13:45:09.445   Successfully installed the file.
+2026-10-27 13:45:09.445   -- File entry --
+2026-10-27 13:45:09.445   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_calibration.js
+2026-10-27 13:45:09.445   Time stamp of our file: 2026-10-26 17:04:06.000
+2026-10-27 13:45:09.445   Installing the file.
+2026-10-27 13:45:09.513   Successfully installed the file.
+2026-10-27 13:45:09.513   -- File entry --
+2026-10-27 13:45:09.513   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_camera.js
+2026-10-27 13:45:09.513   Time stamp of our file: 2026-10-25 20:33:20.000
+2026-10-27 13:45:09.513   Installing the file.
+2026-10-27 13:45:09.536   Successfully installed the file.
+2026-10-27 13:45:09.536   -- File entry --
+2026-10-27 13:45:09.537   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_fluidnc.js
+2026-10-27 13:45:09.537   Time stamp of our file: 2026-10-26 11:02:30.000
+2026-10-27 13:45:09.537   Installing the file.
+2026-10-27 13:45:09.551   Successfully installed the file.
+2026-10-27 13:45:09.551   -- File entry --
+2026-10-27 13:45:09.551   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_gamepad.js
+2026-10-27 13:45:09.551   Time stamp of our file: 2026-10-25 19:47:56.000
+2026-10-27 13:45:09.551   Installing the file.
+2026-10-27 13:45:09.614   Successfully installed the file.
+2026-10-27 13:45:09.614   -- File entry --
+2026-10-27 13:45:09.614   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_recovery.js
+2026-10-27 13:45:09.614   Time stamp of our file: 2026-10-25 16:07:16.000
+2026-10-27 13:45:09.614   Installing the file.
+2026-10-27 13:45:09.655   Successfully installed the file.
+2026-10-27 13:45:09.655   -- File entry --
+2026-10-27 13:45:09.655   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_rotary.js
+2026-10-27 13:45:09.655   Time stamp of our file: 2026-10-26 16:30:34.000
+2026-10-27 13:45:09.655   Installing the file.
+2026-10-27 13:45:09.688   Successfully installed the file.
+2026-10-27 13:45:09.688   -- File entry --
+2026-10-27 13:45:09.688   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_slicer.js
+2026-10-27 13:45:09.688   Time stamp of our file: 2026-10-26 22:07:04.000
+2026-10-27 13:45:09.688   Installing the file.
+2026-10-27 13:45:09.722   Successfully installed the file.
+2026-10-27 13:45:09.722   -- File entry --
+2026-10-27 13:45:09.722   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_test.js
+2026-10-27 13:45:09.722   Time stamp of our file: 2026-10-24 22:42:30.000
+2026-10-27 13:45:09.722   Installing the file.
+2026-10-27 13:45:09.737   Successfully installed the file.
+2026-10-27 13:45:09.737   -- File entry --
+2026-10-27 13:45:09.737   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_theme.css
+2026-10-27 13:45:09.737   Time stamp of our file: 2026-10-25 11:57:40.000
+2026-10-27 13:45:09.737   Installing the file.
+2026-10-27 13:45:09.778   Successfully installed the file.
+2026-10-27 13:45:09.778   -- File entry --
+2026-10-27 13:45:09.778   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_tool_library.js
+2026-10-27 13:45:09.778   Time stamp of our file: 2026-10-25 11:38:48.000
+2026-10-27 13:45:09.778   Installing the file.
+2026-10-27 13:45:09.821   Successfully installed the file.
+2026-10-27 13:45:09.821   -- File entry --
+2026-10-27 13:45:09.821   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_vault.js
+2026-10-27 13:45:09.821   Time stamp of our file: 2026-10-26 10:58:28.000
+2026-10-27 13:45:09.821   Installing the file.
+2026-10-27 13:45:09.854   Successfully installed the file.
+2026-10-27 13:45:09.854   -- File entry --
+2026-10-27 13:45:09.854   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\cle_vellum.js
+2026-10-27 13:45:09.854   Time stamp of our file: 2026-10-26 21:04:46.000
+2026-10-27 13:45:09.854   Installing the file.
+2026-10-27 13:45:09.871   Successfully installed the file.
+2026-10-27 13:45:09.871   -- File entry --
+2026-10-27 13:45:09.871   Dest filename: D:\CLEJS\test_install_sandbox\Dev\cle_tools\three.min.js
+2026-10-27 13:45:09.871   Time stamp of our file: 2026-10-25 15:15:14.000
+2026-10-27 13:45:09.871   Installing the file.
+2026-10-27 13:45:09.922   Successfully installed the file.
+2026-10-27 13:45:09.922   -- File entry --
+2026-10-27 13:45:09.922   Dest filename: D:\CLEJS\test_install_sandbox\Vellum\index.htm
+2026-10-27 13:45:09.922   Time stamp of our file: 2026-10-26 21:00:16.000
+2026-10-27 13:45:09.922   Installing the file.
+2026-10-27 13:45:10.053   Successfully installed the file.
+2026-10-27 13:45:10.053   -- File entry --
+2026-10-27 13:45:10.053   Dest filename: D:\CLEJS\test_install_sandbox\tools\bundle_cle.py
+2026-10-27 13:45:10.053   Time stamp of our file: 2026-10-26 19:42:18.000
+2026-10-27 13:45:10.053   Installing the file.
+2026-10-27 13:45:10.070   Successfully installed the file.
+2026-10-27 13:45:10.070   -- File entry --
+2026-10-27 13:45:10.070   Dest filename: D:\CLEJS\test_install_sandbox\tools\CLE_server.py
+2026-10-27 13:45:10.070   Time stamp of our file: 2026-10-25 19:04:28.000
+2026-10-27 13:45:10.070   Installing the file.
+2026-10-27 13:45:10.084   Successfully installed the file.
+2026-10-27 13:45:10.084   -- File entry --
+2026-10-27 13:45:10.084   Dest filename: D:\CLEJS\test_install_sandbox\tools\find_pan.py
+2026-10-27 13:45:10.084   Time stamp of our file: 2026-10-25 11:13:16.000
+2026-10-27 13:45:10.084   Installing the file.
+2026-10-27 13:45:10.094   Successfully installed the file.
+2026-10-27 13:45:10.094   -- File entry --
+2026-10-27 13:45:10.094   Dest filename: D:\CLEJS\test_install_sandbox\tools\inspect_browser.py
+2026-10-27 13:45:10.094   Time stamp of our file: 2026-10-25 15:15:14.000
+2026-10-27 13:45:10.094   Installing the file.
+2026-10-27 13:45:10.134   Successfully installed the file.
+2026-10-27 13:45:10.135   -- File entry --
+2026-10-27 13:45:10.135   Dest filename: D:\CLEJS\test_install_sandbox\tools\inspect_page_runtime.py
+2026-10-27 13:45:10.135   Time stamp of our file: 2026-10-25 17:11:22.000
+2026-10-27 13:45:10.135   Installing the file.
+2026-10-27 13:45:10.138   Successfully installed the file.
+2026-10-27 13:45:10.138   -- File entry --
+2026-10-27 13:45:10.138   Dest filename: D:\CLEJS\test_install_sandbox\tools\server.log
+2026-10-27 13:45:10.138   Time stamp of our file: 2026-10-25 09:37:26.000
+2026-10-27 13:45:10.138   Installing the file.
+2026-10-27 13:45:10.138   Successfully installed the file.
+2026-10-27 13:45:10.138   -- File entry --
+2026-10-27 13:45:10.148   Dest filename: D:\CLEJS\test_install_sandbox\tools\server_test.log
+2026-10-27 13:45:10.148   Time stamp of our file: 2026-10-26 22:07:48.000
+2026-10-27 13:45:10.148   Installing the file.
+2026-10-27 13:45:10.156   Successfully installed the file.
+2026-10-27 13:45:10.156   -- File entry --
+2026-10-27 13:45:10.156   Dest filename: D:\CLEJS\test_install_sandbox\tools\test_build.sh
+2026-10-27 13:45:10.156   Time stamp of our file: 2026-10-25 14:20:12.000
+2026-10-27 13:45:10.156   Installing the file.
+2026-10-27 13:45:10.168   Successfully installed the file.
+2026-10-27 13:45:10.168   -- File entry --
+2026-10-27 13:45:10.169   Dest filename: D:\CLEJS\test_install_sandbox\tools\test_runtime.js
+2026-10-27 13:45:10.169   Time stamp of our file: 2026-10-25 14:23:28.000
+2026-10-27 13:45:10.169   Installing the file.
+2026-10-27 13:45:10.213   Successfully installed the file.
+2026-10-27 13:45:10.213   -- File entry --
+2026-10-27 13:45:10.214   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\libcrypto-3.dll
+2026-10-27 13:45:10.214   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:10.214   Installing the file.
+2026-10-27 13:45:10.214   Creating directory: D:\CLEJS\test_install_sandbox\tools\python_runtime
+2026-10-27 13:45:10.455   Successfully installed the file.
+2026-10-27 13:45:10.455   -- File entry --
+2026-10-27 13:45:10.455   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\libffi-8.dll
+2026-10-27 13:45:10.455   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:10.455   Installing the file.
+2026-10-27 13:45:10.488   Successfully installed the file.
+2026-10-27 13:45:10.488   -- File entry --
+2026-10-27 13:45:10.488   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\libssl-3.dll
+2026-10-27 13:45:10.488   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:10.488   Installing the file.
+2026-10-27 13:45:10.531   Successfully installed the file.
+2026-10-27 13:45:10.531   -- File entry --
+2026-10-27 13:45:10.531   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\LICENSE.txt
+2026-10-27 13:45:10.531   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:10.531   Installing the file.
+2026-10-27 13:45:10.548   Successfully installed the file.
+2026-10-27 13:45:10.548   -- File entry --
+2026-10-27 13:45:10.548   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\pyexpat.pyd
+2026-10-27 13:45:10.549   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:10.549   Installing the file.
+2026-10-27 13:45:10.619   Successfully installed the file.
+2026-10-27 13:45:10.619   -- File entry --
+2026-10-27 13:45:10.620   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\python.cat
+2026-10-27 13:45:10.620   Time stamp of our file: 2026-10-27 13:42:46.000
+2026-10-27 13:45:10.620   Installing the file.
+2026-10-27 13:45:10.701   Successfully installed the file.
+2026-10-27 13:45:10.701   -- File entry --
+2026-10-27 13:45:10.701   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\python.exe
+2026-10-27 13:45:10.701   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:10.701   Installing the file.
+2026-10-27 13:45:10.753   Successfully installed the file.
+2026-10-27 13:45:10.753   -- File entry --
+2026-10-27 13:45:10.753   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\python3.dll
+2026-10-27 13:45:10.754   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:10.754   Installing the file.
+2026-10-27 13:45:10.787   Successfully installed the file.
+2026-10-27 13:45:10.787   -- File entry --
+2026-10-27 13:45:10.787   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\python311.dll
+2026-10-27 13:45:10.787   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:10.787   Installing the file.
+2026-10-27 13:45:10.985   Successfully installed the file.
+2026-10-27 13:45:10.985   -- File entry --
+2026-10-27 13:45:10.985   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\python311.zip
+2026-10-27 13:45:10.985   Time stamp of our file: 2026-10-27 13:42:46.000
+2026-10-27 13:45:10.985   Installing the file.
+2026-10-27 13:45:11.064   Successfully installed the file.
+2026-10-27 13:45:11.064   -- File entry --
+2026-10-27 13:45:11.064   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\python311._pth
+2026-10-27 13:45:11.064   Time stamp of our file: 2026-10-27 13:42:46.000
+2026-10-27 13:45:11.064   Installing the file.
+2026-10-27 13:45:11.070   Successfully installed the file.
+2026-10-27 13:45:11.070   -- File entry --
+2026-10-27 13:45:11.073   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\pythonw.exe
+2026-10-27 13:45:11.073   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.073   Installing the file.
+2026-10-27 13:45:11.105   Successfully installed the file.
+2026-10-27 13:45:11.105   -- File entry --
+2026-10-27 13:45:11.105   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\select.pyd
+2026-10-27 13:45:11.105   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.105   Installing the file.
+2026-10-27 13:45:11.130   Successfully installed the file.
+2026-10-27 13:45:11.130   -- File entry --
+2026-10-27 13:45:11.130   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\sqlite3.dll
+2026-10-27 13:45:11.130   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.130   Installing the file.
+2026-10-27 13:45:11.203   Successfully installed the file.
+2026-10-27 13:45:11.203   -- File entry --
+2026-10-27 13:45:11.203   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\unicodedata.pyd
+2026-10-27 13:45:11.204   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.204   Installing the file.
+2026-10-27 13:45:11.253   Successfully installed the file.
+2026-10-27 13:45:11.254   -- File entry --
+2026-10-27 13:45:11.254   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\vcruntime140.dll
+2026-10-27 13:45:11.254   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.254   Installing the file.
+2026-10-27 13:45:11.288   Successfully installed the file.
+2026-10-27 13:45:11.288   -- File entry --
+2026-10-27 13:45:11.288   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\vcruntime140_1.dll
+2026-10-27 13:45:11.288   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.288   Installing the file.
+2026-10-27 13:45:11.321   Successfully installed the file.
+2026-10-27 13:45:11.321   -- File entry --
+2026-10-27 13:45:11.321   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\winsound.pyd
+2026-10-27 13:45:11.321   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.321   Installing the file.
+2026-10-27 13:45:11.344   Successfully installed the file.
+2026-10-27 13:45:11.344   -- File entry --
+2026-10-27 13:45:11.344   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_asyncio.pyd
+2026-10-27 13:45:11.344   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.344   Installing the file.
+2026-10-27 13:45:11.354   Successfully installed the file.
+2026-10-27 13:45:11.354   -- File entry --
+2026-10-27 13:45:11.354   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_bz2.pyd
+2026-10-27 13:45:11.354   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.354   Installing the file.
+2026-10-27 13:45:11.387   Successfully installed the file.
+2026-10-27 13:45:11.387   -- File entry --
+2026-10-27 13:45:11.387   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_ctypes.pyd
+2026-10-27 13:45:11.387   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.387   Installing the file.
+2026-10-27 13:45:11.421   Successfully installed the file.
+2026-10-27 13:45:11.421   -- File entry --
+2026-10-27 13:45:11.421   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_decimal.pyd
+2026-10-27 13:45:11.421   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.421   Installing the file.
+2026-10-27 13:45:11.468   Successfully installed the file.
+2026-10-27 13:45:11.468   -- File entry --
+2026-10-27 13:45:11.469   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_elementtree.pyd
+2026-10-27 13:45:11.469   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.469   Installing the file.
+2026-10-27 13:45:11.488   Successfully installed the file.
+2026-10-27 13:45:11.488   -- File entry --
+2026-10-27 13:45:11.488   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_hashlib.pyd
+2026-10-27 13:45:11.488   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.488   Installing the file.
+2026-10-27 13:45:11.488   Successfully installed the file.
+2026-10-27 13:45:11.488   -- File entry --
+2026-10-27 13:45:11.488   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_lzma.pyd
+2026-10-27 13:45:11.488   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.488   Installing the file.
+2026-10-27 13:45:11.520   Successfully installed the file.
+2026-10-27 13:45:11.520   -- File entry --
+2026-10-27 13:45:11.520   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_msi.pyd
+2026-10-27 13:45:11.520   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.520   Installing the file.
+2026-10-27 13:45:11.537   Successfully installed the file.
+2026-10-27 13:45:11.537   -- File entry --
+2026-10-27 13:45:11.537   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_multiprocessing.pyd
+2026-10-27 13:45:11.537   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.537   Installing the file.
+2026-10-27 13:45:11.571   Successfully installed the file.
+2026-10-27 13:45:11.571   -- File entry --
+2026-10-27 13:45:11.571   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_overlapped.pyd
+2026-10-27 13:45:11.571   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.571   Installing the file.
+2026-10-27 13:45:11.604   Successfully installed the file.
+2026-10-27 13:45:11.604   -- File entry --
+2026-10-27 13:45:11.604   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_queue.pyd
+2026-10-27 13:45:11.604   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.604   Installing the file.
+2026-10-27 13:45:11.638   Successfully installed the file.
+2026-10-27 13:45:11.638   -- File entry --
+2026-10-27 13:45:11.638   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_socket.pyd
+2026-10-27 13:45:11.638   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.638   Installing the file.
+2026-10-27 13:45:11.672   Successfully installed the file.
+2026-10-27 13:45:11.672   -- File entry --
+2026-10-27 13:45:11.672   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_sqlite3.pyd
+2026-10-27 13:45:11.672   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.672   Installing the file.
+2026-10-27 13:45:11.706   Successfully installed the file.
+2026-10-27 13:45:11.707   -- File entry --
+2026-10-27 13:45:11.707   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_ssl.pyd
+2026-10-27 13:45:11.707   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.707   Installing the file.
+2026-10-27 13:45:11.737   Successfully installed the file.
+2026-10-27 13:45:11.737   -- File entry --
+2026-10-27 13:45:11.737   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_uuid.pyd
+2026-10-27 13:45:11.737   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.737   Installing the file.
+2026-10-27 13:45:11.770   Successfully installed the file.
+2026-10-27 13:45:11.770   -- File entry --
+2026-10-27 13:45:11.770   Dest filename: D:\CLEJS\test_install_sandbox\tools\python_runtime\_zoneinfo.pyd
+2026-10-27 13:45:11.770   Time stamp of our file: 2026-10-27 13:42:44.000
+2026-10-27 13:45:11.770   Installing the file.
+2026-10-27 13:45:11.804   Successfully installed the file.
+2026-10-27 13:45:11.804   -- File entry --
+2026-10-27 13:45:11.804   Dest filename: D:\CLEJS\test_install_sandbox\tools\__pycache__\CLE_server.cpython-311.pyc
+2026-10-27 13:45:11.804   Time stamp of our file: 2026-10-24 22:39:58.000
+2026-10-27 13:45:11.804   Installing the file.
+2026-10-27 13:45:11.804   Creating directory: D:\CLEJS\test_install_sandbox\tools\__pycache__
+2026-10-27 13:45:11.902   Successfully installed the file.
+2026-10-27 13:45:11.902   -- File entry --
+2026-10-27 13:45:11.902   Dest filename: D:\CLEJS\test_install_sandbox\vault\vault_data.json
+2026-10-27 13:45:11.902   Time stamp of our file: 2026-10-26 22:07:48.000
+2026-10-27 13:45:11.902   Installing the file.
+2026-10-27 13:45:11.906   Successfully installed the file.
+2026-10-27 13:45:11.906   -- File entry --
+2026-10-27 13:45:11.906   Dest filename: D:\CLEJS\test_install_sandbox\JSoriginal\index.htm
+2026-10-27 13:45:11.906   Time stamp of our file: 2026-10-26 08:01:40.000
+2026-10-27 13:45:11.906   Installing the file.
+2026-10-27 13:45:11.906   Creating directory: D:\CLEJS\test_install_sandbox\JSoriginal
+2026-10-27 13:45:12.686   Successfully installed the file.
+2026-10-27 13:45:12.686   -- File entry --
+2026-10-27 13:45:12.687   Dest filename: D:\CLEJS\test_install_sandbox\VVSource\index.htm
+2026-10-27 13:45:12.687   Time stamp of our file: 2026-10-26 19:36:20.000
+2026-10-27 13:45:12.687   Installing the file.
+2026-10-27 13:45:12.687   Creating directory: D:\CLEJS\test_install_sandbox\VVSource
+2026-10-27 13:45:12.846   Successfully installed the file.
+2026-10-27 13:45:12.846   -- File entry --
+2026-10-27 13:45:12.846   Dest filename: D:\CLEJS\test_install_sandbox\cle_start.bat
+2026-10-27 13:45:12.846   Time stamp of our file: 2026-10-27 13:43:16.000
+2026-10-27 13:45:12.846   Installing the file.
+2026-10-27 13:45:12.852   Successfully installed the file.
+2026-10-27 13:45:12.852   -- File entry --
+2026-10-27 13:45:12.852   Dest filename: D:\CLEJS\test_install_sandbox\cle_server_start.bat
+2026-10-27 13:45:12.852   Time stamp of our file: 2026-10-27 13:43:08.000
+2026-10-27 13:45:12.852   Installing the file.
+2026-10-27 13:45:12.854   Successfully installed the file.
+2026-10-27 13:45:12.854   -- File entry --
+2026-10-27 13:45:12.854   Dest filename: D:\CLEJS\test_install_sandbox\vellum_start.bat
+2026-10-27 13:45:12.854   Time stamp of our file: 2026-10-27 13:43:12.000
+2026-10-27 13:45:12.854   Installing the file.
+2026-10-27 13:45:12.854   Successfully installed the file.
+2026-10-27 13:45:12.854   -- File entry --
+2026-10-27 13:45:12.854   Dest filename: D:\CLEJS\test_install_sandbox\update_jumpstart.sh
+2026-10-27 13:45:12.854   Time stamp of our file: 2026-10-26 19:56:12.000
+2026-10-27 13:45:12.854   Installing the file.
+2026-10-27 13:45:12.869   Successfully installed the file.
+2026-10-27 13:45:12.870   -- File entry --
+2026-10-27 13:45:12.870   Dest filename: D:\CLEJS\test_install_sandbox\README.md
+2026-10-27 13:45:12.870   Time stamp of our file: 2026-10-25 09:32:30.000
+2026-10-27 13:45:12.870   Installing the file.
+2026-10-27 13:45:12.915   Successfully installed the file.
+2026-10-27 13:45:12.915   -- File entry --
+2026-10-27 13:45:12.915   Dest filename: D:\CLEJS\test_install_sandbox\PROJECT_STATUS.md
+2026-10-27 13:45:12.915   Time stamp of our file: 2026-10-25 13:47:00.000
+2026-10-27 13:45:12.915   Installing the file.
+2026-10-27 13:45:12.927   Successfully installed the file.
+2026-10-27 13:45:12.927   -- Icon entry --
+2026-10-27 13:45:12.927   Dest filename: C:\Users\Public\Desktop\JSVCLE Studio.lnk
+2026-10-27 13:45:12.927   Creating the icon.
+2026-10-27 13:45:12.952   Exception message:
+2026-10-27 13:45:12.952   Defaulting to OK for suppressed message box (OK):
+                          IPersistFile::Save failed; code 0x80070005.
+                          Access is denied.
+2026-10-27 13:45:12.952   -- Icon entry --
+2026-10-27 13:45:12.952   Dest filename: C:\Users\Public\Desktop\Vellum Vector Studio.lnk
+2026-10-27 13:45:12.952   Creating the icon.
+2026-10-27 13:45:12.953   Exception message:
+2026-10-27 13:45:12.953   Defaulting to OK for suppressed message box (OK):
+                          IPersistFile::Save failed; code 0x80070005.
+                          Access is denied.
+2026-10-27 13:45:12.953   -- Icon entry --
+2026-10-27 13:45:12.954   Dest filename: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio\JSVCLE Studio.lnk
+2026-10-27 13:45:12.954   Creating directory: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio
+2026-10-27 13:45:12.954   Exception message:
+2026-10-27 13:45:12.954   Defaulting to OK for suppressed message box (OK):
+                          Setup was unable to create the directory "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio".
+                          
+                          Error 5: Access is denied.
+2026-10-27 13:45:12.954   -- Icon entry --
+2026-10-27 13:45:12.954   Dest filename: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio\Vellum Vector Studio.lnk
+2026-10-27 13:45:12.954   Creating directory: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio
+2026-10-27 13:45:12.954   Exception message:
+2026-10-27 13:45:12.954   Defaulting to OK for suppressed message box (OK):
+                          Setup was unable to create the directory "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio".
+                          
+                          Error 5: Access is denied.
+2026-10-27 13:45:12.954   -- Icon entry --
+2026-10-27 13:45:12.954   Dest filename: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio\CLE Server (Background).lnk
+2026-10-27 13:45:12.954   Creating directory: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio
+2026-10-27 13:45:12.954   Exception message:
+2026-10-27 13:45:12.954   Defaulting to OK for suppressed message box (OK):
+                          Setup was unable to create the directory "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio".
+                          
+                          Error 5: Access is denied.
+2026-10-27 13:45:12.954   -- Icon entry --
+2026-10-27 13:45:12.954   Dest filename: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio\Uninstall JSVCLE Studio.lnk
+2026-10-27 13:45:12.954   Creating directory: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio
+2026-10-27 13:45:12.954   Exception message:
+2026-10-27 13:45:12.954   Defaulting to OK for suppressed message box (OK):
+                          Setup was unable to create the directory "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\JSVCLE Studio".
+                          
+                          Error 5: Access is denied.
+2026-10-27 13:45:12.954   -- Icon entry --
+2026-10-27 13:45:12.954   Dest filename: C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\CLE_Server.lnk
+2026-10-27 13:45:12.954   Creating the icon.
+2026-10-27 13:45:12.954   Exception message:
+2026-10-27 13:45:12.954   Defaulting to OK for suppressed message box (OK):
+                          IPersistFile::Save failed; code 0x80070005.
+                          Access is denied.
+2026-10-27 13:45:12.954   Saving uninstall information.
+2026-10-27 13:45:12.954   Creating new uninstall key: HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Uninstall\{D86B9140-54EA-4B77-9E45-8B296AE27B50}_is1
+2026-10-27 13:45:12.954   Writing uninstall key values.
+2026-10-27 13:45:12.954   Detected previous administrative 64-bit install? No
+2026-10-27 13:45:12.954   Detected previous administrative 32-bit install? No
+2026-10-27 13:45:12.971   Installation process succeeded.
+2026-10-27 13:45:12.972   -- Run entry --
+2026-10-27 13:45:12.972   Run as: Current user
+2026-10-27 13:45:12.972   Type: Exec
+2026-10-27 13:45:12.972   Filename: D:\CLEJS\test_install_sandbox\cle_server_start.bat
+2026-10-27 13:45:12.978   Need to restart Windows? No
+2026-10-27 13:45:12.978   Deinitializing Setup.
+2026-10-27 13:45:12.987   Log closed.

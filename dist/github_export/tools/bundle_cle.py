@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+import os
+import sys
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+repo_root = os.path.abspath(os.path.join(script_dir, '..'))
+cle_tools_dir = os.path.join(repo_root, 'Dev', 'cle_tools')
+
+files = [
+    'cle_camera.js',
+    'cle_gamepad.js',
+    'cle_fluidnc.js',
+    'cle_rotary.js',
+    'cle_calibration.js',
+    'cle_vault.js',
+    'cle_test.js',
+    'cle_recovery.js',
+    'cle_slicer.js',
+    'cle_tool_library.js',
+    'cle_bed.js',
+    'cle_vellum.js',
+    'cle_boot.js'
+]
+
+combined_code = [
+    "/* CLEJS Unified Bundle (Non-ES Module for direct file:// Chrome compatibility) */\n(function(){\n'use strict';\n",
+    "if (typeof THREE !== 'undefined' && THREE.Object3D) {\n"
+    "  if (!THREE.Object3D.prototype.removeFromParent) {\n"
+    "    THREE.Object3D.prototype.removeFromParent = function() { if (this.parent) this.parent.remove(this); return this; };\n"
+    "  }\n"
+    "}\n"
+]
+
+for fname in files:
+    fpath = os.path.join(cle_tools_dir, fname)
+    with open(fpath, 'r', encoding='utf-8') as f:
+        content = f.read()
+    # Strip imports and exports
+    lines = []
+    for line in content.splitlines():
+        if line.strip().startswith('import '):
+            continue
+        if line.strip().startswith('export class '):
+            line = line.replace('export class ', 'class ')
+        elif line.strip().startswith('export const '):
+            line = line.replace('export const ', 'const ')
+        elif line.strip().startswith('export function '):
+            line = line.replace('export function ', 'function ')
+        elif line.strip().startswith('export {'):
+            continue
+        lines.append(line)
+    combined_code.append(f"/* --- Module: {fname} --- */\n" + "\n".join(lines) + "\n")
+
+combined_code.append("\n})();\n")
+
+bundle_path = os.path.join(cle_tools_dir, 'cle_bundle.js')
+with open(bundle_path, 'w', encoding='utf-8') as f:
+    f.write("\n".join(combined_code))
+
+print(f"Created bundle: {bundle_path} ({os.path.getsize(bundle_path)} bytes)")
+
+# Auto-validate bundle syntax and execution with Node.js
+import subprocess
+try:
+    res = subprocess.run(['node', os.path.join(script_dir, 'test_runtime.js')], capture_output=True, text=True, check=True)
+    print("Bundle runtime validation: PASSED")
+except Exception as e:
+    print(f"Bundle runtime validation: FAILED ({e})")
+    sys.exit(1)
+
