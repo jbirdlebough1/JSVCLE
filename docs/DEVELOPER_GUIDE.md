@@ -11,7 +11,7 @@ JSVCLE Studio is a modular digital fabrication platform combining three core run
 1. **JumpStart 3D CAD Core (`Dev/index.htm`)**: An in-browser Boundary Representation (B-Rep) parametric solid modeling engine built on Three.js and custom geometric kernel primitives.
 2. **Vellum Vector Studio (`Vellum/index.htm`)**: A standalone 2D parametric vector editor, SVG engine, and laser path generator running within an isolated or modal iframe context.
 3. **Continuous Layer Extension (CLE) (`Dev/cle_tools/`)**: A modular suite of ES6 classes mounted directly into JumpStart's runtime lifecycle to provide CNC/laser toolpath slicing, physical machine envelope simulation, 4th axis rotary modeling, dual-mode gamepad control, hardware telemetry, and job recovery.
-4. **Local Hardware & Git Vault Service (`tools/CLE_server.py`)**: A zero-dependency Python 3 HTTP daemon listening on `127.0.0.1:8765` providing MEAGCLE Git snapshotting, controller profile persistence, and PrusaSlicer CLI execution fallback.
+4. **Local Hardware & Git Vault Service (`tools/CLE_server.py`)**: A zero-dependency Python 3 HTTP daemon listening on `127.0.0.1:8765` providing CLE Git snapshotting, controller profile persistence, and PrusaSlicer CLI execution fallback.
 
 ```mermaid
 flowchart TD
@@ -26,7 +26,7 @@ flowchart TD
             FluidNC["cle_fluidnc.js\n(WebSerial & WebSocket Client)"]
             Rotary["cle_rotary.js\n(4th Axis A-Chuck & Lathe Sim)"]
             Gamepad["cle_gamepad.js\n(Dual-Mode Gamepad Engine)"]
-            VaultFE["cle_vault.js\n(Design Vault Client)"]
+            VaultFE["cle_vault.js\n(CLE Design Vault Client)"]
             Recovery["cle_recovery.js\n(Crash Resume Engine)"]
             VellumBridge["cle_vellum.js\n(Cross-Frame Bridge)"]
             Cam["cle_camera.js\n(Optical Alignment)"]
@@ -52,13 +52,55 @@ flowchart TD
     end
 
     subgraph HardwareCNC["Physical Machine Controller"]
-        FluidNCHW["FluidNC Controller / GRBL ESP32\n(TwoTrees TTC6050 / TTC450)"]
+        FluidNCHW["FluidNC CNC / Laser Controller\n(FluidNC ESP32 Motion Controller)"]
     end
 
     VellumBridge <-->|Window PostMessage Protocol| VellumCore
     FluidNC <-->|WebSerial USB (115200 baud) or WebSocket| FluidNCHW
     VaultFE <-->|HTTP REST /api/vault/*| Server
     Slicer <-->|HTTP REST /api/slice/prusa| Server
+```
+
+---
+
+### 1.2 Repository Structure & Component Hierarchy
+
+```mermaid
+graph TD
+    Root["D:\\CLEJS (Repository Root)"]
+
+    subgraph AppLayers["Application Layers"]
+        Dev["Dev/\n(JumpStart 3D + CLE Extension)"]
+        Vellum["Vellum/\n(Vellum Vector Studio 2D)"]
+        Tools["tools/\n(Python Server, Build Scripts, Runtime)"]
+        Vault["vault/\n(Local Git Repos, Profiles, Machines)"]
+        Installer["installer/\n(Inno Setup Packaging)"]
+        Docs["docs/\n(User & Developer Guides)"]
+    end
+
+    subgraph DevComponents["Dev Subsystems (Dev/cle_tools/)"]
+        D1["cle_boot.js (Master Singleton)"]
+        D2["cle_bed.js (Spoilboard & Rulers)"]
+        D3["cle_slicer.js (CAM & Relief Engine)"]
+        D4["cle_fluidnc.js (Hardware Comms)"]
+        D5["cle_rotary.js (4th Axis Rotary)"]
+        D6["cle_gamepad.js (Dual-Mode Gamepad)"]
+        D7["cle_vault.js (CLE Git Client)"]
+        D8["cle_recovery.js (Crash Resumption)"]
+        D9["cle_vellum.js (PostMessage Bridge)"]
+    end
+
+    subgraph ToolsComponents["Tools Subsystems (tools/)"]
+        T1["CLE_server.py (Daemon on Port 8765)"]
+        T2["bundle_cle.py (ES6 Compiler)"]
+        T3["DevInstaller.bat / .ps1"]
+        T4["export_to_github.py (Sanitizer)"]
+        T5["python_runtime/ (Embedded Python 3.11)"]
+    end
+
+    Root --> Dev & Vellum & Tools & Vault & Installer & Docs
+    Dev --> DevComponents
+    Tools --> ToolsComponents
 ```
 
 ---
@@ -99,7 +141,7 @@ graph LR
         H3["Interactive Spoilboard Collision Avoidance"]
         H4["Dual-Mode Gamepad (CAD Orbit vs CNC Jog)"]
         H5["Crash Recovery with -5 Line Lookback"]
-        H6["MEAGCLE Local Git Vault Snapshots"]
+        H6["CLE Git Vault Snapshots"]
     end
 
     Vector_Domain -->|PostMessage SVG / Profiles| CAD_Domain
@@ -113,19 +155,26 @@ graph LR
 
 The JSVCLE build and development infrastructure is designed for zero friction on Windows 11 64-bit developer workstations.
 
-### 3.1 Developer Setup Scripts
+### 3.1 Toolchain Verification Hierarchy
 
-#### `tools/DevInstaller.bat` & `tools/DevInstaller.ps1`
-Bootstraps a fresh developer workstation by locating and verifying core toolchains:
-1. **Node.js (v18+ LTS)**: Validates `node -v` and `npm -v`. Installs required build and testing dependencies (`playwright`, `three`).
-2. **Python 3 (3.10+)**: Detects native Python. Installs standard library virtual environment and packages if required.
-3. **Git (v2.30+)**: Verifies `git.exe` in `PATH`, verifies repository integrity, and checks local commit branches.
-4. **Inno Setup 6 (`ISCC.exe`)**: Queries registry (`HKLM` and `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1`) and default installation directories (`C:\Program Files (x86)\Inno Setup 6\ISCC.exe` and `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`).
-5. **Playwright Chromium Browsers**: Executes `npx playwright install chromium` for automated headless regression testing.
+```mermaid
+flowchart TD
+    Start["Run DevInstaller.bat / .ps1"] --> CheckNode{"Node.js 18+ LTS Installed?"}
+    CheckNode -- No --> InstallNode["Prompt: Install Node.js from nodejs.org"]
+    CheckNode -- Yes --> CheckPy{"Python 3.10+ Installed?"}
 
-To bootstrap the developer environment:
-```powershell
-.\tools\DevInstaller.bat
+    CheckPy -- No --> InstallPy["Prompt: Install Python 3.10+ from python.org"]
+    CheckPy -- Yes --> CheckGit{"Git 2.30+ Installed?"}
+
+    CheckGit -- No --> InstallGit["Prompt: Install Git for Windows"]
+    CheckGit -- Yes --> CheckInno{"Inno Setup 6 (ISCC.exe) Present?"}
+
+    CheckInno -- No --> LocateInno["Search Registry & Program Files for ISCC.exe"]
+    CheckInno -- Yes --> InstallNPM["Run npm install (Playwright, Three.js)"]
+    LocateInno --> InstallNPM
+
+    InstallNPM --> InstallBrowser["Run npx playwright install chromium"]
+    InstallBrowser --> DevReady["Workstation Ready for Master Builds!"]
 ```
 
 ### 3.2 Master Build Pipeline (`build_full_tree.bat` / `Build-FullTree.ps1`)
@@ -154,21 +203,108 @@ sequenceDiagram
     Dist-->>Dev: Build Artifact + SHA-256 Checksum Verified
 ```
 
-- **Phase 1: Upstream Sync Check**: Validates that `JSoriginal/` and `VVSource/` tracking folders match upstream repositories and logs hash deltas into `upstream-reports/`.
-- **Phase 2: Bundle Compilation**: Executes `python tools/bundle_cle.py` to aggregate all modular ES6 modules in `Dev/cle_tools/` into `cle_bundle.js` for standalone distributions.
-- **Phase 3: Core Diagnostics**: Runs `bash tools/test_build.sh` to verify syntax of all JavaScript, HTML, and Python files.
-- **Phase 4: Headless E2E Regression**: Spins up temporary HTTP server and runs Playwright Chromium tests validating:
-  - JumpStart DOM loading and Three.js scene creation.
-  - Spoilboard table mesh generation and workpiece seating.
-  - Slicer toolpath generation and G-code preview.
-  - Vellum iframe PostMessage bi-directional communication.
-  - Grayscale 3D relief mesh generation and plane alignment.
-- **Phase 5: Remote Validation**: Inspects git remotes and verifies staging hygiene.
-- **Phase 6: Inno Setup Packaging**: Invokes `ISCC.exe installer/cle_setup.iss` with LZMA2/Ultra64 solid compression.
-
 ---
 
 ## 4. File-by-File Breakdown & Module Reference
+
+```mermaid
+classDiagram
+    class CLEBridge {
+        +String version
+        +String machineName
+        +CLEVault vault
+        +CLEFluidNCClient fluidnc
+        +CLECameraEngine camera
+        +CLEGamepadEngine gamepad
+        +CLERotaryEngine rotary
+        +CLECalibrationEngine calibration
+        +CLEJobRecoveryEngine recovery
+        +CLESlicerEngine slicer
+        +CLEBedVisualizer bed
+        +CLEVellumBridge vellum
+        +init()
+        +notify(msg, type)
+        +openModal(title, html)
+        +closeModal()
+    }
+
+    class CLEBedVisualizer {
+        +Object config
+        +Number workpieceZ
+        +THREE.Group bedGroup
+        +THREE.Group cursorGroup
+        +mountToScene()
+        +buildBedMesh()
+        +buildRulers()
+        +updateToolheadPosition(x,y,z,a)
+        +placeWorkpieceOnSpoilboard(mesh)
+    }
+
+    class CLESlicerEngine {
+        +Number layerHeight
+        +String mode
+        +Object laminationConfig
+        +Array slicedLayers
+        +sliceActiveModel()
+        +sliceGrayscaleRelief(img, opts)
+        +generateLaminatedSlabs(cadMesh)
+        +exportGCodeToFluidNC(filename)
+    }
+
+    class CLEFluidNCClient {
+        +SerialPort port
+        +WebSocket ws
+        +String status
+        +Object dro
+        +connectSerial(baud)
+        +connectWebSocket(ip)
+        +send(gcode)
+        +jog(axis, dist, feed)
+        +feedHold()
+        +resumeJob()
+        +emergencyReset()
+    }
+
+    class CLEGamepadEngine {
+        +Number mode
+        +Object mapping
+        +poll()
+        +applyDeadband(val)
+        +calculateJogRate(deflection)
+        +openRemapModal()
+    }
+
+    class CLEJobRecoveryEngine {
+        +Number lastExecutedLine
+        +Array lookbackBuffer
+        +recordExecutedLine(idx, gcode)
+        +resumeAfterCrash()
+    }
+
+    class CLEVellumBridge {
+        +HTMLElement modalEl
+        +HTMLIFrameElement iframeEl
+        +openVellum()
+        +closeVellum()
+        +handleExport(payload)
+    }
+
+    class CLEVault {
+        +String serverUrl
+        +saveProject(name, data, comment)
+        +getProjectHistory(name)
+        +checkoutProjectVersion(name, hash)
+        +saveMachineProfile(id, config)
+    }
+
+    CLEBridge *-- CLEBedVisualizer
+    CLEBridge *-- CLESlicerEngine
+    CLEBridge *-- CLEFluidNCClient
+    CLEBridge *-- CLEGamepadEngine
+    CLEBridge *-- CLEJobRecoveryEngine
+    CLEBridge *-- CLEVellumBridge
+    CLEBridge *-- CLEVault
+```
 
 ### 4.1 Master Bootstrap & UI Lifecycle: `Dev/cle_tools/cle_boot.js`
 - **Role**: Master orchestrator. Instantiates all sub-engines, builds top navigation tabs, injects the ribbon UI, manages modal dialogs, and controls DOM toasts.
@@ -186,7 +322,7 @@ sequenceDiagram
 - **Role**: Renders the physical CNC workspace in Three.js, including MDF spoilboard, extruded aluminum base frame, precision millimeter ruler graduations, workpiece seating, and the live 4-axis toolhead cursor.
 - **Class**: `CLEBedVisualizer(bridge)`
 - **Key Properties**:
-  - `config.travelX`, `config.travelY`, `config.travelZ`: Active machine envelope dimensions.
+  - `config.travelX`, `config.travelY`, `config.travelZ`: Active machine envelope dimensions ($600 \times 500 \times 100\,\text{mm}$).
   - `config.spoilboardThickness`: MDF slab thickness (default $20.0\,\text{mm}$).
   - `config.cutoutOvercut`: Safe breakthrough allowance into spoilboard (default $0.2\,\text{mm}$).
   - `workpieceZ`: Calculated top-of-spoilboard seating height ($Z = \text{thickness} + 0.1\,\text{mm} = 20.10\,\text{mm}$).
@@ -256,7 +392,7 @@ sequenceDiagram
   - `updateAngle(deg)`: Continuously rotates chuck, jaws, and stock cylinder in 3D viewport.
   - `clampWorkpiece(length, diameter)`: Adjusts 3D stock cylinder dimensions and centers on lathe axis.
 
-### 4.7 MEAGCLE Design Vault Client: `Dev/cle_tools/cle_vault.js`
+### 4.7 CLE Design Vault Client: `Dev/cle_tools/cle_vault.js`
 - **Role**: Frontend client communicating with `tools/CLE_server.py` to provide version control and profile persistence.
 - **Class**: `CLEVault(bridge)`
 - **Key Methods**:
@@ -328,7 +464,7 @@ sequenceDiagram
     Note over Boot,Vault: Phase 2: Vault & Profile Sync
     Boot->>Server: GET /api/status
     Server-->>Boot: 200 OK (Server Active, Git Ready)
-    Boot->>Vault: Fetch Active Machine Profile ("TwoTrees TTC6050")
+    Boot->>Vault: Fetch Active Machine Profile ("FluidNC Standard CNC")
     Vault->>Bed: Set Bed Dimensions (600x500mm, Spoilboard 20mm)
 
     Note over Boot: Phase 3: Hardware & Telemetry Ready
@@ -336,7 +472,159 @@ sequenceDiagram
     Boot->>DOM: Display "CLE Suite Ready (v01.00.66)" Toast
 ```
 
-### 5.2 Window Global Namespaces Reference
+---
+
+### 5.2 Slicer Toolpath Generation & G-Code Export Execution Flow
+
+```mermaid
+flowchart TD
+    UserSlice["User Clicks 'Slice Active Model'"] --> InspectBody["Inspect JumpStart CAD Bodies in Scene"]
+    InspectBody --> DetectType{"Geometry Type?"}
+
+    DetectType -- "3D CAD Solid Mesh" --> CalcBounds["Calculate Bounding Box (X, Y, Zmin, Zmax)"]
+    CalcBounds --> PlaneIntersect["Generate Horizontal Slicing Planes at Z Step-Downs"]
+    PlaneIntersect --> ContourLoop["Extract Outer & Inner Boundary Loops"]
+    ContourLoop --> InfillHatch["Compute Linear / Zig-Zag Infill Paths"]
+    InfillHatch --> SpoilboardOvercut["Apply 0.2mm Breakthrough Overcut at Z = 20.10mm"]
+    SpoilboardOvercut --> RenderLines["Compile THREE.LineSegments (Cyan=Feed, Red=Rapid)"]
+    RenderLines --> AssembleGCode["Assemble ISO G-Code Program (G0, G1, F, S)"]
+
+    DetectType -- "Grayscale 2D Photo" --> GrayscaleFlow["Invoke sliceGrayscaleRelief()"]
+    GrayscaleFlow --> RenderLines
+
+    AssembleGCode --> MountHUD["Mount Floating Slicer HUD in Viewport"]
+    MountHUD --> ExportChoice{"Export Action?"}
+    ExportChoice -- "Download .nc" --> SaveFile["Trigger Browser File Download"]
+    ExportChoice -- "Stream to SD" --> FluidNCSD["HTTP / WebSocket Stream to FluidNC SD Card"]
+```
+
+---
+
+### 5.3 Grayscale 2D Photo to 3D Continuous Z Relief Carving Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as CNC Machinist
+    participant UI as cle_boot.js (#cle-r-grayscale)
+    participant Slicer as cle_slicer.js
+    participant Bed as cle_bed.js
+    participant Three as JumpStart Three.js Scene
+
+    User->>UI: Selects Photo & Clicks 'Slice to Continuous Z'
+    UI->>Slicer: sliceGrayscaleRelief(imageElement, options)
+    Note over Slicer: Step 1: Pixel Luminance Extraction
+    Slicer->>Slicer: Draw image onto off-screen 2D Canvas
+    Slicer->>Slicer: Read RGBA ImageDataBuffer (W x H pixels)
+    Slicer->>Slicer: Compute Luminance: L = 0.299R + 0.587G + 0.114B
+    Slicer->>Slicer: Apply Gamma Curve & Invert Map (0.0 to 1.0)
+
+    Note over Slicer: Step 2: 3D Relief Mesh Generation
+    Slicer->>Three: Instantiate THREE.PlaneGeometry(width, height, segW, segH)
+    Slicer->>Three: Displace Vertices along Z based on Luminance x MaxDepth
+    Slicer->>Three: Construct Watertight Base Side Walls & Floor
+    Slicer->>Bed: placeWorkpieceOnSpoilboard(reliefMesh)
+    Bed->>Three: Set Mesh Position (X=300, Y=250, Z=20.10mm)
+
+    Note over Slicer: Step 3: Continuous Raster Toolpathing
+    loop For Each Y Raster Line
+        Slicer->>Slicer: Traverse X pixels left-to-right (Zig) / right-to-left (Zag)
+        Slicer->>Slicer: Output G1 X... Y... Z... with continuous depth variation
+    end
+    Slicer->>UI: Mount Slicer HUD & Render 3D Toolpath Overlays
+    UI-->>User: Live 3D Simulation Ready
+```
+
+---
+
+### 5.4 Hardware Telemetry, Real-Time DRO & Jogging Execution Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Digital Readout Ribbon & Bed Cursor
+    participant Client as cle_fluidnc.js
+    participant HW as FluidNC ESP32 Controller
+
+    Note over Client,HW: Periodic Telemetry Loop (Every 100ms)
+    loop Every 100ms
+        Client->>HW: Send '?' Status Poll Query
+        HW-->>Client: Response: <Idle|WPos:150.000,200.000,20.100,0.000|FS:0,0>
+        Client->>Client: Parse Coordinates: X=150, Y=200, Z=20.1, A=0
+        Client->>UI: Update Ribbon DRO Labels (X: 150.00, Y: 200.00, Z: 20.10)
+        Client->>UI: Update 3D Bed Toolhead Position & Cast Spoilboard Shadow
+    end
+
+    Note over UI,HW: User Jog Command Execution
+    alt User Jogs via Keyboard / Gamepad Stick
+        UI->>Client: jog('X', +10.0, 1500)
+        Client->>Client: Format non-modal command: $J=G91 G21 X10.0 F1500
+        Client->>HW: Transmit Jog String via WebSerial / WebSocket
+        HW-->>Client: Response: ok
+    else Emergency Stop / Feed Hold
+        UI->>Client: feedHold() / emergencyReset()
+        Client->>HW: Send Immediate '!' or Ctrl+X (0x18)
+        HW-->>Client: Instant Motion Stop & Status: Hold / Alarm
+    end
+```
+
+---
+
+### 5.5 Job Crash Recovery with Lookback Buffer Execution Flow
+
+```mermaid
+flowchart TD
+    RunJob["Job Running Toolpath Execution"] --> TrackLine["cle_recovery.js records executed line index N in LocalStorage"]
+    TrackLine --> CrashEvent{"Unexpected Power Loss / Disconnect?"}
+
+    CrashEvent -- No --> Finish["Job Finishes Cleanly (M30)"]
+    CrashEvent -- Yes --> Reconnect["User Reconnects & Clicks 'Resume Crashed Job'"]
+
+    Reconnect --> QueryVault["Lookup last recorded line index N from LocalStorage"]
+    QueryVault --> ApplyLookback["Compute Recovery Line: R = max(0, N - 5)"]
+    ApplyLookback --> SafeRetract["Emit G0 Z50 (Safe Retract Clearance)"]
+    SafeRetract --> RapidXY["Emit G0 X{R} Y{R} (Rapid to recovery starting point)"]
+    RapidXY --> SpindleRestart["Emit M3 S{RPM} & G4 P3.0 (Dwell 3 sec for spindle up-to-speed)"]
+    SpindleRestart --> PlungeZ["Emit G1 Z{R} F{PlungeRate}"]
+    PlungeZ --> ResumeStream["Stream remaining G-Code lines from index R to end"]
+    ResumeStream --> SeamlessCarve["Continuous carving seamlessly resumed without gouging!"]
+```
+
+---
+
+### 5.6 CLE Git Vault Project State Snapshot & Restoration Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Designer / Engineer
+    participant FE as cle_vault.js (Browser)
+    participant Server as CLE_server.py (Port 8765)
+    participant Git as Git CLI (vault/projects/{name}/)
+
+    User->>FE: Clicks 'Save to Vault' (Project: 'CarvedSign', Comment: 'Add mounting bosses')
+    FE->>FE: Serialize JumpStart CAD State to JSON
+    FE->>Server: POST /api/vault/save { project: 'CarvedSign', json_data: {...}, comment: '...' }
+    Server->>Server: Write model.json to vault/projects/CarvedSign/
+    Server->>Git: git init (if repo does not exist)
+    Server->>Git: git add model.json
+    Server->>Git: git commit -m "Add mounting bosses"
+    Git-->>Server: Commit hash 8f3a12b created
+    Server-->>FE: 200 OK { success: true, commit: '8f3a12b' }
+    FE->>User: Displays animated HUD notice: "Project saved to CLE Git Vault (8f3a12b)"
+
+    Note over User,Git: Version Restoration Workflow
+    User->>FE: Opens Vault History & Selects Commit 8f3a12b
+    FE->>Server: POST /api/vault/checkout { project: 'CarvedSign', hash: '8f3a12b' }
+    Server->>Git: git checkout 8f3a12b
+    Server-->>FE: Return historical model.json payload
+    FE->>FE: Rehydrate JumpStart 3D CAD document (window.Se)
+    FE-->>User: Historical version loaded and rendered in 3D viewport!
+```
+
+---
+
+## 6. Window Global Namespaces Reference
 
 | Global Identifier | Providing Module | Description |
 |---|---|---|
@@ -346,35 +634,9 @@ sequenceDiagram
 | `window.Ei` | Vellum Core (`Vellum/index.htm`) | Vellum application instance managing 2D SVG canvas elements, layers, selection sets, and vector export pipelines. |
 | `window.Vellum` | Vellum Core | Vellum standalone API namespace for curve generation and laser kerf calculation. |
 
-### 5.3 Cross-Frame PostMessage Communication Protocol
-
-When Vellum Vector Studio interacts with JumpStart CAD, communication occurs via the HTML5 PostMessage API:
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Vellum as Vellum Iframe (Vellum/index.htm)
-    participant Bridge as cle_vellum.js (JumpStart Parent)
-    participant JSKernel as JumpStart CAD Engine
-
-    Vellum->>Bridge: window.parent.postMessage({ type: 'CLE_VELLUM_EXPORT', mode: 'extrude', svgData: '<svg...>...</svg>', thickness: 5.0 }, '*')
-    Bridge->>Bridge: Validate origin & payload structure
-    alt mode == 'extrude'
-        Bridge->>JSKernel: Parse SVG Path into THREE.Shape
-        Bridge->>JSKernel: Execute Direct Extrude (height: 5.0mm)
-        Bridge->>JSKernel: Seat Solid Body onto Spoilboard (Z = 20.10mm)
-    else mode == 'sketch'
-        Bridge->>JSKernel: Convert SVG Beziers into CAD Sketch Points & Curves
-        Bridge->>JSKernel: Append Sketch to active plane in window.Se
-    else mode == 'bed_overlay'
-        Bridge->>JSKernel: Create Canvas Texture and map to spoilboard surface plane
-    end
-    Bridge->>Bridge: Close Vellum Modal & Focus 3D Viewport
-```
-
 ---
 
-## 6. Glossary of Functions, Classes & Technical Terms
+## 7. Glossary of Functions, Classes & Technical Terms
 
 ### Technical Classes & Methods
 
@@ -397,8 +659,7 @@ sequenceDiagram
 - **DRO (Digital Readout)**: Real-time numeric display of the toolhead's current coordinates across X, Y, Z, and A axes in millimeters and degrees.
 - **FluidNC**: High-performance, open-source CNC firmware running on ESP32 microcontrollers supporting multi-axis motion, USB serial, and Wi-Fi WebSockets.
 - **Laminated Slicing**: Slicing thick or curved objects (such as acoustic loudspeaker horns) into separate wood slab layers that are machined independently and aligned using dowel pins.
-- **MEAGCLE Git Vault**: An architectural pattern where every machine configuration, tool library change, and CAD model revision is automatically committed to a local, zero-network Git repository.
+- **CLE Git Vault**: An architectural pattern where every machine configuration, tool library change, and CAD model revision is automatically committed to a local, zero-network Git repository.
 - **Lookback Buffer (`-5` lines)**: Crash recovery strategy where resume execution starts 5 toolpath lines prior to the recorded crash point, ensuring smooth overlap without leaving uncarved gouges or ridges.
 - **Spoilboard**: A sacrificial MDF board mounted to the aluminum CNC bed table, allowing cutting tools to cleanly break through workpieces without damaging the machine frame.
 - **WebSerial API**: Modern browser W3C standard allowing web applications to directly read and write to serial COM ports at baud rates up to 115200 without browser plugins.
-

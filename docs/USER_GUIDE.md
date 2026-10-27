@@ -24,7 +24,7 @@ flowchart LR
         JS <--> CLE["Continuous Layer CAM (CLE)\n(Slicer, 4th Axis, DRO, Bed)"]
         CLE <--> CS["Local CLE_Server (Port 8765)\n(Git Vault, Hardware, SD Upload)"]
     end
-    CS <--> Machine["CNC / Laser Controller\n(TwoTrees TTC6050 / TTC450 / FluidNC)"]
+    CS <--> Machine["FluidNC CNC / Laser Controller\n(FluidNC ESP32 Motion Controller)"]
 ```
 
 ---
@@ -47,6 +47,17 @@ Before running the installer, ensure your workstation meets the following specif
 
 ## 3. Installation Guide
 
+```mermaid
+flowchart TD
+    Installer["JSVCLE_Experimental_v01.00.66.exe"] --> UAC["Windows UAC Elevation (All Users)"]
+    UAC --> SysCheck["System Requirements Verification Dialog\n(Min: i7 8-Way, 16GB RAM | Rec: i9 24-Way, 32GB RAM)"]
+    SysCheck --> InstallPath["Destination Folder: C:\\JSVCLE"]
+    InstallPath --> ExtractFiles["Extract Core Subsystems\n(Dev/, Vellum/, tools/, vault/, docs/)"]
+    ExtractFiles --> BackgroundSvc["Configure Background Autostart\n({autostartup}\\CLE_Server)"]
+    ExtractFiles --> Shortcuts["Create Desktop & Start Menu Icons (All Users)"]
+    Shortcuts --> Launch["Start CLE_server.py (Port 8765) & Launch Browser Workspace"]
+```
+
 ### Step 1: Running the Setup Executable
 1. Locate [`JSVCLE_Experimental_v01.00.66.exe`](file:///d:/CLEJS/dist/JSVCLE_Experimental_v01.00.66.exe) in your distribution folder or download location.
 2. Double-click the `.exe` installer. If prompted by Windows User Account Control (UAC), click **Yes** to allow installation for All Users.
@@ -67,6 +78,7 @@ Click **Install**. The installer automatically extracts:
 - Vellum Vector Studio (`Vellum/`)
 - Local Background Server and Embedded Python Runtime (`tools/`)
 - Machine Vault and Tool Library (`vault/`)
+- Comprehensive Documentation (`docs/`)
 - Windows startup entries in `{autostartup}\CLE_Server` so the hardware service starts quietly whenever you log into Windows.
 - Desktop and Start Menu shortcuts for all users.
 
@@ -76,6 +88,27 @@ On the final wizard page, leave **Launch JSVCLE Studio** checked and click **Fin
 ---
 
 ## 4. Initial Configuration
+
+```mermaid
+flowchart LR
+    subgraph Step1["1. Hardware Comms"]
+        ComPort["USB WebSerial (115200)"]
+        WiFiWS["FluidNC WiFi WebSocket"]
+    end
+
+    subgraph Step2["2. Table & Spoilboard"]
+        Profile["Select Machine Profile (600x500mm)"]
+        MDF["Set MDF Thickness (20.0mm)"]
+        Overcut["Set Breakthrough Overcut (0.2mm)"]
+    end
+
+    subgraph Step3["3. Status Ready"]
+        DRO["4-Axis Live DRO (X, Y, Z, A)"]
+        Status["FluidNC Status: Idle (Green)"]
+    end
+
+    Step1 --> Step2 --> Step3
+```
 
 ### 4.1 Connecting to Your Machine
 1. Open **JSVCLE Studio**.
@@ -87,13 +120,40 @@ On the final wizard page, leave **Launch JSVCLE Studio** checked and click **Fin
 
 ### 4.2 Configuring the Machine Bed & Spoilboard
 1. Click **Setup & Spoilboard** in the CLE ribbon.
-2. Select your machine profile from the dropdown (e.g. **TwoTrees TTC6050 CNC** or **TTC450**).
+2. Select your machine profile from the dropdown (e.g. **FluidNC Standard CNC / Laser** or custom machine profile).
 3. The 3D viewport instantly renders your exact spoilboard dimensions (e.g. $600 \times 500 \times 20\,\text{mm}$ MDF), aluminum extrusion base, and live origin reticle.
 4. If your spoilboard thickness differs from standard ($20.0\,\text{mm}$), enter your measured thickness in the Spoilboard dialog and click **Save to Vault**.
 
 ---
 
-## 5. Three Real-World Usage Examples
+## 5. Three Real-World Usage Workflows
+
+```mermaid
+flowchart TD
+    subgraph Ex1["Workflow 1: 3D CAD Solid Modeling"]
+        CADModel["3D Parametric CAD Body (JumpStart)"] --> CADSeat["Seat on Spoilboard (Z = 20.10mm)"]
+        CADSeat --> Slicer3D["Top-Down Slicer (Step-Down Passes)"]
+        Slicer3D --> Breakthrough["0.20mm Breakthrough Overcut"]
+        Breakthrough --> GCode1["Export G-Code / SD Upload"]
+    end
+
+    subgraph Ex2["Workflow 2: 2D Vector to 3D Solid"]
+        VellumVec["Vector Drawing / Text (Vellum)"] --> PostMsg["Export Payload via PostMessage"]
+        PostMsg --> AutoExtrude["Direct 3D Solid Extrude (5.0mm)"]
+        AutoExtrude --> BedAlign["Anchor at Bed Center (300, 250, 20.10mm)"]
+        BedAlign --> Slicer2D["Planar Laser / CNC Toolpath"]
+        Slicer2D --> GCode2["Export G-Code / SD Upload"]
+    end
+
+    subgraph Ex3["Workflow 3: Grayscale 2D Photo to 3D Relief"]
+        Photo["2D Photo / Bitmap Image"] --> DepthMap["Grayscale Heightmap Normalization"]
+        DepthMap --> Mesh3D["Watertight 3D Relief Mesh Generation"]
+        Mesh3D --> ContinuousZ["Continuous Z Slicer (Dynamic Z Carving)"]
+        ContinuousZ --> GCode3["Export G-Code / SD Upload"]
+    end
+
+    GCode1 & GCode2 & GCode3 --> FluidNCMachine["FluidNC CNC / Laser Controller\n(WebSerial USB / WebSocket)"]
+```
 
 ### Example 1: 3D CAD Solid Modeling & Continuous Layer Slicing
 *Goal: Model a mechanical mounting bracket and generate a multi-pass CNC carving toolpath.*
@@ -188,4 +248,3 @@ To remove JSVCLE Studio completely from your computer:
 - **4th Axis (A-Axis):** A rotary chuck and tailstock alignment tool that replaces the spoilboard for round stock turning, fluting, and multi-sided indexing.
 - **Breakthrough Pass:** A final perimeter cutout pass that cuts $0.20\,\text{mm}$ into the MDF spoilboard so parts release cleanly without tabs.
 - **FluidNC:** High-performance, open-source CNC and laser motion control firmware running on ESP32 microcontrollers with WebSerial and WebSocket support.
-
