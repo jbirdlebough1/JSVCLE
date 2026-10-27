@@ -1686,6 +1686,217 @@ class CLEBridge {
           </table>
         </div>
       `;
+    } else if (type === 'calibration' || type === 'test') {
+      title = '🎯 Machine Calibration & Chassis Squareness Diagnostics';
+      const limits = this.calibration.getMachineLimits();
+      const xSpan = limits.maxX - limits.minX;
+      const ySpan = limits.maxY - limits.minY;
+      const diagLen = Math.hypot(xSpan, ySpan).toFixed(2);
+      const maxSq = Math.min(xSpan, ySpan);
+      const sqSizes = [1.0, 0.8, 0.6, 0.4, 0.2].map(f => (maxSq * f).toFixed(1));
+
+      bodyHtml = `
+        <!-- Calibration Navigation Tabs -->
+        <div style="display:flex; gap:6px; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:12px; flex-wrap:wrap;">
+          <button class="cle-btn" id="cle-cal-tab-btn-1" style="background:var(--accent); color:var(--on-accent); font-weight:700; font-size:11px;">Test 1: Chassis Squareness &amp; Circles</button>
+          <button class="cle-btn" id="cle-cal-tab-btn-2" style="background:var(--panel-2); font-weight:600; font-size:11px;">Test 2: 4-Quadrant 3D Relief (120x120mm)</button>
+          <button class="cle-btn" id="cle-cal-tab-btn-3" style="background:var(--panel-2); font-weight:600; font-size:11px;">Steps/mm Calculator</button>
+          <button class="cle-btn" id="cle-cal-tab-btn-4" style="background:var(--panel-2); font-weight:600; font-size:11px;">Laser Power Matrix</button>
+          <button class="cle-btn" id="cle-cal-tab-btn-5" style="background:var(--panel-2); font-weight:600; font-size:11px;">Backlash Routine</button>
+        </div>
+
+        <!-- TAB 1: TEST ONE (Chassis Squareness, Diagonals, 5 Concentric Squares & Inscribed Tangent Circles) -->
+        <div id="cle-cal-pane-1" class="cle-cal-pane" style="display:block;">
+          <div style="background:var(--paper); padding:10px 14px; border-radius:6px; border:1px solid var(--line); margin-bottom:10px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+              <div>
+                <strong style="color:var(--accent); font-size:13px;">Test 1: Full-Bed Chassis Squareness &amp; Circle Roundness</strong>
+                <div style="font-size:11px; color:var(--ink-2); margin-top:2px;">
+                  Corner-to-corner diagonals crossing at exact bed center + 5 concentric descending squares with inscribed tangent circles.
+                </div>
+              </div>
+              <div style="display:flex; gap:6px;">
+                <button class="cle-btn" id="cle-cal-t1-preview-btn" style="background:var(--accent); color:var(--on-accent); font-weight:700;">👁 3D Viewport Preview</button>
+                <button class="cle-btn" id="cle-cal-t1-export-btn">💾 Export G-Code (.nc)</button>
+                <button class="cle-btn" id="cle-cal-t1-upload-btn">⚡ Upload to SD</button>
+                <button class="cle-btn danger" id="cle-cal-t1-run-btn">▶ Stream to Machine</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Machine Envelopes & Diagnostics Strip -->
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:10px;">
+            <div class="cle-joycon-panel" style="padding:10px 12px;">
+              <div class="cle-joycon-title" style="margin-bottom:6px;">Active Machine Bounds (5mm Safety Inset)</div>
+              <table style="width:100%; font-size:11px; font-family:var(--f-mono);">
+                <tr><td>X Envelope:</td><td><strong>${limits.minX.toFixed(1)}mm to ${limits.maxX.toFixed(1)}mm</strong> (${limits.travelX}mm travel - 5mm)</td></tr>
+                <tr><td>Y Envelope:</td><td><strong>${limits.minY.toFixed(1)}mm to ${limits.maxY.toFixed(1)}mm</strong> (${limits.travelY}mm travel - 5mm)</td></tr>
+                <tr><td>Bed Center:</td><td><strong>X=${limits.centerX.toFixed(2)}mm, Y=${limits.centerY.toFixed(2)}mm</strong> (Intersection)</td></tr>
+                <tr><td>Diagonals (1 &amp; 2):</td><td><strong>${diagLen}mm</strong> each corner-to-corner</td></tr>
+              </table>
+            </div>
+
+            <div class="cle-joycon-panel" style="padding:10px 12px;">
+              <div class="cle-joycon-title" style="margin-bottom:6px;">5 Concentric Squares &amp; Inscribed Tangent Circles</div>
+              <div style="font-size:11px; color:var(--ink-2); margin-bottom:4px;">Centered symmetrically at (X:${limits.centerX.toFixed(0)}, Y:${limits.centerY.toFixed(0)}):</div>
+              <div style="display:flex; flex-wrap:wrap; gap:4px; font-size:10px; font-family:var(--f-mono);">
+                ${sqSizes.map((s, idx) => `
+                  <span class="cle-switch-pill" style="padding:3px 6px; background:var(--panel-2); border:1px solid var(--line);">
+                    #${idx+1}: <strong>${s}x${s}mm</strong> (⌀${s}mm)
+                  </span>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+
+          <!-- Diagnostic Measurement Guide -->
+          <div class="cle-joycon-panel" style="padding:10px 14px; background:rgba(2, 132, 199, 0.05); border:1px solid rgba(2, 132, 199, 0.25);">
+            <div style="font-size:11px; font-weight:700; color:var(--accent); margin-bottom:4px;">📐 How to Measure &amp; Calibrate:</div>
+            <div style="font-size:11px; line-height:1.5; color:var(--ink-1);">
+              <strong>1. Chassis Squareness (Orthogonality):</strong> Measure Diagonal 1 (Lower-Left to Upper-Right) and Diagonal 2 (Upper-Left to Lower-Right) with a steel tape or gauge. If both diagonals are identical, the machine gantry is 100% perpendicular (square). Any difference indicates rhomboid chassis skew.<br>
+              <strong>2. Circle Roundness &amp; Backlash:</strong> Using digital vernier calipers, measure each tangent circle across the X-axis (horizontal) and Y-axis (vertical). If diameters differ, calibrate steps/mm or tighten belt/leadscrew backlash.
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: TEST TWO (4-Quadrant 3D Relief & Stepped Cavity on 120x120mm Block, 40mm Stack) -->
+        <div id="cle-cal-pane-2" class="cle-cal-pane" style="display:none;">
+          <div style="background:var(--paper); padding:10px 14px; border-radius:6px; border:1px solid var(--line); margin-bottom:10px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+              <div>
+                <strong style="color:var(--accent); font-size:13px;">Test 2: 4-Quadrant 3D Relief &amp; Stepped Workpiece Test</strong>
+                <div style="font-size:11px; color:var(--ink-2); margin-top:2px;">
+                  120x120mm Stock (20mm thickness) clamped on 20mm Spoilboard (40mm total stack height).
+                </div>
+              </div>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <select class="cle-select" id="cle-cal-t2-quad-sel" style="font-size:11px; padding:4px 8px;">
+                  <option value="all">Full 4-Quadrant Test (All Features)</option>
+                  <option value="1">Q1 Only: Inverted Stepped Cone Hole</option>
+                  <option value="2">Q2 Only: Inverted Stepped Square Hole</option>
+                  <option value="3">Q3 Only: Raised Cone on 4mm Floor</option>
+                  <option value="4">Q4 Only: Raised Square Pyramid on 4mm Floor</option>
+                </select>
+                <button class="cle-btn" id="cle-cal-t2-preview-btn" style="background:var(--accent); color:var(--on-accent); font-weight:700;">👁 3D Viewport Preview</button>
+                <button class="cle-btn" id="cle-cal-t2-export-btn">💾 Export G-Code (.nc)</button>
+                <button class="cle-btn" id="cle-cal-t2-upload-btn">⚡ Upload to SD</button>
+                <button class="cle-btn danger" id="cle-cal-t2-run-btn">▶ Stream to Machine</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mandatory Clamping & Setup Notice -->
+          <div style="padding:8px 12px; background:rgba(217, 119, 6, 0.12); border:1px solid #d97706; border-radius:6px; margin-bottom:10px; font-size:11px; color:#b45309; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:16px;">⚠️</span>
+            <span><strong>Clamping Required:</strong> Mount a <strong>120x120x20mm</strong> workpiece firmly clamped on top of the <strong>20mm spoilboard</strong> (40mm total height from aluminum table). Clamps must be placed outside the 50x50mm quadrant cutting zones.</span>
+          </div>
+
+          <!-- 4-Quadrant Visual Grid Breakdown -->
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+            <!-- Quadrant 1 -->
+            <div class="cle-joycon-panel" style="padding:8px 12px; border-left:4px solid #00e5ff;">
+              <div style="font-weight:700; font-size:11px; color:var(--accent);">Quadrant 1 (Top-Left): Inverted Stepped Cone Hole</div>
+              <div style="font-size:11px; color:var(--ink-2); margin-top:2px;">
+                • Total Depth: <strong>16.0mm Z</strong> (leaves 4mm floor remaining)<br>
+                • Increments: <strong>0.1mm Z inc</strong> with <strong>1.0mm stepover</strong><br>
+                • Top Diameter: ⌀48mm &rarr; Bottom: ⌀16mm cavity
+              </div>
+            </div>
+
+            <!-- Quadrant 2 -->
+            <div class="cle-joycon-panel" style="padding:8px 12px; border-left:4px solid #38bdf8;">
+              <div style="font-weight:700; font-size:11px; color:var(--accent);">Quadrant 2 (Top-Right): Inverted Stepped Square Hole</div>
+              <div style="font-size:11px; color:var(--ink-2); margin-top:2px;">
+                • Total Depth: <strong>16.0mm Z</strong> (leaves 4mm floor remaining)<br>
+                • Increments: <strong>0.1mm Z inc</strong> with <strong>1.0mm stepover</strong><br>
+                • Top Square: 48x48mm &rarr; Bottom: 16x16mm stepped hole
+              </div>
+            </div>
+
+            <!-- Quadrant 3 -->
+            <div class="cle-joycon-panel" style="padding:8px 12px; border-left:4px solid #10b981;">
+              <div style="font-weight:700; font-size:11px; color:var(--ok);">Quadrant 3 (Bottom-Left): Raised Cone on 4mm ZFloor</div>
+              <div style="font-size:11px; color:var(--ink-2); margin-top:2px;">
+                • Quad Area Hogged Down to: <strong>4mm remaining floor</strong> (Z=-16.0mm)<br>
+                • Raised Cone: Rises from <strong>4mm floor up to 18mm Peak</strong> (14mm tall)<br>
+                • Stepover: <strong>0.1mm Z inc</strong>, <strong>1.0mm step X/Y</strong> (Base ⌀44mm &rarr; Peak ⌀6mm)
+              </div>
+            </div>
+
+            <!-- Quadrant 4 -->
+            <div class="cle-joycon-panel" style="padding:8px 12px; border-left:4px solid #0284c7;">
+              <div style="font-weight:700; font-size:11px; color:var(--accent);">Quadrant 4 (Bottom-Right): Raised 4-Sided Pyramid on 4mm ZFloor</div>
+              <div style="font-size:11px; color:var(--ink-2); margin-top:2px;">
+                • Quad Area Hogged Down to: <strong>4mm remaining floor</strong> (Z=-16.0mm)<br>
+                • 4-Sided Pyramid: Rises from <strong>4mm floor up to 18mm Peak</strong> (14mm tall)<br>
+                • Base: 44x44mm &rarr; Peak: 6x6mm with 4 sharp corner ridges
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 3: STEPS/MM CALCULATOR -->
+        <div id="cle-cal-pane-3" class="cle-cal-pane" style="display:none;">
+          <div class="cle-joycon-panel" style="padding:12px 14px; max-width:540px;">
+            <div class="cle-joycon-title" style="margin-bottom:8px;">Steps/mm Axis Calibration ($100, $101, $102, $103)</div>
+            <div style="display:grid; grid-template-columns:120px 1fr; gap:8px; font-size:11px; align-items:center;">
+              <label>Axis to Calibrate:</label>
+              <select class="cle-select" id="cle-cal-axis" style="padding:3px 6px; width:120px;">
+                <option value="X">X Axis ($100)</option>
+                <option value="Y">Y Axis ($101)</option>
+                <option value="Z">Z Axis ($102)</option>
+                <option value="A">A Rotary ($103)</option>
+              </select>
+
+              <label>Current Steps/mm:</label>
+              <input class="cle-input" id="cle-cal-cur-steps" type="number" step="0.001" value="80.000" style="padding:3px 6px;">
+
+              <label>Commanded Distance (mm):</label>
+              <input class="cle-input" id="cle-cal-cmd-dist" type="number" step="0.1" value="100.0" style="padding:3px 6px;">
+
+              <label>Measured Distance (mm):</label>
+              <input class="cle-input" id="cle-cal-meas-dist" type="number" step="0.01" value="99.50" style="padding:3px 6px;">
+            </div>
+
+            <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
+              <span id="cle-cal-result" style="font-family:var(--f-mono); font-size:11px; color:var(--ok); font-weight:700;"></span>
+              <button class="cle-btn" id="cle-cal-apply-btn" style="background:var(--accent); color:var(--on-accent); font-weight:700;">Calculate &amp; Send to FluidNC</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 4: LASER POWER MATRIX -->
+        <div id="cle-cal-pane-4" class="cle-cal-pane" style="display:none;">
+          <div class="cle-joycon-panel" style="padding:12px 14px;">
+            <div class="cle-joycon-title" style="margin-bottom:8px;">Laser Power &amp; Speed Test Matrix Card</div>
+            <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; font-size:11px; margin-bottom:12px;">
+              <label>Speed: <input class="cle-input" id="cle-cal-l-speed" type="number" value="1500" style="width:70px; padding:3px;"> mm/min</label>
+              <label>Max Power: <input class="cle-input" id="cle-cal-l-pwr" type="number" value="100" style="width:60px; padding:3px;"> %</label>
+              <button class="cle-btn" id="cle-cal-l-gen-btn" style="background:var(--accent); color:var(--on-accent); font-weight:700;">Generate Matrix G-Code</button>
+            </div>
+            <textarea class="cle-input" id="cle-cal-l-gcode" rows="8" style="width:100%; font-family:var(--f-mono); font-size:11px;" readonly placeholder="G-code matrix will appear here..."></textarea>
+          </div>
+        </div>
+
+        <!-- TAB 5: BACKLASH ROUTINE -->
+        <div id="cle-cal-pane-5" class="cle-cal-pane" style="display:none;">
+          <div class="cle-joycon-panel" style="padding:12px 14px;">
+            <div class="cle-joycon-title" style="margin-bottom:8px;">Backlash Dial Indicator Routine</div>
+            <div style="display:flex; gap:12px; align-items:center; font-size:11px; margin-bottom:12px;">
+              <label>Axis:
+                <select class="cle-select" id="cle-cal-b-axis">
+                  <option value="X">X Axis</option>
+                  <option value="Y">Y Axis</option>
+                  <option value="Z">Z Axis</option>
+                </select>
+              </label>
+              <label>Distance: <input class="cle-input" id="cle-cal-b-dist" type="number" value="10" style="width:60px; padding:3px;"> mm</label>
+              <button class="cle-btn" id="cle-cal-b-gen-btn" style="background:var(--accent); color:var(--on-accent); font-weight:700;">Generate Backlash G-Code</button>
+            </div>
+            <textarea class="cle-input" id="cle-cal-b-gcode" rows="8" style="width:100%; font-family:var(--f-mono); font-size:11px;" readonly placeholder="Backlash test routine G-code..."></textarea>
+          </div>
+        </div>
+      `;
     }
 
     modal.innerHTML = `
@@ -2447,6 +2658,115 @@ class CLEBridge {
         this.toolLibrary.saveTools();
         await this.vault.saveControllerProfile('tool_library_backup', { tools: this.toolLibrary.tools });
         this.notify('Tool Library saved to Vault & storage.', 'ok');
+      };
+    } else if (type === 'calibration' || type === 'test') {
+      // Tab Switching
+      [1, 2, 3, 4, 5].forEach(tabNum => {
+        const btn = document.getElementById(`cle-cal-tab-btn-${tabNum}`);
+        if (!btn) return;
+        btn.onclick = () => {
+          [1, 2, 3, 4, 5].forEach(k => {
+            const b = document.getElementById(`cle-cal-tab-btn-${k}`);
+            const p = document.getElementById(`cle-cal-pane-${k}`);
+            if (b) {
+              b.style.background = (k === tabNum) ? 'var(--accent)' : 'var(--panel-2)';
+              b.style.color = (k === tabNum) ? 'var(--on-accent)' : 'inherit';
+              b.style.fontWeight = (k === tabNum) ? '700' : '600';
+            }
+            if (p) p.style.display = (k === tabNum) ? 'block' : 'none';
+          });
+        };
+      });
+
+      // Test 1: Preview in 3D Viewport
+      document.getElementById('cle-cal-t1-preview-btn').onclick = () => {
+        this.calibration.previewChassisSquarenessTest();
+      };
+
+      // Test 1: Export G-Code
+      document.getElementById('cle-cal-t1-export-btn').onclick = () => {
+        this.calibration.generateChassisSquarenessGCode();
+        this.calibration.exportTestGCode('CLEJS_Chassis_Squareness_Test.nc');
+      };
+
+      // Test 1: Upload to FluidNC SD
+      document.getElementById('cle-cal-t1-upload-btn').onclick = async () => {
+        this.calibration.generateChassisSquarenessGCode();
+        await this.calibration.uploadTestGCodeToSD('Chassis_Squareness.nc');
+      };
+
+      // Test 1: Stream to Machine
+      document.getElementById('cle-cal-t1-run-btn').onclick = () => {
+        if (confirm('Start Test 1 Chassis Squareness & Circle Roundness Cut? Ensure spindle and bed are ready.')) {
+          this.calibration.generateChassisSquarenessGCode();
+          this.calibration.runTestOnMachine();
+        }
+      };
+
+      // Test 2: Preview in 3D Viewport
+      document.getElementById('cle-cal-t2-preview-btn').onclick = () => {
+        const selQuad = document.getElementById('cle-cal-t2-quad-sel').value;
+        this.calibration.previewQuadrant3DTest({ quadrant: selQuad });
+      };
+
+      // Test 2: Export G-Code
+      document.getElementById('cle-cal-t2-export-btn').onclick = () => {
+        const selQuad = document.getElementById('cle-cal-t2-quad-sel').value;
+        this.calibration.generateQuadrant3DTestGCode({ quadrant: selQuad });
+        this.calibration.exportTestGCode(`CLEJS_Quadrant_3D_Test_Q${selQuad}.nc`);
+      };
+
+      // Test 2: Upload to FluidNC SD
+      document.getElementById('cle-cal-t2-upload-btn').onclick = async () => {
+        const selQuad = document.getElementById('cle-cal-t2-quad-sel').value;
+        this.calibration.generateQuadrant3DTestGCode({ quadrant: selQuad });
+        await this.calibration.uploadTestGCodeToSD(`Quadrant_3D_Q${selQuad}.nc`);
+      };
+
+      // Test 2: Stream to Machine
+      document.getElementById('cle-cal-t2-run-btn').onclick = () => {
+        const selQuad = document.getElementById('cle-cal-t2-quad-sel').value;
+        if (confirm('Start Test 2 4-Quadrant 3D Stepped & Relief Cut? Verify 120x120mm block is securely clamped on 20mm spoilboard!')) {
+          this.calibration.generateQuadrant3DTestGCode({ quadrant: selQuad });
+          this.calibration.runTestOnMachine();
+        }
+      };
+
+      // Tab 3: Steps/mm Apply Button
+      document.getElementById('cle-cal-apply-btn').onclick = () => {
+        const ax = document.getElementById('cle-cal-axis').value;
+        const curS = document.getElementById('cle-cal-cur-steps').value;
+        const cmdD = document.getElementById('cle-cal-cmd-dist').value;
+        const measD = document.getElementById('cle-cal-meas-dist').value;
+
+        try {
+          const res = this.calibration.calculateStepsPerMm(ax, curS, cmdD, measD);
+          document.getElementById('cle-cal-result').textContent = `New Steps/mm: ${res.newSteps} (${res.command})`;
+          if (this.fluidnc) {
+            this.fluidnc.sendGCode(res.command);
+            this.notify(`Sent ${res.command} to FluidNC`, 'ok');
+          }
+        } catch (e) {
+          alert(e.message);
+        }
+      };
+
+      // Tab 4: Laser Matrix Generator
+      document.getElementById('cle-cal-l-gen-btn').onclick = () => {
+        const spd = parseFloat(document.getElementById('cle-cal-l-speed').value) || 1500;
+        const pwr = parseFloat(document.getElementById('cle-cal-l-pwr').value) || 100;
+        const gc = this.calibration.generateLaserTestMatrix({ maxSpeed: spd, maxPower: pwr });
+        document.getElementById('cle-cal-l-gcode').value = gc;
+        this.calibration.activeTestGCode = gc;
+      };
+
+      // Tab 5: Backlash Generator
+      document.getElementById('cle-cal-b-gen-btn').onclick = () => {
+        const ax = document.getElementById('cle-cal-b-axis').value;
+        const dist = parseFloat(document.getElementById('cle-cal-b-dist').value) || 10;
+        const gc = this.calibration.generateBacklashTestGCode(ax, dist);
+        document.getElementById('cle-cal-b-gcode').value = gc;
+        this.calibration.activeTestGCode = gc;
       };
     }
   }
