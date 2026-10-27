@@ -12,10 +12,12 @@ Write-Host "       CLEJS Studio - GitHub Publishing Script           " -Foregrou
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 1. Configure Git Identity
-Write-Host "`n[1/4] Setting Git identity to jcloudfather..." -ForegroundColor Yellow
-git config --global user.name "jcloudfather"
-git config --global user.email "jcloudfather@outlook.com"
-Write-Host "  [OK] User: jcloudfather <jcloudfather@outlook.com>" -ForegroundColor Green
+Write-Host "`n[1/4] Setting Git identity to jbirdlebough..." -ForegroundColor Yellow
+git config --global user.name "jbirdlebough"
+git config --global user.email "jbirdlebough@gmail.com"
+git config user.name "jbirdlebough"
+git config user.email "jbirdlebough@gmail.com"
+Write-Host "  [OK] User: jbirdlebough <jbirdlebough@gmail.com>" -ForegroundColor Green
 
 # 2. Ensure main branch
 Write-Host "`n[2/4] Ensuring default branch is 'main'..." -ForegroundColor Yellow
@@ -23,7 +25,7 @@ git branch -M main
 Write-Host "  [OK] Active branch: main" -ForegroundColor Green
 
 # 3. Configure Remote Origin
-$TargetUrl = "https://github.com/jcloudfather/CLEJS.git"
+$TargetUrl = "https://github.com/jbirdlebough/CLEJS.git"
 Write-Host "`n[3/4] Configuring remote origin to: $TargetUrl" -ForegroundColor Yellow
 $ExistingRemotes = git remote
 if ($ExistingRemotes -contains "origin") {
@@ -49,3 +51,4 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "`n[NOTE] If repository does not exist yet on GitHub, please create it at:" -ForegroundColor Yellow
     Write-Host "       https://github.com/new (Name: CLEJS, Visibility: Public)" -ForegroundColor Cyan
 }
+
