@@ -45,3 +45,4 @@ with sync_playwright() as p:
     }""")
     print("Relief mesh test:", res)
     browser.close()
+

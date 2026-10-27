@@ -95,7 +95,7 @@ export class CLESlicerEngine {
   }
 
   // Extracts active CAD geometry from JumpStart scene or generates realistic sample block
-  getActiveBodyGeometry() {
+  getActiveBodyGeometry(targetBodyId = null) {
     const app = window.app || window.xe;
     const doc = app?.scene?.doc || app?.doc;
     const bodies = (doc?.bodies || []);
@@ -105,8 +105,10 @@ export class CLESlicerEngine {
     const extractedNames = [];
 
     // 1. Extract from JumpStart scene views with exact matrixWorld transformation
-    // If user has specific body selection, prioritize slicing the selected body
-    const selSet = (app?.sel && app.sel.length > 0) ? new Set(app.sel) : null;
+    // If targetBodyId is specified, slice only that body. Otherwise fall back to user selection
+    const selSet = (targetBodyId && targetBodyId !== 'all')
+      ? new Set([targetBodyId])
+      : ((app?.sel && app.sel.length > 0) ? new Set(app.sel) : null);
 
     if (views && views.size > 0) {
       for (const [id, view] of views) {
@@ -257,7 +259,7 @@ export class CLESlicerEngine {
     if (options.dowelHoleCount !== undefined) this.laminationConfig.dowelHoleCount = parseInt(options.dowelHoleCount, 10);
     if (options.toolMapping) this.laminationConfig.toolMapping = { ...this.laminationConfig.toolMapping, ...options.toolMapping };
 
-    const geom = this.getActiveBodyGeometry();
+    const geom = this.getActiveBodyGeometry(options.targetBodyId);
     this.lastGeometry = geom;
     const { name, triangles } = geom;
     const stlString = this.trianglesToSTL(triangles, name);
