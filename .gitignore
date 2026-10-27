@@ -1,7 +1,13 @@
 # Temporary files from Upstream check
 .jumpstart3d-*.htm
 
+# Output distribution packages
+dist/
+
+# Embedded runtime (downloaded on demand by DevInstaller)
+tools/python_runtime/
+
 # System and editor files
 .DS_Store
 Thumbs.db
-
+*.log
