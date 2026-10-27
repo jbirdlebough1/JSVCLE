@@ -54,3 +54,4 @@ with sync_playwright() as p:
     }""")
     print("Detected profiles function:", res)
     browser.close()
+

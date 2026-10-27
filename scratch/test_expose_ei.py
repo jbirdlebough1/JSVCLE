@@ -15,3 +15,4 @@ with sync_playwright() as p:
         // We know Ei is in scope in index.htm; let's see if we can expose it
     }""")
     browser.close()
+

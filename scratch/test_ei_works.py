@@ -39,3 +39,4 @@ with sync_playwright() as p:
     }""")
     print("Ei test result:", res)
     browser.close()
+

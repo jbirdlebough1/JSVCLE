@@ -68,3 +68,4 @@ with sync_playwright() as p:
     print("Option 2 (Extrude) result:", res)
 
     browser.close()
+

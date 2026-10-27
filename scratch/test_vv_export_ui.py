@@ -89,3 +89,4 @@ with sync_playwright() as p:
     print("Result after Option 2:", res)
 
     browser.close()
+

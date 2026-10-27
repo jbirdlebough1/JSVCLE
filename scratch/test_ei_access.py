@@ -46,3 +46,4 @@ with sync_playwright() as p:
     }""")
     print("Profile access:", res)
     browser.close()
+
