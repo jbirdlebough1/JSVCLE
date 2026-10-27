@@ -68,6 +68,7 @@ Name: "{app}\Dev"; Permissions: users-full
 Name: "{app}\Vellum"; Permissions: users-full
 Name: "{app}\tools"; Permissions: users-full
 Name: "{app}\vault"; Permissions: users-full
+Name: "{app}\docs"; Permissions: users-full
 Name: "{app}\dist"; Permissions: users-full
 
 [Tasks]
@@ -91,6 +92,7 @@ Source: "D:\CLEJS\JSoriginal\*"; DestDir: "{app}\JSoriginal"; Flags: recursesubd
 Source: "D:\CLEJS\VVSource\*"; DestDir: "{app}\VVSource"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "*.tmp,*.bak"
 
 ; Launchers and Documentation
+Source: "D:\CLEJS\docs\*"; DestDir: "{app}\docs"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "D:\CLEJS\cle_start.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\CLEJS\cle_server_start.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "D:\CLEJS\vellum_start.bat"; DestDir: "{app}"; Flags: ignoreversion
@@ -106,6 +108,8 @@ Name: "{autodesktop}\Vellum Vector Studio"; Filename: "{app}\vellum_start.bat"; 
 ; Start Menu Shortcuts
 Name: "{autoprograms}\{#AppName}\JSVCLE Studio"; Filename: "{app}\cle_start.bat"; WorkingDir: "{app}"; Comment: "Launch unified JSVCLE Studio"
 Name: "{autoprograms}\{#AppName}\Vellum Vector Studio"; Filename: "{app}\vellum_start.bat"; WorkingDir: "{app}\Vellum"; Comment: "Launch standalone Vellum Vector Studio"
+Name: "{autoprograms}\{#AppName}\User Guide"; Filename: "{app}\docs\USER_GUIDE.md"; WorkingDir: "{app}\docs"; Comment: "View JSVCLE Studio User Guide"
+Name: "{autoprograms}\{#AppName}\Developer Guide"; Filename: "{app}\docs\DEVELOPER_GUIDE.md"; WorkingDir: "{app}\docs"; Comment: "View JSVCLE Studio Developer Guide"
 Name: "{autoprograms}\{#AppName}\CLE Server (Background)"; Filename: "{app}\cle_server_start.bat"; WorkingDir: "{app}"; Flags: runminimized; Comment: "Start CLE Local Background Service"
 Name: "{autoprograms}\{#AppName}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
