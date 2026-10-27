@@ -27,3 +27,4 @@ with sync_playwright() as p:
     print("HasDoc:", res["hasDoc"])
     print("DocKeys:", res["docKeys"])
     browser.close()
+

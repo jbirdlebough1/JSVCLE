@@ -53,3 +53,4 @@ with sync_playwright() as p:
     }""")
     print("Test Se.update result:", res)
     browser.close()
+

@@ -51,3 +51,4 @@ svg_sample = '''<svg viewBox="0 0 100 100">
 pts, ents = parse_svg_to_jumpstart_entities(svg_sample)
 print("Points count:", len(pts), "Ents count:", len(ents))
 print("Ents:", ents)
+

@@ -7,3 +7,4 @@ for i, line in enumerate(lines):
         for j in range(i, min(i + 80, len(lines))):
             print(lines[j], end='')
         break
+

@@ -73,3 +73,4 @@ with sync_playwright() as p:
     }""")
     print("Has mesh in 3D scene:", has_mesh)
     browser.close()
+

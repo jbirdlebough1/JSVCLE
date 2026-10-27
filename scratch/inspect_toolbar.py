@@ -12,3 +12,4 @@ if pos != -1:
 # Find menu container
 for m in re.finditer(r'<div[^>]*id=["\']([^"\']*(?:bar|menu|header|top)[^"\']*)["\']', text, re.I):
     print('Container id:', m.group(1), text[m.start():m.start()+150])
+

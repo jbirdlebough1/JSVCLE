@@ -45,3 +45,4 @@ with sync_playwright() as p:
     }""")
     print("Add sketch result:", res)
     browser.close()
+

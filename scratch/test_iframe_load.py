@@ -27,3 +27,4 @@ with sync_playwright() as p:
     }""")
     print("Iframe load result:", iframe_loaded)
     browser.close()
+

@@ -49,3 +49,4 @@ with sync_playwright() as p:
     }""")
     print("Command details:", res)
     browser.close()
+

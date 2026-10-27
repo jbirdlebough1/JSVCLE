@@ -8682,7 +8682,7 @@ class CLEVellumBridge {
    * Handle incoming Vellum export payload
    */
   handleExport(payload) {
-    const { svg, objects, mode, thickness, plane, name } = payload;
+    const { svg, objects, images, mode, thickness, plane, name } = payload;
     const app = window.app || window.xe;
     if (!window.Se || !window.Se.update) {
       console.error('[CLE Vellum Bridge] window.Se document manager not found');
@@ -8691,12 +8691,15 @@ class CLEVellumBridge {
     }
 
     const { pts, ents } = this.parseSvgToEntities(svg, objects);
-    if (!ents.length) {
-      if (app && app.toast) app.toast('No vector shapes found to export', 'err');
+    const hasImages = Array.isArray(images) && images.length > 0;
+    const hasVectors = ents.length > 0;
+
+    if (!hasVectors && !hasImages) {
+      if (app && app.toast) app.toast('No shapes or images found in Vellum to transfer', 'err');
       return;
     }
 
-    // Plane definitions
+    // Determine plane
     let planeDef = { o: [0, 0, 0], x: [1, 0, 0], n: [0, 0, 1] }; // Default XY Top
     if (plane === 'XZ') {
       planeDef = { o: [0, 0, 0], x: [1, 0, 0], n: [0, 1, 0] };
@@ -8705,7 +8708,30 @@ class CLEVellumBridge {
     }
 
     const skId = 'sk_' + Date.now();
-    const partName = name || 'Vellum Vector';
+    const partName = name || (hasVectors ? 'Vellum Vector' : 'Vellum Picture');
+
+    let imagePayload = null;
+    if (hasImages) {
+      const im = images[0];
+      let wMm = im.w || 120;
+      let hMm = im.h || 80;
+      // Scale down nicely if image is excessively large in pixel units
+      if (wMm > 400 || hMm > 400) {
+        const factor = 200 / Math.max(wMm, hMm);
+        wMm *= factor;
+        hMm *= factor;
+      }
+      imagePayload = {
+        src: im.src,
+        name: partName,
+        w: +wMm.toFixed(2),
+        h: +hMm.toFixed(2),
+        cx: 0,
+        cy: 0,
+        rot: im.angle || 0,
+        opacity: im.opacity !== undefined ? im.opacity : 0.75
+      };
+    }
 
     window.Se.update(doc => {
       const newSketch = {
@@ -8717,9 +8743,14 @@ class CLEVellumBridge {
         ents: ents,
         hidden: false
       };
+
+      if (imagePayload) {
+        newSketch.image = imagePayload;
+      }
+
       doc.sketches.push(newSketch);
 
-      if (mode === 'extrude') {
+      if (mode === 'extrude' && hasVectors) {
         const bodyId = 'b_' + Date.now();
         doc.bodies.push({
           id: bodyId,
@@ -8751,7 +8782,10 @@ class CLEVellumBridge {
       if (app.vp && app.vp.request) app.vp.request();
       if (app.fit) app.fit();
 
-      if (mode === 'extrude') {
+      if (!hasVectors && hasImages) {
+        if (app.toast) app.toast(`Placed "${partName}" onto 3D workplane! (Tip: Use Vellum's Trace tool to generate 3D cut paths)`, 'ok');
+        if (app.enterSketch) app.enterSketch(skId);
+      } else if (mode === 'extrude' && hasVectors) {
         if (app.toast) app.toast(`Created 3D Extruded Body "${partName}" (${thickness}mm) from Vellum!`, 'ok');
       } else {
         if (app.enterSketch) app.enterSketch(skId);

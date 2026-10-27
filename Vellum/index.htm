@@ -11302,9 +11302,9 @@ setTimeout(async ()=>{
 </script>
 
 <!-- JumpStart 3D Bridge Export Modal -->
-<div id="jsExportModal" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.6); z-index:999999; align-items:center; justify-content:center; font-family:system-ui,-apple-system,sans-serif;">
-  <div style="background:#ffffff; border-radius:12px; box-shadow:0 20px 40px rgba(0,0,0,0.3); width:460px; max-width:92vw; padding:24px; color:#1e293b; border:1px solid #cbd5e1;">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; border-bottom:1px solid #e2e8f0; padding-bottom:10px;">
+<div id="jsExportModal" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.65); z-index:999999; align-items:center; justify-content:center; font-family:system-ui,-apple-system,sans-serif;">
+  <div style="background:#ffffff; border-radius:12px; box-shadow:0 20px 40px rgba(0,0,0,0.3); width:480px; max-width:92vw; padding:24px; color:#1e293b; border:1px solid #cbd5e1;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid #e2e8f0; padding-bottom:10px;">
       <h3 style="margin:0; font-size:17px; font-weight:800; display:flex; align-items:center; gap:8px; color:#0284c7;">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         Save to JumpStart 3D Workspace
@@ -11312,12 +11312,18 @@ setTimeout(async ()=>{
       <button id="closeJsModalBtn" style="border:none; background:none; font-size:24px; line-height:1; cursor:pointer; color:#64748b;" title="Close">&times;</button>
     </div>
     
-    <p style="margin:0 0 14px 0; font-size:13px; color:#64748b; line-height:1.4;">
-      Transfer vector outlines directly from Vellum into your active JumpStart 3D CAD design.
+    <p style="margin:0 0 12px 0; font-size:13px; color:#64748b; line-height:1.4;">
+      Transfer vector outlines or reference pictures from Vellum directly into your active JumpStart 3D design.
     </p>
 
-    <div style="margin-bottom:16px;">
-      <label style="font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:#475569; display:block; margin-bottom:8px;">Import Mode</label>
+    <!-- Raster image notice banner -->
+    <div id="jsRasterTipBanner" style="display:none; margin-bottom:14px; background:#f0f9ff; border:1px solid #7dd3fc; padding:10px 12px; border-radius:8px; font-size:12px; color:#0369a1; line-height:1.4;">
+      <strong style="display:block; margin-bottom:2px;">Bitmap / Picture Detected (PNG/JPG)</strong>
+      To turn this image into a <strong>3D cut/extrusion</strong>, select it and click <strong>Trace</strong> in Vellum's toolbar to generate vector curves! You can also place it as a <strong>3D Workplane Picture</strong> below to model over it.
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <label style="font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:#475569; display:block; margin-bottom:8px;">Transfer Mode</label>
       
       <div style="display:flex; flex-direction:column; gap:8px;">
         <label id="lblModeSketch" style="display:flex; align-items:flex-start; gap:10px; padding:10px; border:2px solid #0284c7; background:#f0f9ff; border-radius:8px; cursor:pointer;">
@@ -11332,7 +11338,15 @@ setTimeout(async ()=>{
           <input type="radio" name="jsExportMode" id="optModeExtrude" value="extrude" style="margin-top:3px;">
           <div>
             <div style="font-weight:700; font-size:13px; color:#0f172a;">Option B: Direct 3D Extruded Body</div>
-            <div style="font-size:12px; color:#475569; margin-top:2px;">Creates a solid 3D CAD body directly from closed vector profiles with specified extrusion height.</div>
+            <div style="font-size:12px; color:#475569; margin-top:2px;">Creates a solid 3D CAD body directly from closed vector outlines with specified extrusion height.</div>
+          </div>
+        </label>
+
+        <label id="lblModeImage" style="display:flex; align-items:flex-start; gap:10px; padding:10px; border:1px solid #cbd5e1; background:#f8fafc; border-radius:8px; cursor:pointer;">
+          <input type="radio" name="jsExportMode" id="optModeImage" value="image" style="margin-top:3px;">
+          <div>
+            <div style="font-weight:700; font-size:13px; color:#0f172a;">Workplane Reference Picture (3D Canvas)</div>
+            <div style="font-size:12px; color:#475569; margin-top:2px;">Places the bitmap picture (PNG/JPG) onto the 3D workplane with transparency so you can view, scale, or model over it.</div>
           </div>
         </label>
       </div>
@@ -11361,8 +11375,8 @@ setTimeout(async ()=>{
 
     <!-- Part Name -->
     <div style="margin-bottom:18px;">
-      <label style="font-size:12px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Sketch / Body Name</label>
-      <input type="text" id="jsPartName" value="Vellum Vector" style="width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px;">
+      <label style="font-size:12px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">Part / Sketch Name</label>
+      <input type="text" id="jsPartName" value="Vellum Design" style="width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px;">
     </div>
 
     <div style="display:flex; justify-content:flex-end; gap:8px;">
@@ -11387,13 +11401,31 @@ setTimeout(async ()=>{
     const confirmBtn = document.getElementById('confirmJsModalBtn');
     const radSketch = document.getElementById('optModeSketch');
     const radExtrude = document.getElementById('optModeExtrude');
+    const radImage = document.getElementById('optModeImage');
     const extrudePanel = document.getElementById('extrudeOptionsPanel');
     const lblSketch = document.getElementById('lblModeSketch');
     const lblExtrude = document.getElementById('lblModeExtrude');
+    const lblImage = document.getElementById('lblModeImage');
+    const tipBanner = document.getElementById('jsRasterTipBanner');
 
     function openModal() {
-      if (modal) modal.style.display = 'flex';
+      if (!modal) return;
+      const objs = (typeof state !== 'undefined' && state.objects) ? state.objects : [];
+      const hasVectors = objs.some(o => o.visible !== false && o.type !== 'image' && o.segments && o.segments.length > 0);
+      const hasImages = objs.some(o => o.visible !== false && o.type === 'image');
+
+      if (tipBanner) tipBanner.style.display = hasImages ? 'block' : 'none';
+
+      if (hasImages && !hasVectors) {
+        // Only images present: default to image mode
+        if (radImage) radImage.checked = true;
+      } else {
+        if (radSketch && !radExtrude.checked) radSketch.checked = true;
+      }
+      updateModeUI();
+      modal.style.display = 'flex';
     }
+
     function closeModal() {
       if (modal) modal.style.display = 'none';
     }
@@ -11407,19 +11439,25 @@ setTimeout(async ()=>{
     if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
 
     function updateModeUI() {
-      if (radExtrude && radExtrude.checked) {
-        if (extrudePanel) extrudePanel.style.display = 'block';
-        if (lblExtrude) { lblExtrude.style.border = '2px solid #0284c7'; lblExtrude.style.background = '#f0f9ff'; }
-        if (lblSketch) { lblSketch.style.border = '1px solid #cbd5e1'; lblSketch.style.background = '#f8fafc'; }
-      } else {
-        if (extrudePanel) extrudePanel.style.display = 'none';
-        if (lblSketch) { lblSketch.style.border = '2px solid #0284c7'; lblSketch.style.background = '#f0f9ff'; }
-        if (lblExtrude) { lblExtrude.style.border = '1px solid #cbd5e1'; lblExtrude.style.background = '#f8fafc'; }
+      const mode = radExtrude && radExtrude.checked ? 'extrude' : radImage && radImage.checked ? 'image' : 'sketch';
+      if (extrudePanel) extrudePanel.style.display = (mode === 'extrude') ? 'block' : 'none';
+
+      [lblSketch, lblExtrude, lblImage].forEach(lbl => {
+        if (!lbl) return;
+        lbl.style.border = '1px solid #cbd5e1';
+        lbl.style.background = '#f8fafc';
+      });
+
+      const activeLbl = mode === 'extrude' ? lblExtrude : mode === 'image' ? lblImage : lblSketch;
+      if (activeLbl) {
+        activeLbl.style.border = '2px solid #0284c7';
+        activeLbl.style.background = '#f0f9ff';
       }
     }
 
     if (radSketch) radSketch.addEventListener('change', updateModeUI);
     if (radExtrude) radExtrude.addEventListener('change', updateModeUI);
+    if (radImage) radImage.addEventListener('change', updateModeUI);
 
     async function buildSvgData() {
       try {
@@ -11458,20 +11496,37 @@ setTimeout(async ()=>{
     if (confirmBtn) {
       confirmBtn.addEventListener('click', async () => {
         confirmBtn.disabled = true;
-        confirmBtn.textContent = 'Generating...';
+        confirmBtn.textContent = 'Transferring...';
         try {
           const svgData = await buildSvgData();
-          const mode = (radExtrude && radExtrude.checked) ? 'extrude' : 'sketch';
+          const mode = radExtrude && radExtrude.checked ? 'extrude' : radImage && radImage.checked ? 'image' : 'sketch';
           const thickness = parseFloat(document.getElementById('jsExtrudeThickness')?.value) || 5.0;
           const plane = document.getElementById('jsTargetPlane')?.value || 'XY';
-          const name = document.getElementById('jsPartName')?.value.trim() || 'Vellum Vector';
+          const name = document.getElementById('jsPartName')?.value.trim() || 'Vellum Design';
           const objectsList = (typeof state !== 'undefined' && state.objects) ? state.objects : [];
+
+          // Collect images if any
+          const imagesList = [];
+          for (const o of objectsList) {
+            if (o.visible !== false && o.type === 'image' && o.src) {
+              imagesList.push({
+                src: o.src,
+                x: o.x,
+                y: o.y,
+                w: o.w,
+                h: o.h,
+                angle: o.angle || 0,
+                opacity: o.opacity !== undefined ? o.opacity : 0.75
+              });
+            }
+          }
 
           const payload = {
             type: 'CLE_VELLUM_EXPORT',
             format: 'svg',
             svg: svgData,
             objects: objectsList,
+            images: imagesList,
             mode: mode,
             thickness: thickness,
             plane: plane,
@@ -11491,7 +11546,7 @@ setTimeout(async ()=>{
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
-            alert(`Vector saved as ${a.download}. To import into JumpStart 3D, open JumpStart 3D and click Import -> SVG.`);
+            alert(`Vector saved as ${a.download}.`);
           }
           closeModal();
         } catch (e) {
@@ -11512,5 +11567,4 @@ setTimeout(async ()=>{
 })();
 </script>
 
-</body>
-</html>
+</body></html>

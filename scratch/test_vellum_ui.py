@@ -25,3 +25,4 @@ with sync_playwright() as p:
     print("Extrude panel visible:", extrude_panel_visible)
     
     browser.close()
+

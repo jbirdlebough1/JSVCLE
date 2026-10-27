@@ -20,3 +20,4 @@ print('\nButtons (first 30):')
 for btn_id, label in matches[:30]:
     clean_lbl = re.sub(r'<[^>]+>', '', label).strip()
     print(f'  #{btn_id}: {clean_lbl}')
+

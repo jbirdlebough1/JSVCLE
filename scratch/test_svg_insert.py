@@ -28,3 +28,4 @@ with sync_playwright() as p:
     }""", svg_sample)
     print("Result:", result)
     browser.close()
+

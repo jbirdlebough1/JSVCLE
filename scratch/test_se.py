@@ -24,3 +24,4 @@ with sync_playwright() as p:
     }""")
     print("Check Se:", res)
     browser.close()
+
