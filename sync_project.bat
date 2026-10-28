@@ -3,7 +3,7 @@ title Sync CLEBUGGER Issues to GitHub Project
 cd /d "D:\CLEJS"
 
 echo ==========================================================
-echo    JSVCLE Studio - GitHub Issues & Project Sync Tool
+echo    JSVCLE Studio - GitHub Issues and Project Sync Tool
 echo ==========================================================
 echo.
 echo Target: https://github.com/jbirdlebough1/JSVCLE/issues
@@ -15,3 +15,4 @@ set /p GITHUB_TOKEN="Enter your GitHub Personal Access Token: "
 python tools\sync_github_project.py %GITHUB_TOKEN%
 
 pause
+

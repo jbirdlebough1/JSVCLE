@@ -3,7 +3,7 @@ title Publish JSVCLE Alpha Release to GitHub
 cd /d "D:\CLEJS"
 
 echo ==========================================================
-echo    JSVCLE Studio - Alpha Release & Asset Publisher
+echo    JSVCLE Studio - Alpha Release and Asset Publisher
 echo ==========================================================
 echo.
 echo Target: https://github.com/jbirdlebough1/JSVCLE
@@ -16,3 +16,4 @@ set /p GITHUB_TOKEN="Enter your GitHub Personal Access Token (or press Enter if 
 python tools\publish_release.py %GITHUB_TOKEN%
 
 pause
+
