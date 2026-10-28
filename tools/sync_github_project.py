@@ -112,3 +112,4 @@ if __name__ == "__main__":
         sys.exit(1)
 
     sync_issues_to_github(token)
+

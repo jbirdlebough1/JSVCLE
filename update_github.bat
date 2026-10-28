@@ -17,3 +17,4 @@ if %ERRORLEVEL% equ 0 (
     echo [ERROR] Update failed with error code %ERRORLEVEL%.
     pause
 )
+
