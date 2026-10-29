@@ -698,10 +698,9 @@
     <button class="ibtn" id="btnGroupTop" title="Group selected objects (Ctrl+G)" style="width:auto;padding:0 8px;">Group</button>
     <button class="ibtn" id="btnUngroupTop" title="Ungroup (Ctrl+Shift+G)" style="width:auto;padding:0 8px;">Ungroup</button>
     <div class="vsep"></div>
-    <div class="vsep"></div>
-    <button class="ibtn" id="btnSaveToJS" title="Save / Send drawing to JumpStart 3D workspace" style="width:auto; padding:0 12px; background:#0284c7; color:#fff; font-weight:700; border-radius:4px; display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-      Save to JS Workspace
+    <button class="ibtn" id="btnReturnToCAM" title="Send vector drawing to host workspace" style="width:auto; padding:0 14px; background:#16a34a; color:#fff; font-weight:700; border-radius:4px; display:inline-flex; align-items:center; gap:6px; cursor:pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.3);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+      <span id="btnReturnToCAMText">Return to LightBurn</span>
     </button>
     <div class="vsep"></div>
     <div class="toolFlyoutBtn" id="exportToolBtn" title="Export…" style="width:auto;padding:0 8px;">Export ▾</div>
@@ -1413,7 +1412,7 @@
      replaces the four separate SVG/PNG/DXF/PDF buttons that used to sit there. Same
      top-level, position:fixed pattern as the shapes flyout above. -->
 <div class="menuDrop" id="exportFlyout">
-  <div class="menuOpt" id="exportOptJS" style="color:#0284c7; font-weight:700;"><span>Save to JS Workspace…</span></div>
+  <div class="menuOpt" id="exportOptJS" style="display:none; color:#0284c7; font-weight:700;"><span>Save to JS Workspace…</span></div>
   <div class="menuOpt" id="exportOptSvg"><span>Export SVG…</span></div>
   <div class="menuOpt" id="exportOptPng"><span>Export PNG…</span></div>
   <div class="menuOpt" id="exportOptJpeg"><span>Export JPEG…</span></div>
@@ -4640,6 +4639,154 @@ function svgPlainTextBlock(o, fillAttr, strokeAttrs){
   out += rotClose;
   return out;
 }
+async function executeReturnToCAM() {
+  const p = new URLSearchParams(window.location.search);
+  const caller = (p.get('caller') || 'lb').toLowerCase();
+  const callerName = (caller === 'mm' || caller === 'millmage') ? 'MillMage' : 'LightBurn';
+  const btn = document.getElementById('btnReturnToCAM');
+  const txt = document.getElementById('btnReturnToCAMText');
+  const origText = txt ? txt.textContent : 'Return to ' + callerName;
+
+  try {
+    if (typeof ensureTextFontsLoaded === 'function') {
+      try { await ensureTextFontsLoaded(); } catch(e) {}
+    }
+    const visibleObjs = (state && state.objects) ? state.objects.filter(o => o.visible !== false) : [];
+    if (!visibleObjs.length) {
+      alert("Canvas is empty. Please draw or add shapes in Vellum before returning to " + callerName + ".");
+      return;
+    }
+
+    if (txt) txt.textContent = 'Returning to ' + callerName + '...';
+    if (btn) btn.style.opacity = '0.7';
+
+    const bboxes = visibleObjs.map(objBBox);
+    const bb = unionBBox(bboxes);
+    let body = '';
+    const defs = [];
+    const idCounter = { n: 1 };
+
+    for (const o of visibleObjs) {
+      if (o.type === 'image') {
+        const rot = o.angle ? ` transform="rotate(${o.angle} ${o.x + o.w/2} ${o.y + o.h/2})"` : '';
+        body += `<image x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" opacity="${o.opacity===undefined?1:o.opacity}" href="${o.src}"${rot}/>\n`;
+      } else if (o.type === 'text') {
+        const fillAttr = o.fill && o.fill !== 'none' ? svgFillAttr(o.fill, defs, idCounter) : 'none';
+        const hasStroke = o.stroke && o.stroke !== 'none' && o.strokeWidth > 0;
+        const dashAttr = (hasStroke && o.dash && o.dash.length) ? ` stroke-dasharray="${o.dash.join(',')}"` : '';
+        const strokeAttrs = hasStroke ? ` stroke="${o.stroke}" stroke-width="${svgStrokeW(o)}"${dashAttr}` : '';
+        let placedOnPath = false;
+        if (o.pathTextId && findObj(o.pathTextId)) {
+          ctx.font = `${o.size}px ${resolveFontFamily(o)}`;
+          const chars = computeTextOnPathChars(o, ch => ctx.measureText(ch).width);
+          if (chars) {
+            chars.forEach(ch => {
+              const deg = ch.angle * 180 / Math.PI;
+              body += `<text x="${ch.x}" y="${ch.y}" font-size="${o.size}" font-family="${resolveFontFamily(o)}" fill="${fillAttr}"${strokeAttrs} text-anchor="middle" transform="rotate(${deg} ${ch.x} ${ch.y})">${escapeXml(ch.ch)}</text>\n`;
+            });
+            placedOnPath = true;
+          }
+        }
+        if (!placedOnPath) {
+          body += svgPlainTextBlock(o, fillAttr, strokeAttrs);
+        }
+      } else if (o.patternPathId) {
+        const instances = computePatternInstances(o);
+        const fillAttr = svgFillAttr(o.fill, defs, idCounter);
+        const dashAttr = (o.dash && o.dash.length) ? ` stroke-dasharray="${o.dash.join(',')}"` : '';
+        const d = segmentsToPathD(o.segments);
+        if (instances && instances.length) {
+          const raw = objRawPathBBox(o);
+          const rcx = raw.x + raw.w / 2, rcy = raw.y + raw.h / 2;
+          const scale = o.patternScale || 1;
+          body += `<g>\n`;
+          for (const inst of instances) {
+            const deg = o.patternRotate ? inst.angle * 180 / Math.PI : 0;
+            body += `<path d="${d}" fill="${fillAttr}" fill-rule="${o.fillRule||'nonzero'}" stroke="${o.stroke==='none'?'none':o.stroke}" stroke-width="${svgStrokeW(o)}"${dashAttr} transform="translate(${inst.x} ${inst.y}) rotate(${deg}) scale(${scale}) translate(${-rcx} ${-rcy})"/>\n`;
+          }
+          body += `</g>\n`;
+        }
+      } else {
+        const d = segmentsToPathD(o.segments);
+        const fillAttr = svgFillAttr(o.fill, defs, idCounter, o);
+        const dashAttr = (o.dash && o.dash.length) ? ` stroke-dasharray="${o.dash.join(',')}"` : '';
+        body += `<path d="${d}" fill="${fillAttr}" fill-rule="${o.fillRule||'nonzero'}" stroke="${o.stroke==='none'?'none':o.stroke}" stroke-width="${svgStrokeW(o)}"${dashAttr}/>\n`;
+      }
+    }
+
+    const hasText = visibleObjs.some(o => o.type === 'text');
+    const fontImportUrl = "https://fonts.googleapis.com/css2?family=Arimo:wght@400;700&family=Archivo+Black&family=Roboto:wght@400;700&family=PT+Sans:wght@400;700&family=Noto+Sans:wght@400;700&family=Jost:wght@400;700&family=Carlito:wght@400;700&family=Poppins:wght@400;700&family=Archivo:wght@400;700&family=Inter:wght@400;700&family=Work+Sans:wght@400;700&family=Noto+Serif:wght@400;700&family=Tinos:wght@400;700&family=EB+Garamond:wght@400;700&family=PT+Serif:wght@400;700&family=Crimson+Text:wght@400;700&family=Lora:wght@400;700&family=Bitter:wght@400;700&family=Roboto+Slab:wght@400;700&family=Playfair+Display:wght@400;700&family=Cormorant+Garamond:wght@400;700&family=Cousine:wght@400;700&family=Source+Code+Pro:wght@400;700&family=Roboto+Mono:wght@400;700&family=Space+Mono:wght@400;700&family=IBM+Plex+Mono:wght@400;700&family=Anton&family=Comic+Neue:wght@400;700&family=Alex+Brush&family=Uncial+Antiqua&family=Cinzel:wght@400;700&family=Kalam:wght@400;700&family=Sacramento&family=Patrick+Hand&family=Stardos+Stencil:wght@400;700&display=swap";
+    const fontImport = hasText ? `<style>@import url('${fontImportUrl.replace(/&/g,'&amp;')}');</style>\n` : '';
+    const defsBlock = (defs.length || fontImport) ? `<defs>\n${fontImport}${defs.join('\n')}\n</defs>\n` : '';
+
+    const resp = await fetch('/api/vellum/return', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        body: body,
+        defs: defsBlock,
+        bbox: bb,
+        caller: caller
+      })
+    });
+    const res = await resp.json();
+    if (res.status !== 'ok') {
+      throw new Error(res.message || 'Server error preparing return SVG');
+    }
+
+    const dlLink = document.createElement('a');
+    dlLink.href = '/api/vellum/download?caller=' + encodeURIComponent(caller) + '&t=' + Date.now();
+    dlLink.download = res.filename || 'vellum_return.svg';
+    document.body.appendChild(dlLink);
+    dlLink.click();
+    setTimeout(() => {
+      try { document.body.removeChild(dlLink); } catch(e) {}
+    }, 1200);
+
+    if (txt) txt.textContent = '✓ Sent to ' + callerName + '!';
+    setTimeout(() => {
+      if (txt) txt.textContent = origText;
+      if (btn) btn.style.opacity = '1';
+    }, 2500);
+
+  } catch (err) {
+    console.error("Return to CAM error:", err);
+    alert("Return to " + callerName + " failed: " + err.message);
+    if (txt) txt.textContent = origText;
+    if (btn) btn.style.opacity = '1';
+  }
+}
+window.__VELLUM_RETURN_TO_CAM__ = executeReturnToCAM;
+window.__VELLUM_STATE__ = state;
+
+// Bind Return to CAM button
+(function setupVellumReturnBtn() {
+  function bindBtn() {
+    const btn = document.getElementById('btnReturnToCAM');
+    const txt = document.getElementById('btnReturnToCAMText');
+    if (!btn || !txt) {
+      setTimeout(bindBtn, 50);
+      return;
+    }
+    const p = new URLSearchParams(window.location.search);
+    const caller = (p.get('caller') || 'lb').toLowerCase();
+    if (caller === 'mm' || caller === 'millmage') {
+      txt.textContent = 'Return to MillMage';
+    } else {
+      txt.textContent = 'Return to LightBurn';
+    }
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      executeReturnToCAM();
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bindBtn);
+  } else {
+    bindBtn();
+  }
+})();
+
 async function exportSVG(){
   const filename = await promptFilename('svg'); if(filename===null) return;
   await ensureTextFontsLoaded();
